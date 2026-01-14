@@ -1,0 +1,45 @@
+[package]
+name = "anchor-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic structural memory layer for AI applications"
+license = "Apache-2.0"
+repository = "https://github.com/your-username/anchor-sdk"
+keywords = ["ai", "memory", "mcp", "local-first"]
+categories = ["development-tools", "data-structures"]
+
+[lib]
+name = "anchor"
+path = "src/lib.rs"
+
+[[bin]]
+name = "anchor-cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# File system
+tokio = { version = "1.0", features = ["full"] }
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Unique IDs
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# CLI (optional, for the binary)
+clap = { version = "4.0", features = ["derive"] }
+
+# Markdown parsing (for frontmatter)
+gray_matter = "0.2"
+
+[dev-dependencies]
+tempfile = "3.0"
