@@ -121,4 +121,4 @@ Apache-2.0
 
 ## Star History
 
-##StarHistory[![StarHistoryChart](https://api.star-history.com/svg?repos=Tharun-10Dragneel/Anchor&type=date&legend=bottom-right)](https://www.star-history.com/#Tharun-10Dragneel/Anchor&type=date&legend=bottom-right)
+[![Star History Chart](https://api.star-history.com/svg?repos=Tharun-10Dragneel/Anchor&type=date&legend=bottom-right)](https://www.star-history.com/#Tharun-10Dragneel/Anchor&type=date&legend=bottom-right)
