@@ -7,7 +7,7 @@ use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -153,6 +153,177 @@ impl CodeGraph {
         }
 
         results
+    }
+
+    /// Graph-aware search: finds by file path OR symbol name, then traverses connections.
+    ///
+    /// This is the PROPER search that uses the graph:
+    /// 1. Try to match file paths (fuzzy)
+    /// 2. Try to match symbol names
+    /// 3. BFS traverse to get connected nodes
+    pub fn search_graph(&self, query: &str, depth: usize) -> GraphSearchResult {
+        let query_lower = query.to_lowercase();
+        let mut result = GraphSearchResult::default();
+
+        // 1. Try file path match first
+        let file_matches: Vec<_> = self.file_index.iter()
+            .filter(|(path, &idx)| {
+                let path_str = path.to_string_lossy().to_lowercase();
+                self.is_live(idx) && (
+                    path_str.contains(&query_lower) ||
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase().contains(&query_lower))
+                        .unwrap_or(false)
+                )
+            })
+            .collect();
+
+        if !file_matches.is_empty() {
+            result.match_type = "file".to_string();
+
+            // Collect all symbol NodeIndexes from matched files
+            let mut symbol_indexes: Vec<NodeIndex> = Vec::new();
+
+            for (path, &file_idx) in &file_matches {
+                result.matched_files.push(path.to_path_buf());
+
+                // Get all symbols defined in this file (traverse Defines edges)
+                for edge in self.graph.edges_directed(file_idx, Direction::Outgoing) {
+                    if edge.weight().kind == EdgeKind::Defines && self.is_live(edge.target()) {
+                        symbol_indexes.push(edge.target());
+                        let node = &self.graph[edge.target()];
+                        result.symbols.push(SymbolInfo {
+                            name: node.name.clone(),
+                            kind: node.kind,
+                            file: node.file_path.clone(),
+                            line: node.line_start,
+                            code: node.code_snippet.clone(),
+                        });
+                    }
+                }
+            }
+
+            // Now traverse connections FROM these symbols if depth > 0
+            if depth > 0 {
+                let mut visited: HashSet<NodeIndex> = symbol_indexes.iter().copied().collect();
+
+                for &idx in &symbol_indexes {
+                    let node = &self.graph[idx];
+
+                    // Outgoing edges (what this symbol uses/calls)
+                    for edge in self.graph.edges_directed(idx, Direction::Outgoing) {
+                        let target = edge.target();
+                        if self.is_live(target) && !visited.contains(&target) {
+                            visited.insert(target);
+                            let target_node = &self.graph[target];
+                            if target_node.kind != NodeKind::File {
+                                result.connections.push(ConnectionInfo {
+                                    from: node.name.clone(),
+                                    to: target_node.name.clone(),
+                                    relationship: edge.weight().kind,
+                                });
+                            }
+                        }
+                    }
+
+                    // Incoming edges (what calls/uses this symbol)
+                    for edge in self.graph.edges_directed(idx, Direction::Incoming) {
+                        let source = edge.source();
+                        if self.is_live(source) && !visited.contains(&source) {
+                            visited.insert(source);
+                            let source_node = &self.graph[source];
+                            if source_node.kind != NodeKind::File {
+                                result.connections.push(ConnectionInfo {
+                                    from: source_node.name.clone(),
+                                    to: node.name.clone(),
+                                    relationship: edge.weight().kind,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        // 2. Try symbol name match
+        let symbol_matches: Vec<NodeIndex> = self.symbol_index.iter()
+            .filter(|(name, _)| name.to_lowercase().contains(&query_lower))
+            .flat_map(|(_, indexes)| indexes.iter().copied())
+            .filter(|&idx| self.is_live(idx))
+            .collect();
+
+        if symbol_matches.is_empty() {
+            result.match_type = "none".to_string();
+            return result;
+        }
+
+        result.match_type = "symbol".to_string();
+
+        // 3. BFS traverse from matched symbols to get connected subgraph
+        let mut visited: HashSet<NodeIndex> = HashSet::new();
+        let mut queue: VecDeque<(NodeIndex, usize)> = VecDeque::new();
+
+        for idx in &symbol_matches {
+            queue.push_back((*idx, 0));
+            visited.insert(*idx);
+        }
+
+        while let Some((idx, current_depth)) = queue.pop_front() {
+            let node = &self.graph[idx];
+
+            if node.kind != NodeKind::File {
+                result.symbols.push(SymbolInfo {
+                    name: node.name.clone(),
+                    kind: node.kind,
+                    file: node.file_path.clone(),
+                    line: node.line_start,
+                    code: node.code_snippet.clone(),
+                });
+            }
+
+            // Continue BFS if within depth limit
+            if current_depth < depth {
+                // Outgoing edges (what this symbol uses)
+                for edge in self.graph.edges_directed(idx, Direction::Outgoing) {
+                    let target = edge.target();
+                    if self.is_live(target) && !visited.contains(&target) {
+                        visited.insert(target);
+                        queue.push_back((target, current_depth + 1));
+
+                        let target_node = &self.graph[target];
+                        if target_node.kind != NodeKind::File {
+                            result.connections.push(ConnectionInfo {
+                                from: node.name.clone(),
+                                to: target_node.name.clone(),
+                                relationship: edge.weight().kind,
+                            });
+                        }
+                    }
+                }
+
+                // Incoming edges (what uses this symbol)
+                for edge in self.graph.edges_directed(idx, Direction::Incoming) {
+                    let source = edge.source();
+                    if self.is_live(source) && !visited.contains(&source) {
+                        visited.insert(source);
+                        queue.push_back((source, current_depth + 1));
+
+                        let source_node = &self.graph[source];
+                        if source_node.kind != NodeKind::File {
+                            result.connections.push(ConnectionInfo {
+                                from: source_node.name.clone(),
+                                to: node.name.clone(),
+                                relationship: edge.weight().kind,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Find what depends on a given symbol (who calls it, who references it).
