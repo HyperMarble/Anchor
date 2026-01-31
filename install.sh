@@ -1,10 +1,10 @@
 #!/bin/bash
 # Anchor installer
-# Usage: curl -fsSL https://anchordev.github.io/install.sh | bash
+# Usage: curl -fsSL https://tharun-10dragneel.github.io/Anchor/install.sh | bash
 
 set -e
 
-REPO="anchordev/anchor"
+REPO="Tharun-10Dragneel/Anchor"
 INSTALL_DIR="/usr/local/bin"
 
 # Detect OS and architecture
