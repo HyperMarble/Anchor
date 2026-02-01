@@ -283,8 +283,9 @@ fn check_password(pw: &str) -> bool {
     #[test]
     fn test_extract_unsupported_language() {
         use std::path::PathBuf;
-        let path = PathBuf::from("main.go");
-        let result = parser::extract_file(&path, "package main\nfunc main() {}");
+        // Use a truly unsupported extension (.lua is not supported)
+        let path = PathBuf::from("main.lua");
+        let result = parser::extract_file(&path, "print('hello')");
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
