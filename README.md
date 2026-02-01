@@ -18,6 +18,9 @@ Or build from source:
 git clone https://github.com/Tharun-10Dragneel/Anchor.git
 cd Anchor
 cargo build --release
+
+# Install to system
+sudo ./local_install.sh
 ```
 
 ---
@@ -25,8 +28,11 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# Build the code graph for your project
+# Build the code graph for your project (with visual TUI)
 anchor build
+
+# Or use CLI-only mode
+anchor build --no-tui
 
 # See codebase structure
 anchor overview
