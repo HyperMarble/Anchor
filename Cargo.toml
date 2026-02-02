@@ -1,10 +1,10 @@
 [package]
 name = "anchor-sdk"
-version = "0.1.0"
+version = "0.1.3"
 edition = "2021"
 description = "LSP for AI."
 license = "Apache-2.0"
-repository = "https://github.com/AnchorDev/anchor"
+repository = "https://github.com/Tharun-10Dragneel/Anchor"
 keywords = ["ai", "code-intelligence", "mcp", "lsp", "graph"]
 categories = ["development-tools", "command-line-utilities"]
 readme = "README.md"

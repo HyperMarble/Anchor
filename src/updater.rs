@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// GitHub repository for releases
-const GITHUB_REPO: &str = "AnchorDev/anchor";
+const GITHUB_REPO: &str = "Tharun-10Dragneel/Anchor";
 
 /// GitHub release API response
 #[derive(Debug, Deserialize)]
@@ -38,9 +38,9 @@ pub fn check_for_update() -> Option<String> {
     }
 }
 
-/// Get the latest version from GitHub releases.
+/// Get the latest version from GitHub releases (includes pre-releases).
 fn get_latest_version() -> Result<String> {
-    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = format!("https://api.github.com/repos/{}/releases", GITHUB_REPO);
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("anchor-updater")
@@ -53,8 +53,11 @@ fn get_latest_version() -> Result<String> {
         return Err(anyhow::anyhow!("No releases found"));
     }
 
-    let release: GitHubRelease = response.json()?;
-    Ok(release.tag_name)
+    let releases: Vec<GitHubRelease> = response.json()?;
+    releases
+        .first()
+        .map(|r| r.tag_name.clone())
+        .ok_or_else(|| anyhow::anyhow!("No releases found"))
 }
 
 /// Compare version strings (simple semver comparison).
@@ -85,7 +88,7 @@ fn version_is_newer(latest: &str, current: &str) -> bool {
 pub fn update() -> Result<()> {
     println!("Checking for updates...");
 
-    let url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+    let url = format!("https://api.github.com/repos/{}/releases", GITHUB_REPO);
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("anchor-updater")
@@ -99,9 +102,20 @@ pub fn update() -> Result<()> {
         return Ok(());
     }
 
-    let release: GitHubRelease = response.json().map_err(|_| {
+    let releases: Vec<GitHubRelease> = response.json().map_err(|_| {
         anyhow::anyhow!("No releases available yet. You're on v{}.", VERSION)
     })?;
+
+    let release = releases.first().ok_or_else(|| {
+        anyhow::anyhow!("No releases available yet. You're on v{}.", VERSION)
+    })?;
+
+    // Check if we're already on the latest version
+    let latest_clean = release.tag_name.trim_start_matches('v');
+    if !version_is_newer(latest_clean, VERSION) {
+        println!("Already on latest version (v{}).", VERSION);
+        return Ok(());
+    }
 
     // Determine which asset to download based on platform
     let asset_name = get_asset_name();

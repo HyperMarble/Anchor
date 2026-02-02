@@ -26,7 +26,7 @@ pub fn build_graph(root: &Path) -> CodeGraph {
         .git_exclude(true)
         .build()
         .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().map_or(false, |ft| ft.is_file()))
+        .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|entry| SupportedLanguage::from_path(entry.path()).is_some())
         .map(|entry| entry.into_path())
         .collect();
@@ -79,7 +79,7 @@ pub fn scan_stats(root: &Path) -> ScanStats {
         .git_exclude(true)
         .build()
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map_or(false, |ft| ft.is_file()))
+        .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
     {
         if let Some(lang) = SupportedLanguage::from_path(entry.path()) {
             stats.total_files += 1;

@@ -17,7 +17,7 @@ use anchor::updater;
 use anchor::{build_graph, get_context, graph_search, anchor_dependencies, anchor_stats, CodeGraph};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// Start daemon in background (silent)
@@ -183,10 +183,8 @@ fn run(cli: Cli) -> Result<()> {
         // Wait for daemon to be ready (up to 10 seconds)
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(500));
-            if is_daemon_running(&root) {
-                if send_request(&root, Request::Ping).is_ok() {
-                    break;
-                }
+            if is_daemon_running(&root) && send_request(&root, Request::Ping).is_ok() {
+                break;
             }
         }
     }
@@ -322,7 +320,7 @@ fn run_via_daemon(root: &PathBuf, command: Commands) -> Result<()> {
 }
 
 /// Run command locally (loads graph from disk)
-fn run_local(root: &PathBuf, command: Commands) -> Result<()> {
+fn run_local(root: &Path, command: Commands) -> Result<()> {
     let cache_path = root.join(".anchor").join("graph.bin");
 
     // Handle build command separately
@@ -352,7 +350,7 @@ fn run_local(root: &PathBuf, command: Commands) -> Result<()> {
 }
 
 /// Build/rebuild the code graph
-fn cmd_build(root: &PathBuf, cache_path: &PathBuf) -> Result<()> {
+fn cmd_build(root: &Path, cache_path: &Path) -> Result<()> {
     println!("Rebuilding graph...");
     let graph = build_graph(root);
     std::fs::create_dir_all(cache_path.parent().unwrap())?;
