@@ -1,14 +1,6 @@
 ## WARNING: THS PROJECT IS PRE APLHA STAGE PLEASE INSTALL THE TOOLS ON YOUR OWN MEANS!!
 
-
-
 # Anchor
-
-**LSP for AI Agents** 
-
-> **v0.1.0-alpha** — Read-only. Write capabilities coming soon.
-
----
 
 ## Install
 
@@ -54,47 +46,13 @@ anchor deps "Config"
 anchor stats
 ```
 
----
-
-## What is Anchor?
-
-AI agents are good at *reasoning* about code, but bad at:
-- Knowing the real structure of a codebase
-- Finding symbols without grep spam
-- Understanding relationships between files
-
-**Anchor solves this.**
-
-It builds a persistent graph of your codebase that agents can query instantly:
-- Where is this symbol defined?
-- What calls this function?
-- What does this module depend on?
-
-No guessing. No grep. Deterministic answers.
-
----
-
-## How It Works
-
-```
-┌─────────────┐     query      ┌─────────────┐
-│   AI Agent  │ ─────────────▶ │   Anchor    │
-│  (reasoning)│ ◀───────────── │   (graph)   │
-└─────────────┘    context     └─────────────┘
-```
-
-1. `anchor build` — Parses your code with tree-sitter, builds a graph
-2. Agent queries via CLI or MCP
-3. Anchor returns structural facts (not semantic guesses)
-
----
-
 ## Supported Languages
 
 - Rust
 - Python
 - JavaScript
-- TypeScript / TSX
+- TypeScript
+- Swift 
 
 ---
 
@@ -113,19 +71,13 @@ No guessing. No grep. Deterministic answers.
 
 ## Roadmap
 
-- [x] Graph engine (petgraph)
-- [x] Tree-sitter parsing (Rust, Python, JS, TS)
+- [x] Graph engine 
+- [x] Suported Language (Rust, Python, JS, TS, Swift)
 - [x] CLI tools
-- [ ] Graph persistence (save/load)
-- [ ] File watching (real-time updates)
+- [x] Graph persistence (save/load)
+- [x] File watching (real-time updates)
 - [ ] Write capabilities (safe refactors)
-- [ ] MCP server for AI agents
-
----
-
-## License
-
-Apache-2.0
+- more to come 
 
 ---
 
