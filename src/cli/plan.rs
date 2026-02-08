@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::daemon::{send_request, Request, Response};
+use crate::graph::CodeGraph;
 use crate::write::{create_file, insert_after, replace_all, WriteError};
+use super::read as cli_read;
 
 /// Execute a plan file sequentially (fallback when no daemon)
 pub fn execute(root: &Path, file: &str) -> Result<()> {
@@ -25,6 +27,18 @@ pub fn execute(root: &Path, file: &str) -> Result<()> {
     let plan: PlanFile = serde_json::from_str(&content)
         .map_err(|e| anyhow::anyhow!("Invalid plan JSON: {}", e))?;
 
+    // Load graph if any read operations exist
+    let has_reads = plan.operations.iter().any(|op| matches!(op,
+        PlanOperation::Search { .. } | PlanOperation::Read { .. } | PlanOperation::Context { .. }
+    ));
+
+    let graph = if has_reads {
+        let cache_path = root.join(".anchor/graph.bin");
+        CodeGraph::load(&cache_path).ok()
+    } else {
+        None
+    };
+
     println!("Executing plan: {} operations", plan.operations.len());
     println!();
 
@@ -34,7 +48,7 @@ pub fn execute(root: &Path, file: &str) -> Result<()> {
     for (i, op) in plan.operations.iter().enumerate() {
         print!("[{}/{}] ", i + 1, plan.operations.len());
 
-        let result = execute_operation(root, op);
+        let result = execute_operation(root, op, graph.as_ref());
 
         match result {
             Ok(_) => {
@@ -61,8 +75,31 @@ pub fn execute(root: &Path, file: &str) -> Result<()> {
     Ok(())
 }
 
-fn execute_operation(root: &Path, op: &PlanOperation) -> Result<(), WriteError> {
+fn execute_operation(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>) -> Result<(), WriteError> {
     match op {
+        // ─── Read Operations ───────────────────────────────────────
+        PlanOperation::Search { query, pattern, limit } => {
+            print!("search {} ... ", query);
+            if let Some(g) = graph {
+                let _ = cli_read::search(g, query, pattern.as_deref(), limit.unwrap_or(20));
+            }
+            Ok(())
+        }
+        PlanOperation::Read { symbol } => {
+            print!("read {} ... ", symbol);
+            if let Some(g) = graph {
+                let _ = cli_read::read(g, symbol);
+            }
+            Ok(())
+        }
+        PlanOperation::Context { query, limit } => {
+            print!("context {} ... ", query);
+            if let Some(g) = graph {
+                let _ = cli_read::context(g, query, limit.unwrap_or(5));
+            }
+            Ok(())
+        }
+        // ─── Write Operations ──────────────────────────────────────
         PlanOperation::Create { path, content } => {
             print!("create {} ... ", path);
             let p = root.join(path);
@@ -102,6 +139,17 @@ pub struct PlanFile {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op")]
 pub enum PlanOperation {
+    // ─── Read Operations (no locking needed) ───────────────────
+    #[serde(rename = "search")]
+    Search { query: String, pattern: Option<String>, limit: Option<usize> },
+
+    #[serde(rename = "read")]
+    Read { symbol: String },
+
+    #[serde(rename = "context")]
+    Context { query: String, limit: Option<usize> },
+
+    // ─── Write Operations (with locking) ───────────────────────
     #[serde(rename = "create")]
     Create { path: String, content: String },
 
@@ -135,6 +183,18 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
     let plan: PlanFile = serde_json::from_str(&content)
         .map_err(|e| anyhow::anyhow!("Invalid plan JSON: {}", e))?;
 
+    // Load graph if any read operations exist
+    let has_reads = plan.operations.iter().any(|op| matches!(op,
+        PlanOperation::Search { .. } | PlanOperation::Read { .. } | PlanOperation::Context { .. }
+    ));
+
+    let graph = if has_reads {
+        let cache_path = root.join(".anchor/graph.bin");
+        CodeGraph::load(&cache_path).ok()
+    } else {
+        None
+    };
+
     println!(
         "Executing plan: {} operations (parallel with locking)",
         plan.operations.len()
@@ -150,7 +210,7 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
         .par_iter()
         .enumerate()
         .map(|(i, op)| {
-            let result = execute_operation_via_daemon(root, op);
+            let result = execute_operation_via_daemon(root, op, graph.as_ref());
             (i, op, result)
         })
         .collect();
@@ -158,6 +218,9 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
     // Print results in order
     for (i, op, result) in results {
         let op_desc = match op {
+            PlanOperation::Search { query, .. } => format!("search {}", query),
+            PlanOperation::Read { symbol } => format!("read {}", symbol),
+            PlanOperation::Context { query, .. } => format!("context {}", query),
             PlanOperation::Create { path, .. } => format!("create {}", path),
             PlanOperation::Insert { path, .. } => format!("insert {}", path),
             PlanOperation::Replace { path, .. } => format!("replace {}", path),
@@ -211,7 +274,31 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
     Ok(())
 }
 
-fn execute_operation_via_daemon(root: &Path, op: &PlanOperation) -> Result<Response, String> {
+fn execute_operation_via_daemon(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>) -> Result<Response, String> {
+    // Read operations don't need daemon - execute directly
+    match op {
+        PlanOperation::Search { query, pattern, limit } => {
+            if let Some(g) = graph {
+                let _ = cli_read::search(g, query, pattern.as_deref(), limit.unwrap_or(20));
+            }
+            return Ok(Response::Ok { data: serde_json::json!({"op": "search"}) });
+        }
+        PlanOperation::Read { symbol } => {
+            if let Some(g) = graph {
+                let _ = cli_read::read(g, symbol);
+            }
+            return Ok(Response::Ok { data: serde_json::json!({"op": "read"}) });
+        }
+        PlanOperation::Context { query, limit } => {
+            if let Some(g) = graph {
+                let _ = cli_read::context(g, query, limit.unwrap_or(5));
+            }
+            return Ok(Response::Ok { data: serde_json::json!({"op": "context"}) });
+        }
+        _ => {}
+    }
+
+    // Write operations go through daemon
     let request = match op {
         PlanOperation::Create { path, content } => Request::Create {
             path: path.clone(),
@@ -232,7 +319,6 @@ fn execute_operation_via_daemon(root: &Path, op: &PlanOperation) -> Result<Respo
             new: new.clone(),
         },
         PlanOperation::Delete { path } => {
-            // Delete isn't in daemon protocol yet - do it directly
             return match std::fs::remove_file(root.join(path)) {
                 Ok(_) => Ok(Response::Ok {
                     data: serde_json::json!({"deleted": path}),
@@ -242,6 +328,7 @@ fn execute_operation_via_daemon(root: &Path, op: &PlanOperation) -> Result<Respo
                 }),
             };
         }
+        _ => return Ok(Response::Ok { data: serde_json::json!({}) }),
     };
 
     send_request(root, request).map_err(|e| e.to_string())
