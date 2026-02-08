@@ -28,18 +28,18 @@
 
 pub mod cli;
 pub mod config;
-pub mod daemon;
+// pub mod daemon;  // TODO: Daemon uses write/lock, not finalized yet
 pub mod error;
 pub mod graph;
 pub mod graphql;
-pub mod lock;
+// pub mod lock;  // TODO: Write operations not finalized yet
 pub mod parser;
 pub mod query;
 pub mod regex;
 pub mod storage;
 pub mod updater;
 pub mod watcher;
-pub mod write;
+// pub mod write;  // TODO: Write operations not finalized yet
 
 // Re-exports for convenience
 pub use error::{AnchorError, Result};
@@ -53,12 +53,12 @@ pub use query::{
     Signature, StatsResponse, Symbol,
 };
 
-// Write operations
-pub use write::{
-    create_file, insert_after, insert_before, replace_all, replace_first, WriteError, WriteResult,
-};
+// Write operations - TODO: Not finalized yet
+// pub use write::{
+//     create_file, insert_after, insert_before, replace_all, replace_first, WriteError, WriteResult,
+// };
 
-// GraphQL
+// GraphQL (query only - mutations not finalized)
 pub use graphql::{build_schema, execute, AnchorSchema};
 
 // Regex engine (Brzozowski derivatives - ReDoS-safe)
