@@ -14,6 +14,7 @@ use tracing::{debug, info};
 use super::types::*;
 
 /// The main code graph — holds all nodes, edges, and indexes for fast lookup.
+#[derive(Clone)]
 pub struct CodeGraph {
     /// The directed graph storing code relationships.
     graph: DiGraph<NodeData, EdgeData>,
@@ -161,6 +162,11 @@ impl CodeGraph {
             .flatten()
             .filter_map(|&idx| self.build_search_result(idx))
             .collect()
+    }
+
+    /// Get all indexed file paths.
+    pub fn all_files(&self) -> Vec<std::path::PathBuf> {
+        self.file_index.keys().cloned().collect()
     }
 
     /// Graph-aware search: finds by file path OR symbol name, then traverses connections.

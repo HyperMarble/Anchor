@@ -1,193 +1,265 @@
 //! Read/Search operations: search, read, context
 //!
-//! Three commands for all read operations:
-//! - search: Find symbols (lightweight, names + locations)
-//! - read: Get full context for a symbol (code + relationships)
-//! - context: Search + Read combined (find + full context)
+//! All operations go through GraphQL queries internally.
+//! This ensures consistent behavior between CLI and any future API.
 
 use anyhow::Result;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::graph::CodeGraph;
-use crate::query::graph_search;
-use crate::regex::{parse as parse_regex, Matcher};
+use crate::graphql::{build_schema, execute};
 
 /// Search for symbols by name or pattern.
 ///
-/// Lightweight - returns names, files, lines only.
-/// Compact format for token efficiency.
+/// Wraps GraphQL `symbol` query with optional regex pattern.
 pub fn search(graph: &CodeGraph, query: &str, pattern: Option<&str>, limit: usize) -> Result<()> {
-    // If pattern provided, use regex matching
-    if let Some(pat) = pattern {
-        return search_with_pattern(graph, pat, limit);
+    let schema = build_schema(Arc::new(graph.clone()));
+
+    // Build GraphQL query based on whether pattern is provided
+    let gql_query = if let Some(pat) = pattern {
+        // Use regex search
+        format!(
+            r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line code }} }}"#,
+            escape_graphql(pat),
+            limit
+        )
+    } else {
+        // Use symbol query with prefix matching
+        format!(
+            r#"{{ symbol(name: "{}") {{ name kind file line }} }}"#,
+            escape_graphql(query)
+        )
+    };
+
+    // Execute GraphQL query
+    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, &gql_query));
+
+    // Parse and format output
+    let json: serde_json::Value = serde_json::from_str(&result)?;
+
+    if let Some(errors) = json.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                if let Some(msg) = arr[0].get("message") {
+                    println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                    return Ok(());
+                }
+            }
+        }
     }
 
-    let result = graph_search(graph, query, 0);
+    let data = json.get("data");
 
-    if result.symbols.is_empty() && result.matched_files.is_empty() {
-        println!("No results for '{}'", query);
+    // Handle search results (from regex search)
+    if let Some(symbols) = data.and_then(|d| d.get("search")).and_then(|s| s.as_array()) {
+        if symbols.is_empty() {
+            println!("No symbols match pattern '{}'", pattern.unwrap_or(query));
+            return Ok(());
+        }
+        for sym in symbols.iter().take(limit) {
+            print_symbol_compact(sym);
+        }
         return Ok(());
     }
 
-    // Compact format: name Kind file:line
-    for sym in result.symbols.iter().take(limit) {
-        let file_name = sym.file.file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| sym.file.to_string_lossy().to_string());
-        println!("{} {:?} {}:{}", sym.name, sym.kind, file_name, sym.line);
-    }
-
-    // Files matched
-    for file in &result.matched_files {
-        let file_name = file.file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| file.to_string_lossy().to_string());
-        println!("@ {}", file_name);
-    }
-
-    Ok(())
-}
-
-/// Search with regex pattern (Brzozowski derivatives - ReDoS safe)
-fn search_with_pattern(graph: &CodeGraph, pattern: &str, limit: usize) -> Result<()> {
-    let regex = parse_regex(pattern)
-        .map_err(|e| anyhow::anyhow!("Invalid pattern: {}", e))?;
-    let mut matcher = Matcher::new(regex);
-
-    let all_symbols = graph.all_symbols();
-    let matched: Vec<_> = all_symbols
-        .into_iter()
-        .filter(|s| matcher.is_match(&s.symbol))
-        .take(limit)
-        .collect();
-
-    if matched.is_empty() {
-        println!("No symbols match pattern '{}'", pattern);
+    // Handle symbol results (from name search)
+    if let Some(symbols) = data.and_then(|d| d.get("symbol")).and_then(|s| s.as_array()) {
+        if symbols.is_empty() {
+            println!("No results for '{}'", query);
+            return Ok(());
+        }
+        for sym in symbols.iter().take(limit) {
+            print_symbol_compact(sym);
+        }
         return Ok(());
     }
 
-    // Compact format: name Kind file:line
-    for sym in &matched {
-        let file_name = sym.file.file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| sym.file.to_string_lossy().to_string());
-        println!("{} {:?} {}:{}", sym.symbol, sym.kind, file_name, sym.line_start);
-    }
-
+    println!("No results for '{}'", query);
     Ok(())
 }
 
 /// Read full context for a symbol.
 ///
-/// Returns: code, callers, callees, file, line.
-/// Compact format for token efficiency.
+/// Wraps GraphQL `symbol` query with callers/callees.
 pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
-    let results = graph.search(symbol, 1);
+    let schema = build_schema(Arc::new(graph.clone()));
 
-    if results.is_empty() {
-        println!("Symbol '{}' not found", symbol);
-        return Ok(());
-    }
+    // GraphQL query: symbol with code, callers, callees
+    let gql_query = format!(
+        r#"{{ symbol(name: "{}", exact: true) {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
+        escape_graphql(symbol)
+    );
 
-    let sym = &results[0];
-    let dependents = graph.dependents(symbol);
-    let dependencies = graph.dependencies(symbol);
+    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, &gql_query));
+    let json: serde_json::Value = serde_json::from_str(&result)?;
 
-    // Compact format: symbol Kind file:line
-    let file_name = sym.file.file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| sym.file.to_string_lossy().to_string());
-
-    println!("{} {:?} {}:{}", sym.symbol, sym.kind, file_name, sym.line_start);
-
-    // Callers (who calls this) - unique names only, no files
-    if !dependents.is_empty() {
-        let mut callers: Vec<_> = dependents.iter()
-            .filter(|d| !d.symbol.ends_with(".rs") && !d.symbol.ends_with(".py") && !d.symbol.ends_with(".js") && !d.symbol.ends_with(".ts"))
-            .map(|d| d.symbol.as_str())
-            .collect();
-        callers.sort();
-        callers.dedup();
-        if !callers.is_empty() {
-            println!("> {}", callers.join(" "));
+    if let Some(errors) = json.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                if let Some(msg) = arr[0].get("message") {
+                    println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                    return Ok(());
+                }
+            }
         }
     }
 
-    // Callees (what this calls) - unique names only, no files
-    if !dependencies.is_empty() {
-        let mut callees: Vec<_> = dependencies.iter()
-            .filter(|d| !d.symbol.ends_with(".rs") && !d.symbol.ends_with(".py") && !d.symbol.ends_with(".js") && !d.symbol.ends_with(".ts"))
-            .map(|d| d.symbol.as_str())
+    let symbols = json
+        .get("data")
+        .and_then(|d| d.get("symbol"))
+        .and_then(|s| s.as_array());
+
+    let symbols = match symbols {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            println!("Symbol '{}' not found", symbol);
+            return Ok(());
+        }
+    };
+
+    let sym = &symbols[0];
+
+    // Header: symbol Kind file:line
+    let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
+    let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    let file_name = Path::new(file)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| file.to_string());
+
+    println!("{} {} {}:{}", name, kind, file_name, line);
+
+    // Callers (who calls this) - unique names only
+    if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
+        let mut caller_names: Vec<&str> = callers
+            .iter()
+            .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+            .filter(|n| !is_file_name(n))
             .collect();
-        callees.sort();
-        callees.dedup();
-        if !callees.is_empty() {
-            println!("< {}", callees.join(" "));
+        caller_names.sort();
+        caller_names.dedup();
+        if !caller_names.is_empty() {
+            println!("> {}", caller_names.join(" "));
+        }
+    }
+
+    // Callees (what this calls) - unique names only
+    if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
+        let mut callee_names: Vec<&str> = callees
+            .iter()
+            .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+            .filter(|n| !is_file_name(n))
+            .collect();
+        callee_names.sort();
+        callee_names.dedup();
+        if !callee_names.is_empty() {
+            println!("< {}", callee_names.join(" "));
         }
     }
 
     // Code
-    println!("---");
-    println!("{}", sym.code);
+    if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
+        println!("---");
+        println!("{}", code);
+    }
 
     Ok(())
 }
 
 /// Context: Search + Read combined.
 ///
-/// Finds symbols matching query, returns full context for each.
-/// Compact format for token efficiency.
+/// Wraps GraphQL `symbol` query with code and relationships.
 pub fn context(graph: &CodeGraph, query: &str, limit: usize) -> Result<()> {
-    let result = graph_search(graph, query, 1);
+    let schema = build_schema(Arc::new(graph.clone()));
 
-    if result.symbols.is_empty() {
-        println!("No results for '{}'", query);
-        return Ok(());
+    // GraphQL query: symbol search with code, callers, callees
+    let gql_query = format!(
+        r#"{{ symbol(name: "{}") {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
+        escape_graphql(query)
+    );
+
+    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, &gql_query));
+    let json: serde_json::Value = serde_json::from_str(&result)?;
+
+    if let Some(errors) = json.get("errors") {
+        if let Some(arr) = errors.as_array() {
+            if !arr.is_empty() {
+                if let Some(msg) = arr[0].get("message") {
+                    println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                    return Ok(());
+                }
+            }
+        }
     }
 
-    for (i, sym) in result.symbols.iter().take(limit).enumerate() {
+    let symbols = json
+        .get("data")
+        .and_then(|d| d.get("symbol"))
+        .and_then(|s| s.as_array());
+
+    let symbols = match symbols {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            println!("No results for '{}'", query);
+            return Ok(());
+        }
+    };
+
+    for (i, sym) in symbols.iter().take(limit).enumerate() {
         if i > 0 {
             println!("\n===");
         }
 
-        let dependents = graph.dependents(&sym.name);
-        let dependencies = graph.dependencies(&sym.name);
-
         // Header: symbol Kind file:line
-        let file_name = sym.file.file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| sym.file.to_string_lossy().to_string());
-        println!("{} {:?} {}:{}", sym.name, sym.kind, file_name, sym.line);
+        let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
+        let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
 
-        // Callers - unique names, no files
-        if !dependents.is_empty() {
-            let mut callers: Vec<_> = dependents.iter()
-                .filter(|d| !d.symbol.ends_with(".rs") && !d.symbol.ends_with(".py") && !d.symbol.ends_with(".js") && !d.symbol.ends_with(".ts"))
-                .map(|d| d.symbol.as_str())
+        let file_name = Path::new(file)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| file.to_string());
+
+        println!("{} {} {}:{}", name, kind, file_name, line);
+
+        // Callers - unique names only
+        if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
+            let mut caller_names: Vec<&str> = callers
+                .iter()
+                .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+                .filter(|n| !is_file_name(n))
                 .collect();
-            callers.sort();
-            callers.dedup();
-            if !callers.is_empty() {
-                println!("> {}", callers.join(" "));
+            caller_names.sort();
+            caller_names.dedup();
+            if !caller_names.is_empty() {
+                println!("> {}", caller_names.join(" "));
             }
         }
 
-        // Callees - unique names, no files
-        if !dependencies.is_empty() {
-            let mut callees: Vec<_> = dependencies.iter()
-                .filter(|d| !d.symbol.ends_with(".rs") && !d.symbol.ends_with(".py") && !d.symbol.ends_with(".js") && !d.symbol.ends_with(".ts"))
-                .map(|d| d.symbol.as_str())
+        // Callees - unique names only
+        if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
+            let mut callee_names: Vec<&str> = callees
+                .iter()
+                .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+                .filter(|n| !is_file_name(n))
                 .collect();
-            callees.sort();
-            callees.dedup();
-            if !callees.is_empty() {
-                println!("< {}", callees.join(" "));
+            callee_names.sort();
+            callee_names.dedup();
+            if !callee_names.is_empty() {
+                println!("< {}", callee_names.join(" "));
             }
         }
 
         // Code
-        println!("---");
-        println!("{}", sym.code);
+        if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
+            println!("---");
+            println!("{}", code);
+        }
     }
 
     Ok(())
@@ -205,9 +277,86 @@ pub fn build(root: &Path, cache_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Get graph stats
+/// Get graph stats via GraphQL
 pub fn stats(graph: &CodeGraph) -> Result<()> {
-    let s = graph.stats();
-    println!("files:{} symbols:{} edges:{} names:{}", s.file_count, s.symbol_count, s.total_edges, s.unique_symbol_names);
+    let schema = build_schema(Arc::new(graph.clone()));
+
+    let gql_query = "{ stats { files symbols edges } }";
+    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, gql_query));
+    let json: serde_json::Value = serde_json::from_str(&result)?;
+
+    if let Some(stats) = json.get("data").and_then(|d| d.get("stats")) {
+        let files = stats.get("files").and_then(|v| v.as_i64()).unwrap_or(0);
+        let symbols = stats.get("symbols").and_then(|v| v.as_i64()).unwrap_or(0);
+        let edges = stats.get("edges").and_then(|v| v.as_i64()).unwrap_or(0);
+        println!("files:{} symbols:{} edges:{}", files, symbols, edges);
+    }
+
+    Ok(())
+}
+
+/// Print a symbol in compact format: name Kind file:line
+fn print_symbol_compact(sym: &serde_json::Value) {
+    let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
+    let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+
+    let file_name = Path::new(file)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| file.to_string());
+
+    println!("{} {} {}:{}", name, kind, file_name, line);
+}
+
+/// Check if a string looks like a file name
+fn is_file_name(s: &str) -> bool {
+    s.ends_with(".rs") || s.ends_with(".py") || s.ends_with(".js") || s.ends_with(".ts")
+}
+
+/// Escape special characters for GraphQL string
+fn escape_graphql(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+/// Show codebase overview - files grouped by directory with symbol counts
+pub fn overview(graph: &CodeGraph) -> Result<()> {
+    let stats = graph.stats();
+    println!("files:{} symbols:{} edges:{}", stats.file_count, stats.symbol_count, stats.total_edges);
+    println!();
+
+    // Get all files and group by directory
+    let mut dirs: std::collections::BTreeMap<String, Vec<(String, usize)>> = std::collections::BTreeMap::new();
+
+    for file_path in graph.all_files() {
+        let symbols = graph.symbols_in_file(&file_path);
+        let dir = file_path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+        let file_name = file_path.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        dirs.entry(dir).or_default().push((file_name, symbols.len()));
+    }
+
+    for (dir, files) in &dirs {
+        println!("{}/", dir);
+        for (file, count) in files {
+            println!("  {} ({})", file, count);
+        }
+    }
+
+    Ok(())
+}
+
+/// List all indexed files as tree
+pub fn files(graph: &CodeGraph) -> Result<()> {
+    for file_path in graph.all_files() {
+        println!("{}", file_path.display());
+    }
     Ok(())
 }

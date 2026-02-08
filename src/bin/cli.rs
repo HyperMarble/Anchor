@@ -102,7 +102,23 @@ fn run(cli: Cli) -> Result<()> {
 
         // ─── System Commands ──────────────────────────────────────
         Commands::Build => {
-            cli_read::build(&root, &cache_path)
+            cli_read::build(&root, &cache_path)?;
+            // Auto-start daemon for file watching
+            if !anchor::daemon::is_daemon_running(&root) {
+                cli::daemon::start_background(&root)?;
+                println!("daemon: watching for changes");
+            }
+            Ok(())
+        }
+
+        Commands::Overview => {
+            let graph = load_or_build_graph(&root, &cache_path)?;
+            cli_read::overview(&graph)
+        }
+
+        Commands::Files => {
+            let graph = load_or_build_graph(&root, &cache_path)?;
+            cli_read::files(&graph)
         }
 
         Commands::Stats => {
@@ -129,25 +145,26 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// Uninstall anchor
+/// Uninstall anchor (runs shell script)
 fn uninstall() -> Result<()> {
-    let exe_path = std::env::current_exe()?;
+    use std::process::Command;
 
-    println!("Uninstalling anchor...");
+    let script = r#"
+        INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+        if [ -w "$INSTALL_DIR" ]; then
+            rm -f "$INSTALL_DIR/anchor"
+        else
+            sudo rm -f "$INSTALL_DIR/anchor"
+        fi
+        rm -rf ~/.anchor
+        echo "Anchor uninstalled."
+    "#;
 
-    // Remove .anchor directory in home if exists
-    if let Ok(home) = std::env::var("HOME") {
-        let anchor_dir = std::path::Path::new(&home).join(".anchor");
-        if anchor_dir.exists() {
-            let _ = std::fs::remove_dir_all(&anchor_dir);
-            println!("Removed ~/.anchor/");
-        }
-    }
+    Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .status()?;
 
-    // Remove the binary last
-    std::fs::remove_file(&exe_path)?;
-
-    println!("Anchor uninstalled.");
     Ok(())
 }
 

@@ -94,6 +94,13 @@ pub enum Commands {
         file: String,
     },
 
+    // ─── Overview ─────────────────────────────────────────────────
+    /// Show codebase overview (files, structure, key symbols)
+    Overview,
+
+    /// List all indexed files as tree
+    Files,
+
     // ─── System ───────────────────────────────────────────────────
     /// Build/rebuild the code graph
     Build,
@@ -110,7 +117,7 @@ pub enum Commands {
     /// Update anchor to latest version
     Update,
 
-    /// Uninstall anchor
+    /// Uninstall anchor (runs shell script)
     Uninstall,
 
     /// Show version
@@ -135,22 +142,24 @@ pub fn print_banner() {
 
 /// Print usage help
 pub fn print_usage() {
-    println!("Read/Search:");
-    println!("  search <query> [-p pattern]     Find symbols");
-    println!("  read <symbol>                   Full context (code + relationships)");
-    println!("  context <query>                 Search + Read combined");
+    println!("Start here:");
+    println!("  build                 Index codebase (auto-starts watcher)");
+    println!("  overview              Files + symbol counts by directory");
+    println!("  files                 List all indexed files");
+    println!();
+    println!("Query (use context first):");
+    println!("  context <query>       Search + code + callers + callees");
+    println!("  search <query>        Find symbols (NAME KIND FILE:LINE)");
+    println!("  search -p <regex>     Find by pattern");
+    println!("  read <symbol>         Full context for exact symbol");
+    println!();
+    println!("Output format:");
+    println!("  NAME KIND FILE:LINE");
+    println!("  > callers");
+    println!("  < callees");
+    println!("  --- code");
     println!();
     println!("Write:");
-    println!("  write <path> <content>          Create/overwrite file");
-    println!("  edit <path> -a <action> -p <pattern> [-c content]");
-    println!();
-    println!("Parallel:");
-    println!("  plan <plan.json>                Execute parallel operations");
-    println!();
-    println!("System:");
-    println!("  build                           Build code graph");
-    println!("  stats                           Show graph stats");
-    println!("  daemon [start|stop|status]      Manage daemon");
-    println!("  update                          Update anchor");
-    println!("  uninstall                       Uninstall anchor");
+    println!("  write <path> <content>");
+    println!("  edit <path> -a insert|replace|delete -p <pattern> [-c content]");
 }
