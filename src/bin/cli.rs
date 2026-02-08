@@ -37,29 +37,22 @@ fn run(cli: Cli) -> Result<()> {
     let root = cli.root.canonicalize().unwrap_or(cli.root);
     let cache_path = root.join(".anchor/graph.bin");
 
-    // No command = show usage only (no banner)
+    // No command = show help
     if cli.command.is_none() {
-        println!("anchor v{}", updater::VERSION);
-        println!();
         cli::print_usage();
         return Ok(());
     }
 
     match cli.command.unwrap() {
-        // ─── Read/Search Commands ─────────────────────────────────
-        Commands::Search { query, pattern, limit } => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
-            cli_read::search(&graph, &query, pattern.as_deref(), limit)
-        }
-
-        Commands::Read { symbol } => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
-            cli_read::read(&graph, &symbol)
-        }
-
+        // ─── Query Commands ───────────────────────────────────────
         Commands::Context { query, limit } => {
             let graph = load_or_build_graph(&root, &cache_path)?;
             cli_read::context(&graph, &query, limit)
+        }
+
+        Commands::Search { query, pattern, limit } => {
+            let graph = load_or_build_graph(&root, &cache_path)?;
+            cli_read::search(&graph, &query, pattern.as_deref(), limit)
         }
 
         // ─── Write Commands (TODO: ACI-based) ─────────────────────
@@ -73,25 +66,9 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Commands::Edit { path, action, pattern, content } => {
-            let full_path = root.join(&path);
-            match action.as_str() {
-                "insert" => {
-                    let c = content.ok_or_else(|| anyhow::anyhow!("Content required for insert"))?;
-                    anchor::insert_after(&full_path, &pattern, &c)?;
-                    println!(r#"{{"status": "inserted", "path": "{}"}}"#, path);
-                }
-                "replace" => {
-                    let c = content.ok_or_else(|| anyhow::anyhow!("Content required for replace"))?;
-                    anchor::replace_all(&full_path, &pattern, &c)?;
-                    println!(r#"{{"status": "replaced", "path": "{}"}}"#, path);
-                }
-                "delete" => {
-                    anchor::replace_all(&full_path, &pattern, "")?;
-                    println!(r#"{{"status": "deleted", "path": "{}"}}"#, path);
-                }
-                _ => return Err(anyhow::anyhow!("Unknown action: {}", action)),
-            }
+        Commands::Edit { path, action, pattern: _, content: _ } => {
+            // TODO: Write operations not finalized yet
+            println!(r#"{{"status": "error", "message": "Write operations not yet finalized", "path": "{}", "action": "{}"}}"#, path, action);
             Ok(())
         }
 
@@ -102,13 +79,12 @@ fn run(cli: Cli) -> Result<()> {
 
         // ─── System Commands ──────────────────────────────────────
         Commands::Build => {
-            cli_read::build(&root, &cache_path)?;
-            // Auto-start daemon for file watching
-            if !anchor::daemon::is_daemon_running(&root) {
-                cli::daemon::start_background(&root)?;
-                println!("daemon: watching for changes");
-            }
-            Ok(())
+            cli_read::build(&root, &cache_path)
+        }
+
+        Commands::Map { scope } => {
+            let graph = load_or_build_graph(&root, &cache_path)?;
+            cli_read::map(&graph, scope.as_deref())
         }
 
         Commands::Overview => {

@@ -360,3 +360,156 @@ pub fn files(graph: &CodeGraph) -> Result<()> {
     }
     Ok(())
 }
+
+/// Show codebase map - compact view for AI agents
+///
+/// Format:
+/// module(symbols) module(symbols) ...
+/// ENTRY: symbols with no callers
+/// TOP: most connected symbols
+pub fn map(graph: &CodeGraph, scope: Option<&str>) -> Result<()> {
+    use std::collections::{BTreeMap, HashSet};
+
+    // Collect all symbols grouped by directory (module)
+    let mut modules: BTreeMap<String, Vec<(String, String, usize, usize)>> = BTreeMap::new();
+    let mut all_symbols: Vec<(String, String, usize, usize, String)> = Vec::new();
+
+    for file_path in graph.all_files() {
+        let dir = file_path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| ".".to_string());
+
+        // If scope is specified, filter to that module
+        if let Some(s) = scope {
+            if !dir.contains(s) && !file_path.to_string_lossy().contains(s) {
+                continue;
+            }
+        }
+
+        for symbol in graph.symbols_in_file(&file_path) {
+            // Skip imports and files
+            if matches!(symbol.kind, crate::graph::types::NodeKind::Import | crate::graph::types::NodeKind::File) {
+                continue;
+            }
+
+            let callers = graph.dependents(&symbol.name).len();
+            let callees = graph.dependencies(&symbol.name).len();
+            let short_module = dir.split('/').last().unwrap_or(&dir).to_string();
+
+            modules.entry(dir.clone())
+                .or_default()
+                .push((symbol.name.clone(), symbol.kind.to_string(), callers, callees));
+
+            all_symbols.push((symbol.name.clone(), symbol.kind.to_string(), callers, callees, short_module));
+        }
+    }
+
+    if modules.is_empty() {
+        println!("No symbols found");
+        return Ok(());
+    }
+
+    // If scope specified, show detailed view of that module
+    if scope.is_some() {
+        for (dir, symbols) in &modules {
+            println!("@{}", dir);
+            for (name, kind, callers, callees) in symbols {
+                let mut parts = Vec::new();
+                if *callees > 0 {
+                    let deps: Vec<String> = graph.dependencies(name)
+                        .iter()
+                        .take(5)
+                        .map(|d| d.symbol.clone())
+                        .collect();
+                    if !deps.is_empty() {
+                        parts.push(format!(">{}", deps.join(",")));
+                    }
+                }
+                if *callers > 0 {
+                    let callers_list: Vec<String> = graph.dependents(name)
+                        .iter()
+                        .take(5)
+                        .map(|d| d.symbol.clone())
+                        .collect();
+                    if !callers_list.is_empty() {
+                        parts.push(format!("<{}", callers_list.join(",")));
+                    }
+                }
+                if parts.is_empty() {
+                    println!("  {}.{}", name, short_kind(kind));
+                } else {
+                    println!("  {}.{} {}", name, short_kind(kind), parts.join(" "));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Top level view: modules with counts
+    let module_line: Vec<String> = modules.iter()
+        .map(|(dir, symbols)| {
+            let short_dir = dir.split('/').last().unwrap_or(dir);
+            format!("{}({}s)", short_dir, symbols.len())
+        })
+        .collect();
+    println!("{}", module_line.join(" "));
+
+    // Entry points: functions/methods with 0 callers AND have callees (actually do something)
+    let entries: Vec<String> = all_symbols.iter()
+        .filter(|(name, kind, callers, callees, _)| {
+            *callers == 0 && *callees > 0 &&
+            (kind == "function" || kind == "method") &&
+            !name.starts_with("test_") && name != "new"
+        })
+        .map(|(name, _, _, _, module)| format!("{}:{}", module, name))
+        .take(10)
+        .collect();
+
+    if !entries.is_empty() {
+        println!("ENTRY: {}", entries.join(" "));
+    }
+
+    // Top connected: symbols with most relationships (deduplicated by name)
+    let mut by_connections = all_symbols.clone();
+    by_connections.sort_by(|a, b| (b.2 + b.3).cmp(&(a.2 + a.3)));
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut top: Vec<String> = Vec::new();
+
+    for (name, kind, callers, callees, module) in by_connections.iter() {
+        if kind == "import" || name == "new" {
+            continue;
+        }
+        if seen.insert(name.clone()) {
+            top.push(format!("{}:{}({})", module, name, callers + callees));
+            if top.len() >= 10 {
+                break;
+            }
+        }
+    }
+
+    if !top.is_empty() {
+        println!("TOP: {}", top.join(" "));
+    }
+
+    Ok(())
+}
+
+/// Short kind abbreviation
+fn short_kind(kind: &str) -> &str {
+    match kind {
+        "function" => "fn",
+        "method" => "m",
+        "struct" => "st",
+        "class" => "cl",
+        "trait" => "tr",
+        "interface" => "if",
+        "enum" => "en",
+        "constant" => "c",
+        "module" => "mod",
+        "type" => "ty",
+        "variable" => "v",
+        "impl" => "impl",
+        _ => kind,
+    }
+}
