@@ -28,18 +28,19 @@
 
 pub mod cli;
 pub mod config;
-// pub mod daemon;  // TODO: Daemon uses write/lock, not finalized yet
+pub mod daemon;
 pub mod error;
 pub mod graph;
 pub mod graphql;
-// pub mod lock;  // TODO: Write operations not finalized yet
+pub mod lock;
+pub mod mcp;
 pub mod parser;
 pub mod query;
 pub mod regex;
 pub mod storage;
 pub mod updater;
 pub mod watcher;
-// pub mod write;  // TODO: Write operations not finalized yet
+pub mod write;
 
 // Re-exports for convenience
 pub use error::{AnchorError, Result};
@@ -53,12 +54,12 @@ pub use query::{
     Signature, StatsResponse, Symbol,
 };
 
-// Write operations - TODO: Not finalized yet
-// pub use write::{
-//     create_file, insert_after, insert_before, replace_all, replace_first, WriteError, WriteResult,
-// };
+// Write operations
+pub use write::{
+    create_file, insert_after, insert_before, replace_all, replace_first, WriteError, WriteResult,
+};
 
-// GraphQL (query only - mutations not finalized)
+// GraphQL
 pub use graphql::{build_schema, execute, AnchorSchema};
 
 // Regex engine (Brzozowski derivatives - ReDoS-safe)
@@ -227,6 +228,11 @@ const API_URL = "https://api.example.com";
 
         let results = graph.search("Storage", 3);
         assert!(!results.is_empty());
+
+        // Check call_lines are populated on symbols with graph dependencies
+        let results = graph.search("build_from_extractions", 3);
+        assert!(!results.is_empty());
+        assert!(!results[0].call_lines.is_empty(), "call_lines should be populated for functions with graph dependencies");
     }
 
     #[test]
