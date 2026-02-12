@@ -72,4 +72,52 @@ mod tests {
         assert!(result.contains("symbol"));
         assert!(!result.contains("error"));
     }
+
+    #[tokio::test]
+    async fn test_graph_slicing_through_graphql() {
+        use crate::graph::types::*;
+        use std::path::PathBuf;
+
+        let mut graph = CodeGraph::new();
+        // Build a long function (>10 lines) that calls another function
+        let long_code = "fn caller() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    let f = 6;\n    let g = 7;\n    let h = 8;\n    let i = 9;\n    let result = callee();\n    let j = 10;\n    result\n}";
+        graph.build_from_extractions(vec![FileExtractions {
+            file_path: PathBuf::from("test.rs"),
+            symbols: vec![
+                ExtractedSymbol {
+                    name: "caller".to_string(),
+                    kind: NodeKind::Function,
+                    line_start: 1,
+                    line_end: 14,
+                    code_snippet: long_code.to_string(),
+                    parent: None,
+                },
+                ExtractedSymbol {
+                    name: "callee".to_string(),
+                    kind: NodeKind::Function,
+                    line_start: 20,
+                    line_end: 22,
+                    code_snippet: "fn callee() -> i32 { 42 }".to_string(),
+                    parent: None,
+                },
+            ],
+            imports: vec![],
+            calls: vec![ExtractedCall {
+                caller: "caller".to_string(),
+                callee: "callee".to_string(),
+                line: 11,
+                line_end: 11,
+            }],
+        }]);
+
+        let schema = build_schema(Arc::new(graph));
+        let result = execute(&schema, r#"{ symbol(name: "caller", exact: true) { name code } }"#).await;
+
+        eprintln!("GraphQL result: {}", result);
+
+        // Sliced code should contain "..." and line numbers
+        assert!(result.contains("callee()"), "should contain the call to callee");
+        assert!(result.contains("..."), "should have ... for skipped sections");
+        assert!(result.contains("fn caller()"), "should have the signature");
+    }
 }

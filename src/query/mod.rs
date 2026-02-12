@@ -13,6 +13,7 @@
 
 pub mod context;
 pub mod search;
+pub mod slice;
 pub mod types;
 
 // Re-export the main API

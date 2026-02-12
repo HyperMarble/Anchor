@@ -579,6 +579,7 @@ impl CodeGraph {
             line_start: node.line_start,
             line_end: node.line_end,
             code: node.code_snippet.clone(),
+            call_lines: node.call_lines.clone(),
             calls,
             called_by,
             imports,
@@ -626,7 +627,7 @@ impl CodeGraph {
             }
         }
 
-        // Phase 2: Resolve cross-references (calls)
+        // Phase 2: Resolve cross-references (calls) and collect call lines
         for extraction in &extractions {
             for call in &extraction.calls {
                 // Find the caller node
@@ -636,12 +637,29 @@ impl CodeGraph {
                 if let Some(&caller_idx) = self.qualified_index.get(&caller_key) {
                     if let Some(callee_indexes) = callee_nodes {
                         // Connect to the first matching callee
-                        // (in v0, we take the first match — later versions can be smarter)
                         if let Some(&callee_idx) = callee_indexes.first() {
                             self.add_edge(caller_idx, callee_idx, EdgeKind::Calls);
+
+                            // Record all lines of the call expression (for graph slicing)
+                            // Full range so multi-line calls aren't clipped
+                            if let Some(node) = self.graph.node_weight_mut(caller_idx) {
+                                for line in call.line..=call.line_end {
+                                    if !node.call_lines.contains(&line) {
+                                        node.call_lines.push(line);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+            }
+        }
+
+        // Sort call_lines for consistent slicing
+        for idx in self.graph.node_indices() {
+            if let Some(node) = self.graph.node_weight_mut(idx) {
+                node.call_lines.sort();
+                node.call_lines.dedup();
             }
         }
 
@@ -797,6 +815,8 @@ pub struct SearchResult {
     pub line_end: usize,
     /// The actual source code.
     pub code: String,
+    /// Lines containing calls to dependencies (for graph slicing).
+    pub call_lines: Vec<usize>,
     /// What this symbol calls.
     pub calls: Vec<SymbolRef>,
     /// What calls this symbol.
@@ -987,6 +1007,7 @@ mod tests {
                 caller: "multiply".to_string(),
                 callee: "add".to_string(),
                 line: 6,
+                line_end: 6,
             }],
         }];
 
@@ -1002,6 +1023,9 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].calls.len(), 1);
         assert_eq!(results[0].calls[0].name, "add");
+
+        // Check that call_lines are populated on the caller
+        assert_eq!(results[0].call_lines, vec![6], "call_lines should contain line 6 where multiply calls add");
     }
 
     // ─── Removal Tests ──────────────────────────────────────────

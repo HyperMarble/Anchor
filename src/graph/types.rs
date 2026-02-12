@@ -123,6 +123,10 @@ pub struct NodeData {
     pub line_end: usize,
     /// The actual source code snippet.
     pub code_snippet: String,
+    /// Lines within this symbol that contain calls to other symbols (1-indexed, absolute).
+    /// Used for graph slicing: show only lines where dependencies are used.
+    #[serde(default)]
+    pub call_lines: Vec<usize>,
     /// Soft-delete flag. Removed nodes are skipped in queries
     /// and cleaned up during compaction.
     #[serde(default)]
@@ -142,6 +146,7 @@ impl NodeData {
             line_start: 0,
             line_end: 0,
             code_snippet: String::new(),
+            call_lines: Vec::new(),
             removed: false,
         }
     }
@@ -161,6 +166,7 @@ impl NodeData {
             line_start,
             line_end,
             code_snippet,
+            call_lines: Vec::new(),
             removed: false,
         }
     }
@@ -215,8 +221,10 @@ pub struct ExtractedCall {
     pub callee: String,
     /// The name of the function making the call.
     pub caller: String,
-    /// Line number of the call.
+    /// Start line of the call expression (1-indexed).
     pub line: usize,
+    /// End line of the call expression (1-indexed). For single-line calls, same as `line`.
+    pub line_end: usize,
 }
 
 /// All extracted information from a single source file.

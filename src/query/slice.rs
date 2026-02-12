@@ -1,0 +1,160 @@
+//! Graph-aware code slicing.
+//!
+//! Given a symbol's full code and its call lines from the graph,
+//! returns only the lines that matter: signature, dependency calls,
+//! returns, and closing brace.
+//!
+//! This is NOT academic program slicing. It's graph-informed filtering:
+//! "show only the lines where this symbol interacts with its dependencies."
+
+/// Slice a symbol's code to show only graph-relevant lines.
+///
+/// Keeps:
+/// - First line (function signature)
+/// - Last line (closing brace)
+/// - Lines containing calls to graph dependencies (call_lines)
+/// - 1 line of context above each call line (for if/assignment)
+/// - Return statements
+///
+/// `call_lines` are absolute line numbers (1-indexed).
+/// `line_start` is the symbol's starting line in the file (1-indexed).
+pub fn slice_code(code: &str, call_lines: &[usize], line_start: usize) -> String {
+    let lines: Vec<&str> = code.lines().collect();
+
+    if lines.len() <= 10 || call_lines.is_empty() {
+        // Short code or no calls — return full code, no slicing needed
+        return code.to_string();
+    }
+
+    let mut keep: Vec<bool> = vec![false; lines.len()];
+
+    // Always keep first line (signature) and last line (closing brace)
+    keep[0] = true;
+    if lines.len() > 1 {
+        keep[lines.len() - 1] = true;
+    }
+
+    // Keep lines with calls + 1 line of context above
+    for &abs_line in call_lines {
+        // Convert absolute line number to relative index within this symbol
+        if abs_line >= line_start {
+            let rel = abs_line - line_start;
+            if rel < lines.len() {
+                keep[rel] = true;
+                // 1 line above for context (if/let/assignment)
+                if rel > 0 {
+                    keep[rel - 1] = true;
+                }
+                // 1 line below for context (closing brace of if, error handling)
+                if rel + 1 < lines.len() {
+                    keep[rel + 1] = true;
+                }
+            }
+        }
+    }
+
+    // Also keep return statements
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("return ") || trimmed.starts_with("return;")
+            || trimmed.starts_with("Ok(") || trimmed.starts_with("Err(")
+            || trimmed.starts_with("raise ") || trimmed.starts_with("throw ")
+        {
+            keep[i] = true;
+        }
+    }
+
+    // Build output with line numbers, collapsing skipped sections
+    let mut result = String::new();
+    let mut in_gap = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        if keep[i] {
+            if in_gap {
+                result.push_str("    ...\n");
+                in_gap = false;
+            }
+            let abs_line_num = line_start + i;
+            result.push_str(&format!("{:>4}: {}\n", abs_line_num, line));
+        } else {
+            in_gap = true;
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slice_short_code() {
+        let code = "fn main() {\n    println!(\"hello\");\n}";
+        let result = slice_code(code, &[2], 1);
+        // Short code (3 lines) — returns full, no slicing
+        assert_eq!(result, code.to_string());
+    }
+
+    #[test]
+    fn test_slice_long_function() {
+        let code = r#"pub fn login(user: &str, pw: &str) -> bool {
+    let logger = setup_logger();
+    logger.info("attempt");
+    logger.debug("checking");
+    logger.trace("details");
+    logger.trace("more");
+    logger.trace("stuff");
+    logger.trace("padding");
+    logger.trace("noise");
+    logger.trace("filler");
+    let valid = validate(user);
+    if !valid {
+        return false;
+    }
+    let ok = check_password(pw);
+    println!("done");
+    println!("more noise");
+    println!("padding");
+    valid && ok
+}"#;
+        // call_lines: validate at line 11, check_password at line 15 (absolute)
+        let result = slice_code(code, &[11, 15], 1);
+
+        // Should contain signature, validate call, check_password call, return
+        assert!(result.contains("pub fn login"));
+        assert!(result.contains("validate(user)"));
+        assert!(result.contains("check_password(pw)"));
+        assert!(result.contains("..."));
+        // Should NOT contain all the logger noise
+        assert!(!result.contains("logger.trace(\"stuff\")"));
+    }
+
+    #[test]
+    fn test_slice_no_calls() {
+        let code = "fn simple() {\n    let x = 1;\n    let y = 2;\n    x + y\n}";
+        let result = slice_code(code, &[], 1);
+        // No calls — return full code
+        assert_eq!(result, code.to_string());
+    }
+
+    #[test]
+    fn test_slice_preserves_returns() {
+        let code = r#"fn process(input: &str) -> Result<String> {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let d = 4;
+    let e = 5;
+    let f = 6;
+    let g = 7;
+    let h = 8;
+    let i = 9;
+    let result = transform(input);
+    Ok(result)
+}"#;
+        let result = slice_code(code, &[11], 1);
+        assert!(result.contains("transform(input)"));
+        assert!(result.contains("Ok(result)"));
+    }
+}
