@@ -107,10 +107,13 @@ impl CodeGraph {
                 )
             };
 
-            // If the original node was removed, mark it
-            if node.removed {
-                if let Some(n) = graph.inner_graph_mut().node_weight_mut(idx) {
+            // Restore metadata that add_symbol/add_file doesn't set
+            if let Some(n) = graph.inner_graph_mut().node_weight_mut(idx) {
+                if node.removed {
                     n.removed = true;
+                }
+                if !node.call_lines.is_empty() {
+                    n.call_lines = node.call_lines;
                 }
             }
 

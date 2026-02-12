@@ -81,7 +81,7 @@ fn execute_operation(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>)
         PlanOperation::Search { query, pattern, limit } => {
             print!("search {} ... ", query);
             if let Some(g) = graph {
-                let _ = cli_read::search(g, query, pattern.as_deref(), limit.unwrap_or(20));
+                let _ = cli_read::search(g, &[query.clone()], pattern.as_deref(), limit.unwrap_or(20));
             }
             Ok(())
         }
@@ -95,7 +95,7 @@ fn execute_operation(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>)
         PlanOperation::Context { query, limit } => {
             print!("context {} ... ", query);
             if let Some(g) = graph {
-                let _ = cli_read::context(g, query, limit.unwrap_or(5));
+                let _ = cli_read::context(g, &[query.clone()], limit.unwrap_or(5));
             }
             Ok(())
         }
@@ -279,7 +279,7 @@ fn execute_operation_via_daemon(root: &Path, op: &PlanOperation, graph: Option<&
     match op {
         PlanOperation::Search { query, pattern, limit } => {
             if let Some(g) = graph {
-                let _ = cli_read::search(g, query, pattern.as_deref(), limit.unwrap_or(20));
+                let _ = cli_read::search(g, &[query.clone()], pattern.as_deref(), limit.unwrap_or(20));
             }
             return Ok(Response::Ok { data: serde_json::json!({"op": "search"}) });
         }
@@ -291,7 +291,7 @@ fn execute_operation_via_daemon(root: &Path, op: &PlanOperation, graph: Option<&
         }
         PlanOperation::Context { query, limit } => {
             if let Some(g) = graph {
-                let _ = cli_read::context(g, query, limit.unwrap_or(5));
+                let _ = cli_read::context(g, &[query.clone()], limit.unwrap_or(5));
             }
             return Ok(Response::Ok { data: serde_json::json!({"op": "context"}) });
         }

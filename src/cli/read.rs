@@ -10,72 +10,67 @@ use std::sync::Arc;
 use crate::graph::CodeGraph;
 use crate::graphql::{build_schema, execute};
 
-/// Search for symbols by name or pattern.
+/// Search for symbols by name or pattern (supports multiple queries).
 ///
-/// Wraps GraphQL `symbol` query with optional regex pattern.
-pub fn search(graph: &CodeGraph, query: &str, pattern: Option<&str>, limit: usize) -> Result<()> {
+/// Wraps GraphQL `search` query with optional regex pattern.
+pub fn search(graph: &CodeGraph, queries: &[String], pattern: Option<&str>, limit: usize) -> Result<()> {
     let schema = build_schema(Arc::new(graph.clone()));
+    let rt = tokio::runtime::Runtime::new()?;
 
-    // Build GraphQL query based on whether pattern is provided
-    let gql_query = if let Some(pat) = pattern {
-        // Use regex search
-        format!(
-            r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line code }} }}"#,
-            escape_graphql(pat),
-            limit
-        )
-    } else {
-        // Use symbol query with prefix matching
-        format!(
-            r#"{{ symbol(name: "{}") {{ name kind file line }} }}"#,
-            escape_graphql(query)
-        )
-    };
+    for (i, query) in queries.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
 
-    // Execute GraphQL query
-    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, &gql_query));
+        // Build GraphQL query - always use regex search for flexibility
+        let gql_query = if let Some(pat) = pattern {
+            format!(
+                r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line code }} }}"#,
+                escape_graphql(pat),
+                limit
+            )
+        } else {
+            // Auto-convert query to regex: "send request" → ".*send.*request.*"
+            let words: Vec<&str> = query.split_whitespace().collect();
+            let regex_pat = if words.len() > 1 {
+                format!(".*{}.*", words.join(".*")).to_lowercase()
+            } else {
+                format!(".*{}.*", query).to_lowercase()
+            };
+            format!(
+                r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line code }} }}"#,
+                escape_graphql(&regex_pat),
+                limit
+            )
+        };
 
-    // Parse and format output
-    let json: serde_json::Value = serde_json::from_str(&result)?;
+        let result = rt.block_on(execute(&schema, &gql_query));
+        let json: serde_json::Value = serde_json::from_str(&result)?;
 
-    if let Some(errors) = json.get("errors") {
-        if let Some(arr) = errors.as_array() {
-            if !arr.is_empty() {
-                if let Some(msg) = arr[0].get("message") {
-                    println!("Error: {}", msg.as_str().unwrap_or("unknown"));
-                    return Ok(());
+        if let Some(errors) = json.get("errors") {
+            if let Some(arr) = errors.as_array() {
+                if !arr.is_empty() {
+                    if let Some(msg) = arr[0].get("message") {
+                        println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                        continue;
+                    }
                 }
+            }
+        }
+
+        let data = json.get("data");
+
+        if let Some(symbols) = data.and_then(|d| d.get("search")).and_then(|s| s.as_array()) {
+            if symbols.is_empty() {
+                println!("No symbols match '{}'", query);
+                continue;
+            }
+            for sym in symbols.iter().take(limit) {
+                print_symbol_compact(sym);
             }
         }
     }
 
-    let data = json.get("data");
-
-    // Handle search results (from regex search)
-    if let Some(symbols) = data.and_then(|d| d.get("search")).and_then(|s| s.as_array()) {
-        if symbols.is_empty() {
-            println!("No symbols match pattern '{}'", pattern.unwrap_or(query));
-            return Ok(());
-        }
-        for sym in symbols.iter().take(limit) {
-            print_symbol_compact(sym);
-        }
-        return Ok(());
-    }
-
-    // Handle symbol results (from name search)
-    if let Some(symbols) = data.and_then(|d| d.get("symbol")).and_then(|s| s.as_array()) {
-        if symbols.is_empty() {
-            println!("No results for '{}'", query);
-            return Ok(());
-        }
-        for sym in symbols.iter().take(limit) {
-            print_symbol_compact(sym);
-        }
-        return Ok(());
-    }
-
-    println!("No results for '{}'", query);
     Ok(())
 }
 
@@ -170,95 +165,95 @@ pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
     Ok(())
 }
 
-/// Context: Search + Read combined.
+/// Context: Search + Read combined (supports multiple queries).
 ///
 /// Wraps GraphQL `symbol` query with code and relationships.
-pub fn context(graph: &CodeGraph, query: &str, limit: usize) -> Result<()> {
+pub fn context(graph: &CodeGraph, queries: &[String], limit: usize) -> Result<()> {
     let schema = build_schema(Arc::new(graph.clone()));
+    let rt = tokio::runtime::Runtime::new()?;
+    let mut first = true;
 
-    // GraphQL query: symbol search with code, callers, callees
-    let gql_query = format!(
-        r#"{{ symbol(name: "{}") {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
-        escape_graphql(query)
-    );
+    for query in queries {
+        let gql_query = format!(
+            r#"{{ symbol(name: "{}") {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
+            escape_graphql(query)
+        );
 
-    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, &gql_query));
-    let json: serde_json::Value = serde_json::from_str(&result)?;
+        let result = rt.block_on(execute(&schema, &gql_query));
+        let json: serde_json::Value = serde_json::from_str(&result)?;
 
-    if let Some(errors) = json.get("errors") {
-        if let Some(arr) = errors.as_array() {
-            if !arr.is_empty() {
-                if let Some(msg) = arr[0].get("message") {
-                    println!("Error: {}", msg.as_str().unwrap_or("unknown"));
-                    return Ok(());
+        if let Some(errors) = json.get("errors") {
+            if let Some(arr) = errors.as_array() {
+                if !arr.is_empty() {
+                    if let Some(msg) = arr[0].get("message") {
+                        println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                        continue;
+                    }
                 }
             }
         }
-    }
 
-    let symbols = json
-        .get("data")
-        .and_then(|d| d.get("symbol"))
-        .and_then(|s| s.as_array());
+        let symbols = json
+            .get("data")
+            .and_then(|d| d.get("symbol"))
+            .and_then(|s| s.as_array());
 
-    let symbols = match symbols {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            println!("No results for '{}'", query);
-            return Ok(());
-        }
-    };
-
-    for (i, sym) in symbols.iter().take(limit).enumerate() {
-        if i > 0 {
-            println!("\n===");
-        }
-
-        // Header: symbol Kind file:line
-        let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
-        let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
-        let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
-
-        let file_name = Path::new(file)
-            .file_name()
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| file.to_string());
-
-        println!("{} {} {}:{}", name, kind, file_name, line);
-
-        // Callers - unique names only
-        if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
-            let mut caller_names: Vec<&str> = callers
-                .iter()
-                .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
-                .filter(|n| !is_file_name(n))
-                .collect();
-            caller_names.sort();
-            caller_names.dedup();
-            if !caller_names.is_empty() {
-                println!("> {}", caller_names.join(" "));
+        let symbols = match symbols {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                println!("No results for '{}'", query);
+                continue;
             }
-        }
+        };
 
-        // Callees - unique names only
-        if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
-            let mut callee_names: Vec<&str> = callees
-                .iter()
-                .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
-                .filter(|n| !is_file_name(n))
-                .collect();
-            callee_names.sort();
-            callee_names.dedup();
-            if !callee_names.is_empty() {
-                println!("< {}", callee_names.join(" "));
+        for sym in symbols.iter().take(limit) {
+            if !first {
+                println!("\n===");
             }
-        }
+            first = false;
 
-        // Code
-        if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
-            println!("---");
-            println!("{}", code);
+            let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+            let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
+            let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+
+            let file_name = Path::new(file)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| file.to_string());
+
+            println!("{} {} {}:{}", name, kind, file_name, line);
+
+            if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
+                let mut caller_names: Vec<&str> = callers
+                    .iter()
+                    .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+                    .filter(|n| !is_file_name(n))
+                    .collect();
+                caller_names.sort();
+                caller_names.dedup();
+                if !caller_names.is_empty() {
+                    println!("> {}", caller_names.join(" "));
+                }
+            }
+
+            if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
+                let mut callee_names: Vec<&str> = callees
+                    .iter()
+                    .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
+                    .filter(|n| !is_file_name(n))
+                    .collect();
+                callee_names.sort();
+                callee_names.dedup();
+                if !callee_names.is_empty() {
+                    println!("< {}", callee_names.join(" "));
+                }
+            }
+
+            if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
+                println!("---");
+                println!("{}", code);
+            }
         }
     }
 

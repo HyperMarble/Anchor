@@ -341,6 +341,7 @@ fn extract_rust_node(
                         callee: callee_name,
                         caller: caller.to_string(),
                         line: node.start_position().row + 1,
+                        line_end: node.end_position().row + 1,
                     });
                 }
             }
@@ -433,6 +434,7 @@ fn extract_python_node(
                         callee: callee_name,
                         caller: caller.to_string(),
                         line: node.start_position().row + 1,
+                        line_end: node.end_position().row + 1,
                     });
                 }
             }
@@ -506,6 +508,7 @@ fn extract_js_node(
                         callee: callee_name,
                         caller: caller.to_string(),
                         line: node.start_position().row + 1,
+                        line_end: node.end_position().row + 1,
                     });
                 }
             }
@@ -623,6 +626,7 @@ fn extract_generic_node(
                     callee: callee_name,
                     caller: caller.to_string(),
                     line: node.start_position().row + 1,
+                    line_end: node.end_position().row + 1,
                 });
             }
         }
@@ -643,38 +647,10 @@ fn node_text(node: &Node, source: &[u8]) -> String {
     node.utf8_text(source).unwrap_or("").to_string()
 }
 
-/// Maximum lines kept in a code snippet.
-const MAX_SNIPPET_LINES: usize = 50;
-/// Maximum bytes kept in a code snippet.
-const MAX_SNIPPET_BYTES: usize = 8192;
-
-/// Truncate a code snippet to bounded size (lines and bytes).
+/// Extract full code snippet from a node (no truncation).
+/// Slicing happens at display time using graph knowledge.
 fn bounded_snippet(node: &Node, source: &[u8]) -> String {
-    let raw = node.utf8_text(source).unwrap_or("").to_string();
-
-    // Apply byte limit first
-    let byte_bounded = if raw.len() > MAX_SNIPPET_BYTES {
-        // Find a clean UTF-8 boundary
-        let mut end = MAX_SNIPPET_BYTES;
-        while end > 0 && !raw.is_char_boundary(end) {
-            end -= 1;
-        }
-        let mut s = raw[..end].to_string();
-        s.push_str("\n    // ... (truncated)");
-        s
-    } else {
-        raw
-    };
-
-    // Apply line limit
-    let lines: Vec<&str> = byte_bounded.lines().collect();
-    if lines.len() <= MAX_SNIPPET_LINES {
-        byte_bounded
-    } else {
-        let mut truncated: String = lines[..MAX_SNIPPET_LINES].join("\n");
-        truncated.push_str("\n    // ...");
-        truncated
-    }
+    node.utf8_text(source).unwrap_or("").to_string()
 }
 
 /// Get the type name from a Rust impl block.

@@ -36,12 +36,12 @@ impl Query {
         let results = graph.search(&name, 50); // Get more for pattern filtering
 
         let filtered: Vec<_> = if let Some(ref pat) = pattern {
-            // Use Brzozowski derivatives regex - ReDoS-safe
-            let regex = parse(pat).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+            // Use Brzozowski derivatives regex - ReDoS-safe, case-insensitive
+            let regex = parse(&pat.to_lowercase()).map_err(|e| async_graphql::Error::new(e.to_string()))?;
             let mut matcher = Matcher::new(regex);
             results
                 .into_iter()
-                .filter(|r| matcher.is_match(&r.symbol))
+                .filter(|r| matcher.is_match(&r.symbol.to_lowercase()))
                 .collect()
         } else if exact {
             results
@@ -64,6 +64,7 @@ impl Query {
                 file: r.file.to_string_lossy().to_string(),
                 line: r.line_start as i32,
                 code_internal: Some(r.code),
+                call_lines: r.call_lines,
             })
             .collect())
     }
@@ -91,6 +92,7 @@ impl Query {
                 file: d.file.to_string_lossy().to_string(),
                 line: d.line as i32,
                 code_internal: None,
+                call_lines: vec![],
             })
             .collect())
     }
@@ -108,6 +110,7 @@ impl Query {
                 file: d.file.to_string_lossy().to_string(),
                 line: d.line as i32,
                 code_internal: None,
+                call_lines: vec![],
             })
             .collect())
     }
@@ -143,14 +146,14 @@ impl Query {
         #[graphql(default = 20)] limit: i32,
     ) -> Result<Vec<Symbol>> {
         let graph = ctx.data::<Arc<CodeGraph>>()?;
-        let regex = parse(&pattern).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+        let regex = parse(&pattern.to_lowercase()).map_err(|e| async_graphql::Error::new(e.to_string()))?;
         let mut matcher = Matcher::new(regex);
 
-        // Get all symbols from the graph and filter with regex
+        // Get all symbols from the graph and filter with regex (case-insensitive)
         let all_symbols = graph.all_symbols();
         let matched: Vec<_> = all_symbols
             .into_iter()
-            .filter(|r| matcher.is_match(&r.symbol))
+            .filter(|r| matcher.is_match(&r.symbol.to_lowercase()))
             .take(limit as usize)
             .map(|r| Symbol {
                 name: r.symbol,
@@ -158,6 +161,7 @@ impl Query {
                 file: r.file.to_string_lossy().to_string(),
                 line: r.line_start as i32,
                 code_internal: Some(r.code),
+                call_lines: r.call_lines,
             })
             .collect();
 

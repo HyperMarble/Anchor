@@ -6,6 +6,7 @@ use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 use std::sync::Arc;
 
 use crate::graph::CodeGraph;
+use crate::query::slice::slice_code;
 
 /// A code symbol (function, class, struct, etc.)
 #[derive(SimpleObject)]
@@ -22,13 +23,22 @@ pub struct Symbol {
     /// Source code (only if requested)
     #[graphql(skip)]
     pub code_internal: Option<String>,
+    /// Call lines for graph slicing
+    #[graphql(skip)]
+    pub call_lines: Vec<usize>,
 }
 
 #[ComplexObject]
 impl Symbol {
-    /// Source code of the symbol
-    async fn code(&self) -> Option<&str> {
-        self.code_internal.as_deref()
+    /// Source code of the symbol — graph-sliced to show only dependency-relevant lines
+    async fn code(&self) -> Option<String> {
+        self.code_internal.as_ref().map(|code| {
+            if self.call_lines.is_empty() {
+                code.clone()
+            } else {
+                slice_code(code, &self.call_lines, self.line as usize)
+            }
+        })
     }
 
     /// Symbols that call/use this symbol
@@ -43,7 +53,8 @@ impl Symbol {
                 kind: d.kind.to_string(),
                 file: d.file.to_string_lossy().to_string(),
                 line: d.line as i32,
-                code_internal: None, // Don't include code for nested
+                code_internal: None,
+                call_lines: vec![],
             })
             .collect())
     }
@@ -61,6 +72,7 @@ impl Symbol {
                 file: d.file.to_string_lossy().to_string(),
                 line: d.line as i32,
                 code_internal: None,
+                call_lines: vec![],
             })
             .collect())
     }
@@ -90,6 +102,7 @@ impl File {
                 file: s.file_path.to_string_lossy().to_string(),
                 line: s.line_start as i32,
                 code_internal: Some(s.code_snippet.clone()),
+                call_lines: s.call_lines.clone(),
             })
             .collect())
     }
