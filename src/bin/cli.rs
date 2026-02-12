@@ -45,14 +45,14 @@ fn run(cli: Cli) -> Result<()> {
 
     match cli.command.unwrap() {
         // ─── Query Commands ───────────────────────────────────────
-        Commands::Context { query, limit } => {
+        Commands::Context { queries, limit } => {
             let graph = load_or_build_graph(&root, &cache_path)?;
-            cli_read::context(&graph, &query, limit)
+            cli_read::context(&graph, &queries, limit)
         }
 
-        Commands::Search { query, pattern, limit } => {
+        Commands::Search { queries, pattern, limit } => {
             let graph = load_or_build_graph(&root, &cache_path)?;
-            cli_read::search(&graph, &query, pattern.as_deref(), limit)
+            cli_read::search(&graph, &queries, pattern.as_deref(), limit)
         }
 
         // ─── Write Commands (TODO: ACI-based) ─────────────────────
@@ -66,9 +66,25 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
 
-        Commands::Edit { path, action, pattern: _, content: _ } => {
-            // TODO: Write operations not finalized yet
-            println!(r#"{{"status": "error", "message": "Write operations not yet finalized", "path": "{}", "action": "{}"}}"#, path, action);
+        Commands::Edit { path, action, pattern, content } => {
+            let full_path = root.join(&path);
+            match action.as_str() {
+                "insert" => {
+                    let c = content.ok_or_else(|| anyhow::anyhow!("Content required for insert"))?;
+                    anchor::insert_after(&full_path, &pattern, &c)?;
+                    println!(r#"{{"status": "inserted", "path": "{}"}}"#, path);
+                }
+                "replace" => {
+                    let c = content.ok_or_else(|| anyhow::anyhow!("Content required for replace"))?;
+                    anchor::replace_all(&full_path, &pattern, &c)?;
+                    println!(r#"{{"status": "replaced", "path": "{}"}}"#, path);
+                }
+                "delete" => {
+                    anchor::replace_all(&full_path, &pattern, "")?;
+                    println!(r#"{{"status": "deleted", "path": "{}"}}"#, path);
+                }
+                _ => return Err(anyhow::anyhow!("Unknown action: {}", action)),
+            }
             Ok(())
         }
 
@@ -79,7 +95,13 @@ fn run(cli: Cli) -> Result<()> {
 
         // ─── System Commands ──────────────────────────────────────
         Commands::Build => {
-            cli_read::build(&root, &cache_path)
+            cli_read::build(&root, &cache_path)?;
+            // Auto-start daemon for file watching
+            if !anchor::daemon::is_daemon_running(&root) {
+                cli::daemon::start_background(&root)?;
+                println!("daemon: watching for changes");
+            }
+            Ok(())
         }
 
         Commands::Map { scope } => {
@@ -100,6 +122,12 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Stats => {
             let graph = load_or_build_graph(&root, &cache_path)?;
             cli_read::stats(&graph)
+        }
+
+        Commands::Mcp => {
+            tokio::runtime::Runtime::new()
+                .expect("Failed to create tokio runtime")
+                .block_on(anchor::mcp::run(root))
         }
 
         Commands::Daemon { action } => {

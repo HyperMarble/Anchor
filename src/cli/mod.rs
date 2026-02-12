@@ -9,7 +9,7 @@
 pub mod daemon;
 pub mod plan;
 pub mod read;
-// pub mod write;  // TODO: Write operations not finalized yet
+pub mod write;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -42,9 +42,13 @@ Start here:
   map <scope>           Zoom into module
 
 Query:
-  context <symbol>      Code + callers + callees
-  search <query>        Find symbols
-  plan <file.json>      Batch read operations
+  context <sym> [sym2…]  Code + callers + callees
+  search <q> [q2…]      Find symbols
+  plan <file.json>      Batch operations (parallel)
+
+Write:
+  write <path> <content>      Create/overwrite file
+  edit <path> -a <action> -p <pattern> [-c <content>]
 
 Other:
   overview              Files + symbol counts
@@ -59,18 +63,18 @@ pub enum Commands {
     // ─── Query Commands ─────────────────────────────────────────────
     /// Get symbol context (code + callers + callees)
     Context {
-        /// Symbol name to query
-        query: String,
+        /// Symbol names to query (supports multiple)
+        queries: Vec<String>,
 
-        /// Max results
+        /// Max results per symbol
         #[arg(short, long, default_value = "5")]
         limit: usize,
     },
 
     /// Search for symbols (lightweight: names, files, lines)
     Search {
-        /// Symbol name to search for
-        query: String,
+        /// Symbol names to search for (supports multiple)
+        queries: Vec<String>,
 
         /// Regex pattern (Brzozowski derivatives - ReDoS safe)
         #[arg(short, long)]
@@ -88,14 +92,14 @@ pub enum Commands {
         file: String,
     },
 
-    // ─── Write (hidden - not finalized) ──────────────────────────
-    #[command(hide = true)]
+    // ─── Write Commands ──────────────────────────────────────────
+    /// Create or overwrite a file
     Write {
         path: String,
         content: String,
     },
 
-    #[command(hide = true)]
+    /// Edit a file (insert, replace, delete)
     Edit {
         path: String,
         #[arg(short, long)]
@@ -127,6 +131,9 @@ pub enum Commands {
     /// List all indexed files
     #[command(hide = true)]
     Files,
+
+    /// Start MCP server (Model Context Protocol) on stdio
+    Mcp,
 
     /// Manage the anchor daemon
     #[command(hide = true)]

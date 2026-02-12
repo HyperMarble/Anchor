@@ -86,5 +86,9 @@ reqwest = { version = "0.11", features = ["blocking", "json"] }
 flate2 = "1.0"
 tar = "0.4"
 
+# MCP server (Model Context Protocol)
+rmcp = { version = "0.15", features = ["server", "transport-io"] }
+schemars = "1.0"
+
 [dev-dependencies]
 tempfile = "3.0"

@@ -8,9 +8,9 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// use crate::daemon::{send_request, Request, Response};  // TODO: Write operations not finalized
+use crate::daemon::{send_request, Request, Response};
 use crate::graph::CodeGraph;
-// use crate::write::{create_file, insert_after, replace_all, WriteError};  // TODO: Write operations not finalized
+use crate::write::{create_file, insert_after, replace_all, WriteError};
 use super::read as cli_read;
 
 /// Execute a plan file sequentially (fallback when no daemon)
@@ -75,7 +75,7 @@ pub fn execute(root: &Path, file: &str) -> Result<()> {
     Ok(())
 }
 
-fn execute_operation(_root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>) -> Result<(), String> {
+fn execute_operation(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>) -> Result<(), WriteError> {
     match op {
         // ─── Read Operations ───────────────────────────────────────
         PlanOperation::Search { query, pattern, limit } => {
@@ -99,33 +99,32 @@ fn execute_operation(_root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>
             }
             Ok(())
         }
-        // ─── Write Operations (not finalized) ──────────────────────
-        PlanOperation::Create { path, .. } => {
+        // ─── Write Operations ──────────────────────────────────────
+        PlanOperation::Create { path, content } => {
             print!("create {} ... ", path);
-            Err("Write operations not yet finalized".to_string())
+            let p = root.join(path);
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            create_file(&p, content).map(|_| ())
         }
-        PlanOperation::Insert { path, .. } => {
+        PlanOperation::Insert {
+            path,
+            pattern,
+            content,
+        } => {
             print!("insert into {} ... ", path);
-            Err("Write operations not yet finalized".to_string())
+            insert_after(&root.join(path), pattern, content).map(|_| ())
         }
-        PlanOperation::Replace { path, .. } => {
+        PlanOperation::Replace { path, old, new } => {
             print!("replace in {} ... ", path);
-            Err("Write operations not yet finalized".to_string())
+            replace_all(&root.join(path), old, new).map(|_| ())
         }
         PlanOperation::Delete { path } => {
             print!("delete {} ... ", path);
-            Err("Write operations not yet finalized".to_string())
+            std::fs::remove_file(root.join(path)).map_err(WriteError::IoError)
         }
     }
-}
-
-// ─── Response Type (local, since daemon is disabled) ────────────
-
-#[derive(Debug)]
-#[allow(dead_code)]
-enum PlanResponse {
-    Ok { data: serde_json::Value },
-    Error { message: String },
 }
 
 // ─── Plan File Types ───────────────────────────────────────────
@@ -205,8 +204,8 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
     let success_count = AtomicUsize::new(0);
     let fail_count = AtomicUsize::new(0);
 
-    // Execute operations in parallel
-    let results: Vec<(usize, &PlanOperation, Result<PlanResponse, String>)> = plan
+    // Execute operations in parallel - locking handles coordination
+    let results: Vec<(usize, &PlanOperation, Result<Response, String>)> = plan
         .operations
         .par_iter()
         .enumerate()
@@ -229,11 +228,11 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
         };
 
         match result {
-            Ok(PlanResponse::Ok { .. }) => {
+            Ok(Response::Ok { .. }) => {
                 println!("[{}/{}] {} ... ok", i + 1, plan.operations.len(), op_desc);
                 success_count.fetch_add(1, Ordering::Relaxed);
             }
-            Ok(PlanResponse::Error { message }) => {
+            Ok(Response::Error { message }) => {
                 println!(
                     "[{}/{}] {} ... FAILED: {}",
                     i + 1,
@@ -253,6 +252,15 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
                 );
                 fail_count.fetch_add(1, Ordering::Relaxed);
             }
+            _ => {
+                println!(
+                    "[{}/{}] {} ... unexpected response",
+                    i + 1,
+                    plan.operations.len(),
+                    op_desc
+                );
+                fail_count.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -266,30 +274,62 @@ pub fn execute_parallel(root: &Path, file: &str) -> Result<()> {
     Ok(())
 }
 
-fn execute_operation_via_daemon(_root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>) -> Result<PlanResponse, String> {
-    // Read operations - execute directly
+fn execute_operation_via_daemon(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>) -> Result<Response, String> {
+    // Read operations don't need daemon - execute directly
     match op {
         PlanOperation::Search { query, pattern, limit } => {
             if let Some(g) = graph {
                 let _ = cli_read::search(g, query, pattern.as_deref(), limit.unwrap_or(20));
             }
-            return Ok(PlanResponse::Ok { data: serde_json::json!({"op": "search"}) });
+            return Ok(Response::Ok { data: serde_json::json!({"op": "search"}) });
         }
         PlanOperation::Read { symbol } => {
             if let Some(g) = graph {
                 let _ = cli_read::read(g, symbol);
             }
-            return Ok(PlanResponse::Ok { data: serde_json::json!({"op": "read"}) });
+            return Ok(Response::Ok { data: serde_json::json!({"op": "read"}) });
         }
         PlanOperation::Context { query, limit } => {
             if let Some(g) = graph {
                 let _ = cli_read::context(g, query, limit.unwrap_or(5));
             }
-            return Ok(PlanResponse::Ok { data: serde_json::json!({"op": "context"}) });
+            return Ok(Response::Ok { data: serde_json::json!({"op": "context"}) });
         }
-        // Write operations not finalized
-        _ => {
-            return Ok(PlanResponse::Error { message: "Write operations not yet finalized".to_string() });
-        }
+        _ => {}
     }
+
+    // Write operations go through daemon
+    let request = match op {
+        PlanOperation::Create { path, content } => Request::Create {
+            path: path.clone(),
+            content: content.clone(),
+        },
+        PlanOperation::Insert {
+            path,
+            pattern,
+            content,
+        } => Request::Insert {
+            path: path.clone(),
+            pattern: pattern.clone(),
+            content: content.clone(),
+        },
+        PlanOperation::Replace { path, old, new } => Request::Replace {
+            path: path.clone(),
+            old: old.clone(),
+            new: new.clone(),
+        },
+        PlanOperation::Delete { path } => {
+            return match std::fs::remove_file(root.join(path)) {
+                Ok(_) => Ok(Response::Ok {
+                    data: serde_json::json!({"deleted": path}),
+                }),
+                Err(e) => Ok(Response::Error {
+                    message: e.to_string(),
+                }),
+            };
+        }
+        _ => return Ok(Response::Ok { data: serde_json::json!({}) }),
+    };
+
+    send_request(root, request).map_err(|e| e.to_string())
 }
