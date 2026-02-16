@@ -30,13 +30,23 @@ pub struct Symbol {
 
 #[ComplexObject]
 impl Symbol {
-    /// Source code of the symbol — graph-sliced to show only dependency-relevant lines
-    async fn code(&self) -> Option<String> {
+    /// Source code of the symbol — graph-sliced to show only dependency-relevant lines.
+    /// When sliced, prepends a coverage indicator: [25/88 lines, 3 calls].
+    /// Set full=true to disable slicing and get complete code with line numbers.
+    async fn code(&self, #[graphql(default = false)] full: bool) -> Option<String> {
         self.code_internal.as_ref().map(|code| {
-            if self.call_lines.is_empty() {
-                code.clone()
+            if full || self.call_lines.is_empty() {
+                add_line_numbers(code, self.line as usize)
             } else {
-                slice_code(code, &self.call_lines, self.line as usize)
+                let result = slice_code(code, &self.call_lines, self.line as usize);
+                if result.was_sliced {
+                    format!(
+                        "[{}/{} lines, {} calls]\n{}",
+                        result.shown_lines, result.total_lines, result.call_count, result.code
+                    )
+                } else {
+                    result.code
+                }
             }
         })
     }
@@ -150,4 +160,13 @@ impl WriteResult {
             error: Some(msg.to_string()),
         }
     }
+}
+
+/// Add line numbers to full (unsliced) code for consistent output format.
+fn add_line_numbers(code: &str, line_start: usize) -> String {
+    let mut result = String::new();
+    for (i, line) in code.lines().enumerate() {
+        result.push_str(&format!("{:>4}: {}\n", line_start + i, line));
+    }
+    result
 }

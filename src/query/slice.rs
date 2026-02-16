@@ -7,6 +7,20 @@
 //! This is NOT academic program slicing. It's graph-informed filtering:
 //! "show only the lines where this symbol interacts with its dependencies."
 
+/// Result of slicing a symbol's code.
+pub struct SliceResult {
+    /// The sliced (or full) code string with line numbers
+    pub code: String,
+    /// Total lines in the original code
+    pub total_lines: usize,
+    /// Lines shown after slicing
+    pub shown_lines: usize,
+    /// Number of dependency call sites
+    pub call_count: usize,
+    /// Whether slicing was actually applied
+    pub was_sliced: bool,
+}
+
 /// Slice a symbol's code to show only graph-relevant lines.
 ///
 /// Keeps:
@@ -18,12 +32,18 @@
 ///
 /// `call_lines` are absolute line numbers (1-indexed).
 /// `line_start` is the symbol's starting line in the file (1-indexed).
-pub fn slice_code(code: &str, call_lines: &[usize], line_start: usize) -> String {
+pub fn slice_code(code: &str, call_lines: &[usize], line_start: usize) -> SliceResult {
     let lines: Vec<&str> = code.lines().collect();
 
     if lines.len() <= 10 || call_lines.is_empty() {
         // Short code or no calls — return full code, no slicing needed
-        return code.to_string();
+        return SliceResult {
+            code: code.to_string(),
+            total_lines: lines.len(),
+            shown_lines: lines.len(),
+            call_count: call_lines.len(),
+            was_sliced: false,
+        };
     }
 
     let mut keep: Vec<bool> = vec![false; lines.len()];
@@ -64,6 +84,8 @@ pub fn slice_code(code: &str, call_lines: &[usize], line_start: usize) -> String
         }
     }
 
+    let shown_lines = keep.iter().filter(|&&k| k).count();
+
     // Build output with line numbers, collapsing skipped sections
     let mut result = String::new();
     let mut in_gap = false;
@@ -81,7 +103,13 @@ pub fn slice_code(code: &str, call_lines: &[usize], line_start: usize) -> String
         }
     }
 
-    result
+    SliceResult {
+        code: result,
+        total_lines: lines.len(),
+        shown_lines,
+        call_count: call_lines.len(),
+        was_sliced: true,
+    }
 }
 
 #[cfg(test)]
@@ -93,7 +121,10 @@ mod tests {
         let code = "fn main() {\n    println!(\"hello\");\n}";
         let result = slice_code(code, &[2], 1);
         // Short code (3 lines) — returns full, no slicing
-        assert_eq!(result, code.to_string());
+        assert!(!result.was_sliced);
+        assert_eq!(result.code, code.to_string());
+        assert_eq!(result.total_lines, 3);
+        assert_eq!(result.shown_lines, 3);
     }
 
     #[test]
@@ -121,13 +152,16 @@ mod tests {
         // call_lines: validate at line 11, check_password at line 15 (absolute)
         let result = slice_code(code, &[11, 15], 1);
 
+        assert!(result.was_sliced);
+        assert!(result.shown_lines < result.total_lines);
+        assert_eq!(result.call_count, 2);
         // Should contain signature, validate call, check_password call, return
-        assert!(result.contains("pub fn login"));
-        assert!(result.contains("validate(user)"));
-        assert!(result.contains("check_password(pw)"));
-        assert!(result.contains("..."));
+        assert!(result.code.contains("pub fn login"));
+        assert!(result.code.contains("validate(user)"));
+        assert!(result.code.contains("check_password(pw)"));
+        assert!(result.code.contains("..."));
         // Should NOT contain all the logger noise
-        assert!(!result.contains("logger.trace(\"stuff\")"));
+        assert!(!result.code.contains("logger.trace(\"stuff\")"));
     }
 
     #[test]
@@ -135,7 +169,8 @@ mod tests {
         let code = "fn simple() {\n    let x = 1;\n    let y = 2;\n    x + y\n}";
         let result = slice_code(code, &[], 1);
         // No calls — return full code
-        assert_eq!(result, code.to_string());
+        assert!(!result.was_sliced);
+        assert_eq!(result.code, code.to_string());
     }
 
     #[test]
@@ -154,7 +189,22 @@ mod tests {
     Ok(result)
 }"#;
         let result = slice_code(code, &[11], 1);
-        assert!(result.contains("transform(input)"));
-        assert!(result.contains("Ok(result)"));
+        assert!(result.was_sliced);
+        assert!(result.code.contains("transform(input)"));
+        assert!(result.code.contains("Ok(result)"));
+    }
+
+    #[test]
+    fn test_slice_metadata() {
+        let mut code = "fn big() {\n".to_string();
+        for i in 1..=20 {
+            code.push_str(&format!("    let x{} = {};\n", i, i));
+        }
+        code.push_str("    foo();\n}");
+        let result = slice_code(&code, &[22], 1); // foo() at line 22
+        assert!(result.was_sliced);
+        assert!(result.shown_lines < result.total_lines);
+        assert_eq!(result.call_count, 1);
+        assert_eq!(result.total_lines, 23); // 1 sig + 20 lets + 1 call + 1 brace
     }
 }
