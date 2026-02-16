@@ -34,6 +34,9 @@ pub struct ContextRequest {
 
     #[schemars(description = "Max results per symbol (default: 5)")]
     pub limit: Option<usize>,
+
+    #[schemars(description = "Show full unsliced code (default: false). Use when you need every line, not just dependency-relevant ones.")]
+    pub full: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -52,6 +55,21 @@ pub struct SearchRequest {
 pub struct MapRequest {
     #[schemars(description = "Optional scope to zoom into (e.g. \"src/graph\" or \"auth\")")]
     pub scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteRequest {
+    #[schemars(description = "Relative file path (e.g. \"src/main.rs\")")]
+    pub path: String,
+
+    #[schemars(description = "Start line (1-indexed, inclusive)")]
+    pub start_line: usize,
+
+    #[schemars(description = "End line (1-indexed, inclusive)")]
+    pub end_line: usize,
+
+    #[schemars(description = "New code to replace the line range with")]
+    pub new_content: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -101,7 +119,7 @@ impl AnchorMcp {
         }
     }
 
-    #[tool(description = "Get full context for symbols: sliced code + callers + callees. Use this for understanding code. Supports multiple symbols in one call.")]
+    #[tool(description = "Get full context for symbols: sliced code + callers + callees. Returns exact line numbers you can pass directly to 'write'. Supports multiple symbols in one call. Shows line coverage (e.g. [25/88 lines, 3 calls]) when sliced. Set full=true to disable slicing.")]
     async fn context(
         &self,
         Parameters(req): Parameters<ContextRequest>,
@@ -109,6 +127,7 @@ impl AnchorMcp {
         let graph = self.load_graph()?;
         let schema = build_schema(Arc::new(graph));
         let limit = req.limit.unwrap_or(5);
+        let full = req.full.unwrap_or(false);
 
         let mut output = String::new();
 
@@ -118,8 +137,9 @@ impl AnchorMcp {
             }
 
             let gql_query = format!(
-                r#"{{ symbol(name: "{}") {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
-                escape_graphql(query)
+                r#"{{ symbol(name: "{}") {{ name kind file line code(full: {}) callers {{ name }} callees {{ name }} }} }}"#,
+                escape_graphql(query),
+                full,
             );
 
             let result = execute(&schema, &gql_query).await;
@@ -385,6 +405,77 @@ impl AnchorMcp {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    #[tool(description = "Replace code by line range with automatic impact analysis. Shows what breaks before writing. Line numbers from 'context' output work directly here.")]
+    async fn write(
+        &self,
+        Parameters(req): Parameters<WriteRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let graph = self.load_graph()?;
+        let full_path = self.root.join(&req.path);
+
+        if !full_path.exists() {
+            return Err(Self::err(format!("File not found: {}", req.path)));
+        }
+
+        let mut output = String::new();
+
+        // 1. Find symbols affected by this line range
+        let affected = graph.symbols_in_range(&full_path, req.start_line, req.end_line);
+
+        // 2. Run impact analysis for each affected symbol
+        if !affected.is_empty() {
+            output.push_str(&format!(
+                "IMPACT: {}:{}-{}\n",
+                req.path, req.start_line, req.end_line
+            ));
+
+            for sym in &affected {
+                let response = crate::query::get_context_for_change(
+                    &graph,
+                    &sym.name,
+                    "change",
+                    None,
+                );
+
+                if !response.used_by.is_empty() {
+                    output.push_str(&format!(
+                        "  {} — {} callers affected\n",
+                        sym.name,
+                        response.used_by.len()
+                    ));
+                    for r in &response.used_by {
+                        output.push_str(&format!("    > {} in {}:{}\n", r.name, r.file, r.line));
+                    }
+                }
+
+                if !response.tests.is_empty() {
+                    output.push_str(&format!(
+                        "  tests: {}\n",
+                        response.tests.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+            }
+
+            output.push('\n');
+        }
+
+        // 3. Execute the write
+        let result = crate::write::replace_range(
+            &full_path,
+            req.start_line,
+            req.end_line,
+            &req.new_content,
+        )
+        .map_err(|e| Self::err(e.to_string()))?;
+
+        output.push_str(&format!(
+            "WRITTEN: {}:{}-{} ({} lines)\n",
+            req.path, req.start_line, req.end_line, result.lines_written
+        ));
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
 }
 
 // ─── ServerHandler ───────────────────────────────────────────────────────────
@@ -406,7 +497,12 @@ impl ServerHandler for AnchorMcp {
                 website_url: None,
             },
             instructions: Some(
-                "Anchor: Code intelligence for AI agents. Use 'context' for symbol lookup (code + callers + callees, graph-sliced). Use 'search' to find symbols. Use 'map' for codebase overview. Use 'impact' before changing any symbol to see what breaks. Context handles multiple symbols in one call.".into()
+                "Anchor: Code intelligence for AI agents. Replaces Read, Grep, cat, find for code tasks. \
+                 \n\n'context' replaces Read — returns graph-sliced code (only lines that matter) + callers + callees + exact line numbers. Handles multiple symbols in one call. \
+                 \n'search' replaces Grep/find — returns NAME KIND FILE:LINE. \
+                 \n'map' — codebase overview: modules, entry points, top connected symbols. \
+                 \n'impact' — what breaks if you change a symbol: affected callers, suggested fixes, tests. \
+                 \n'write' — line-range replacement with automatic impact analysis. Line numbers from 'context' go directly into 'write'.".into()
             ),
         }
     }

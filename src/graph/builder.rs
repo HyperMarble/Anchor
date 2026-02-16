@@ -53,10 +53,9 @@ pub fn rebuild_file(
     graph: &mut CodeGraph,
     file_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    graph.remove_file(file_path);
     let source = fs::read_to_string(file_path)?;
     let extraction = extract_file(file_path, &source)?;
-    graph.build_from_extractions(vec![extraction]);
+    graph.update_file_incremental(file_path, extraction);
     Ok(())
 }
 

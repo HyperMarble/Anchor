@@ -3,7 +3,7 @@
 //! Uses petgraph to store code relationships and provides
 //! query methods for searching and traversing the graph.
 
-use petgraph::graph::{DiGraph, NodeIndex};
+use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 use serde::{Deserialize, Serialize};
@@ -674,6 +674,205 @@ impl CodeGraph {
                         self.qualified_index.get(&parent_key),
                         self.qualified_index.get(&child_key),
                     ) {
+                        self.add_edge(parent_idx, child_idx, EdgeKind::Contains);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Find symbols whose line range overlaps [start, end] in a file.
+    pub fn symbols_in_range(&self, file: &Path, start: usize, end: usize) -> Vec<&NodeData> {
+        self.symbols_in_file(file)
+            .into_iter()
+            .filter(|s| s.line_start <= end && s.line_end >= start)
+            .collect()
+    }
+
+    /// Incrementally update a file's symbols in the graph.
+    /// Diffs old vs new symbols by name — only touches changed/added/removed nodes.
+    /// Unchanged symbols keep their NodeIndex (stable graph references).
+    pub fn update_file_incremental(
+        &mut self,
+        file: &Path,
+        new_extraction: FileExtractions,
+    ) {
+        // Ensure file node exists
+        let file_idx = self.add_file(file.to_path_buf());
+
+        // Collect old symbols: name -> (NodeIndex, code_snippet)
+        let old_symbols: HashMap<String, (NodeIndex, String)> = self
+            .graph
+            .edges_directed(file_idx, Direction::Outgoing)
+            .filter(|e| {
+                let kind = &e.weight().kind;
+                *kind == EdgeKind::Defines && self.is_live(e.target())
+            })
+            .filter_map(|e| {
+                let node = &self.graph[e.target()];
+                if node.kind == NodeKind::Import {
+                    None // Handle imports separately
+                } else {
+                    Some((node.name.clone(), (e.target(), node.code_snippet.clone())))
+                }
+            })
+            .collect();
+
+        // Collect new symbols by name
+        let new_symbols: HashMap<String, &ExtractedSymbol> = new_extraction
+            .symbols
+            .iter()
+            .map(|s| (s.name.clone(), s))
+            .collect();
+
+        // Track which nodes need call re-resolution
+        let mut needs_call_resolution: Vec<NodeIndex> = Vec::new();
+
+        // --- Diff: Removed symbols (in old, not in new) ---
+        for (name, (node_idx, _)) in &old_symbols {
+            if !new_symbols.contains_key(name) {
+                if let Some(node) = self.graph.node_weight_mut(*node_idx) {
+                    node.removed = true;
+                    let file_path = node.file_path.clone();
+
+                    if let Some(indexes) = self.symbol_index.get_mut(name) {
+                        indexes.retain(|&idx| idx != *node_idx);
+                        if indexes.is_empty() {
+                            self.symbol_index.remove(name);
+                        }
+                    }
+                    self.qualified_index.remove(&(file_path, name.clone()));
+                }
+            }
+        }
+
+        // --- Diff: Added symbols (in new, not in old) ---
+        for (name, sym) in &new_symbols {
+            if !old_symbols.contains_key(name) {
+                let sym_idx = self.add_symbol(
+                    sym.name.clone(),
+                    sym.kind,
+                    file.to_path_buf(),
+                    sym.line_start,
+                    sym.line_end,
+                    sym.code_snippet.clone(),
+                );
+                self.add_edge(file_idx, sym_idx, EdgeKind::Defines);
+                needs_call_resolution.push(sym_idx);
+            }
+        }
+
+        // --- Diff: Changed symbols (same name, different code) ---
+        for (name, sym) in &new_symbols {
+            if let Some((node_idx, old_code)) = old_symbols.get(name) {
+                if *old_code != sym.code_snippet {
+                    // Update node in-place
+                    if let Some(node) = self.graph.node_weight_mut(*node_idx) {
+                        node.code_snippet = sym.code_snippet.clone();
+                        node.line_start = sym.line_start;
+                        node.line_end = sym.line_end;
+                        node.call_lines.clear();
+                    }
+
+                    // Remove old outgoing Calls edges
+                    let call_edges: Vec<EdgeIndex> = self
+                        .graph
+                        .edges_directed(*node_idx, Direction::Outgoing)
+                        .filter(|e| e.weight().kind == EdgeKind::Calls)
+                        .map(|e| e.id())
+                        .collect();
+                    for eid in call_edges {
+                        self.graph.remove_edge(eid);
+                    }
+
+                    needs_call_resolution.push(*node_idx);
+                } else {
+                    // Unchanged — just update line numbers if they shifted
+                    if let Some(node) = self.graph.node_weight_mut(*node_idx) {
+                        node.line_start = sym.line_start;
+                        node.line_end = sym.line_end;
+                    }
+                }
+            }
+        }
+
+        // --- Handle imports: remove old, add new ---
+        let old_import_nodes: Vec<NodeIndex> = self
+            .graph
+            .edges_directed(file_idx, Direction::Outgoing)
+            .filter(|e| e.weight().kind == EdgeKind::Imports && self.is_live(e.target()))
+            .map(|e| e.target())
+            .collect();
+        for &imp_idx in &old_import_nodes {
+            if let Some(node) = self.graph.node_weight_mut(imp_idx) {
+                let name = node.name.clone();
+                let fp = node.file_path.clone();
+                node.removed = true;
+                if let Some(indexes) = self.symbol_index.get_mut(&name) {
+                    indexes.retain(|&idx| idx != imp_idx);
+                    if indexes.is_empty() {
+                        self.symbol_index.remove(&name);
+                    }
+                }
+                self.qualified_index.remove(&(fp, name));
+            }
+        }
+        for import in &new_extraction.imports {
+            let import_idx = self.add_symbol(
+                import.path.clone(),
+                NodeKind::Import,
+                file.to_path_buf(),
+                import.line,
+                import.line,
+                String::new(),
+            );
+            self.add_edge(file_idx, import_idx, EdgeKind::Imports);
+        }
+
+        // --- Re-resolve calls for changed/added symbols ---
+        let nodes_needing_resolution: HashSet<NodeIndex> =
+            needs_call_resolution.into_iter().collect();
+
+        for call in &new_extraction.calls {
+            let caller_key = (file.to_path_buf(), call.caller.clone());
+            if let Some(&caller_idx) = self.qualified_index.get(&caller_key) {
+                if !nodes_needing_resolution.contains(&caller_idx) {
+                    continue; // Only re-resolve for changed/added symbols
+                }
+                if let Some(callee_indexes) = self.symbol_index.get(&call.callee).cloned() {
+                    if let Some(&callee_idx) = callee_indexes.first() {
+                        self.add_edge(caller_idx, callee_idx, EdgeKind::Calls);
+                        if let Some(node) = self.graph.node_weight_mut(caller_idx) {
+                            for line in call.line..=call.line_end {
+                                if !node.call_lines.contains(&line) {
+                                    node.call_lines.push(line);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort call_lines for changed nodes
+        for &idx in &nodes_needing_resolution {
+            if let Some(node) = self.graph.node_weight_mut(idx) {
+                node.call_lines.sort();
+                node.call_lines.dedup();
+            }
+        }
+
+        // --- Re-resolve contains for changed/added symbols ---
+        for sym in &new_extraction.symbols {
+            if let Some(ref parent_name) = sym.parent {
+                let child_key = (file.to_path_buf(), sym.name.clone());
+                let parent_key = (file.to_path_buf(), parent_name.clone());
+
+                if let Some(&child_idx) = self.qualified_index.get(&child_key) {
+                    if !nodes_needing_resolution.contains(&child_idx) {
+                        continue;
+                    }
+                    if let Some(&parent_idx) = self.qualified_index.get(&parent_key) {
                         self.add_edge(parent_idx, child_idx, EdgeKind::Contains);
                     }
                 }
