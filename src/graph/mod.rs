@@ -5,12 +5,15 @@
 
 pub mod builder;
 pub mod engine;
+pub mod mutation;
 pub mod persistence;
+pub mod query;
 pub mod types;
 
 pub use builder::{build_graph, rebuild_file, scan_stats, ScanStats};
-pub use engine::{CodeGraph, DependencyInfo, GraphStats, SearchResult, SymbolRef};
+pub use engine::CodeGraph;
 pub use types::{
-    ConnectionInfo, EdgeData, EdgeKind, ExtractedCall, ExtractedImport, ExtractedSymbol,
-    FileExtractions, GraphSearchResult, NodeData, NodeKind, SymbolInfo,
+    ConnectionInfo, DependencyInfo, EdgeData, EdgeKind, ExtractedCall, ExtractedImport,
+    ExtractedSymbol, FileExtractions, GraphSearchResult, GraphStats, NodeData, NodeKind,
+    SearchResult, SymbolInfo, SymbolRef,
 };

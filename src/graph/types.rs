@@ -276,3 +276,48 @@ pub struct ConnectionInfo {
     pub to: String,
     pub relationship: EdgeKind,
 }
+
+// ─── Query Result Types ─────────────────────────────────────────
+
+/// A search result returned by `CodeGraph::search`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub symbol: String,
+    pub kind: NodeKind,
+    pub file: PathBuf,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub code: String,
+    pub call_lines: Vec<usize>,
+    pub calls: Vec<SymbolRef>,
+    pub called_by: Vec<SymbolRef>,
+    pub imports: Vec<String>,
+}
+
+/// A reference to a symbol (lightweight, for connections).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolRef {
+    pub name: String,
+    pub file: PathBuf,
+    pub line: usize,
+}
+
+/// Dependency information for a symbol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DependencyInfo {
+    pub symbol: String,
+    pub kind: NodeKind,
+    pub file: PathBuf,
+    pub line: usize,
+    pub relationship: EdgeKind,
+}
+
+/// Statistics about the graph.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphStats {
+    pub total_nodes: usize,
+    pub total_edges: usize,
+    pub file_count: usize,
+    pub symbol_count: usize,
+    pub unique_symbol_names: usize,
+}
