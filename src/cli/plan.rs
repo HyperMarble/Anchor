@@ -95,7 +95,7 @@ fn execute_operation(root: &Path, op: &PlanOperation, graph: Option<&CodeGraph>)
         PlanOperation::Context { query, limit } => {
             print!("context {} ... ", query);
             if let Some(g) = graph {
-                let _ = cli_read::context(g, &[query.clone()], limit.unwrap_or(5));
+                let _ = cli_read::context(g, &[query.clone()], limit.unwrap_or(5), false);
             }
             Ok(())
         }
@@ -291,7 +291,7 @@ fn execute_operation_via_daemon(root: &Path, op: &PlanOperation, graph: Option<&
         }
         PlanOperation::Context { query, limit } => {
             if let Some(g) = graph {
-                let _ = cli_read::context(g, &[query.clone()], limit.unwrap_or(5));
+                let _ = cli_read::context(g, &[query.clone()], limit.unwrap_or(5), false);
             }
             return Ok(Response::Ok { data: serde_json::json!({"op": "context"}) });
         }

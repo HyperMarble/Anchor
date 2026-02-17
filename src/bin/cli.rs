@@ -45,9 +45,9 @@ fn run(cli: Cli) -> Result<()> {
 
     match cli.command.unwrap() {
         // ─── Query Commands ───────────────────────────────────────
-        Commands::Context { queries, limit } => {
+        Commands::Context { queries, limit, full } => {
             let graph = load_or_build_graph(&root, &cache_path)?;
-            cli_read::context(&graph, &queries, limit)
+            cli_read::context(&graph, &queries, limit, full)
         }
 
         Commands::Search { queries, pattern, limit } => {

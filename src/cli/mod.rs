@@ -69,6 +69,10 @@ pub enum Commands {
         /// Max results per symbol
         #[arg(short, long, default_value = "5")]
         limit: usize,
+
+        /// Show full unsliced code (disable graph slicing)
+        #[arg(short = 'F', long)]
+        full: bool,
     },
 
     /// Search for symbols (lightweight: names, files, lines)

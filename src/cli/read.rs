@@ -168,15 +168,16 @@ pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
 /// Context: Search + Read combined (supports multiple queries).
 ///
 /// Wraps GraphQL `symbol` query with code and relationships.
-pub fn context(graph: &CodeGraph, queries: &[String], limit: usize) -> Result<()> {
+pub fn context(graph: &CodeGraph, queries: &[String], limit: usize, full: bool) -> Result<()> {
     let schema = build_schema(Arc::new(graph.clone()));
     let rt = tokio::runtime::Runtime::new()?;
     let mut first = true;
 
     for query in queries {
         let gql_query = format!(
-            r#"{{ symbol(name: "{}") {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
-            escape_graphql(query)
+            r#"{{ symbol(name: "{}") {{ name kind file line code(full: {}) callers {{ name }} callees {{ name }} }} }}"#,
+            escape_graphql(query),
+            full,
         );
 
         let result = rt.block_on(execute(&schema, &gql_query));
