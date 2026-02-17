@@ -2,7 +2,7 @@
 name = "anchor-sdk"
 version = "0.1.4"
 edition = "2021"
-description = "LSP for AI."
+description = "Infrastructure for AI agents. Pre-computed code graph with MCP server."
 license = "Apache-2.0"
 repository = "https://github.com/Tharun-10Dragneel/Anchor"
 keywords = ["ai", "code-intelligence", "mcp", "lsp", "graph"]
