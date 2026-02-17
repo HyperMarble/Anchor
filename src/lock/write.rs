@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::graph::CodeGraph;
-use crate::lock::{LockManager, LockResult};
+use crate::lock::{LockManager, LockResult, SymbolKey};
 use crate::write::{self, WriteError, WriteResult};
 
 /// Default timeout for acquiring locks
@@ -21,12 +21,12 @@ pub enum LockedWriteResult {
     /// Write succeeded
     Success {
         write_result: WriteResult,
-        locked_files: Vec<std::path::PathBuf>,
+        locked_symbols: Vec<SymbolKey>,
         wait_time_ms: u64,
     },
     /// Write failed due to lock conflict
     Blocked {
-        blocked_by: std::path::PathBuf,
+        blocked_by: SymbolKey,
         reason: String,
     },
     /// Write failed for other reasons
@@ -40,25 +40,28 @@ pub fn create_file_locked(
     manager: &LockManager,
     graph: &CodeGraph,
 ) -> LockedWriteResult {
-    // For create, there might not be dependents yet (new file)
-    // But we still lock to prevent race conditions
     match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-        LockResult::Acquired { file, dependents } | LockResult::AcquiredAfterWait { file, dependents, .. } => {
+        LockResult::Acquired {
+            symbol, dependents, ..
+        }
+        | LockResult::AcquiredAfterWait {
+            symbol, dependents, ..
+        } => {
             let result = write::create_file(path, content);
-            manager.release(&file);
+            manager.release(&symbol.file);
 
             match result {
                 Ok(write_result) => LockedWriteResult::Success {
                     write_result,
-                    locked_files: std::iter::once(file).chain(dependents).collect(),
+                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
                     wait_time_ms: 0,
                 },
                 Err(e) => LockedWriteResult::WriteError(e),
             }
         }
-        LockResult::Blocked { blocked_by, reason } => {
-            LockedWriteResult::Blocked { blocked_by, reason }
-        }
+        LockResult::Blocked {
+            blocked_by, reason, ..
+        } => LockedWriteResult::Blocked { blocked_by, reason },
     }
 }
 
@@ -71,35 +74,41 @@ pub fn insert_after_locked(
     graph: &CodeGraph,
 ) -> LockedWriteResult {
     match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-        LockResult::Acquired { file, dependents } => {
+        LockResult::Acquired {
+            symbol, dependents, ..
+        } => {
             let result = write::insert_after(path, pattern, content);
-            manager.release(&file);
+            manager.release(&symbol.file);
 
             match result {
                 Ok(write_result) => LockedWriteResult::Success {
                     write_result,
-                    locked_files: std::iter::once(file).chain(dependents).collect(),
+                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
                     wait_time_ms: 0,
                 },
                 Err(e) => LockedWriteResult::WriteError(e),
             }
         }
-        LockResult::AcquiredAfterWait { file, dependents, wait_time_ms } => {
+        LockResult::AcquiredAfterWait {
+            symbol,
+            dependents,
+            wait_time_ms,
+        } => {
             let result = write::insert_after(path, pattern, content);
-            manager.release(&file);
+            manager.release(&symbol.file);
 
             match result {
                 Ok(write_result) => LockedWriteResult::Success {
                     write_result,
-                    locked_files: std::iter::once(file).chain(dependents).collect(),
+                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
                     wait_time_ms,
                 },
                 Err(e) => LockedWriteResult::WriteError(e),
             }
         }
-        LockResult::Blocked { blocked_by, reason } => {
-            LockedWriteResult::Blocked { blocked_by, reason }
-        }
+        LockResult::Blocked {
+            blocked_by, reason, ..
+        } => LockedWriteResult::Blocked { blocked_by, reason },
     }
 }
 
@@ -112,27 +121,27 @@ pub fn replace_all_locked(
     graph: &CodeGraph,
 ) -> LockedWriteResult {
     match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-        LockResult::Acquired { file, dependents } | LockResult::AcquiredAfterWait { file, dependents, .. } => {
-            let wait_time_ms = match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-                LockResult::AcquiredAfterWait { wait_time_ms, .. } => wait_time_ms,
-                _ => 0,
-            };
-
+        LockResult::Acquired {
+            symbol, dependents, ..
+        }
+        | LockResult::AcquiredAfterWait {
+            symbol, dependents, ..
+        } => {
             let result = write::replace_all(path, old, new);
-            manager.release(&file);
+            manager.release(&symbol.file);
 
             match result {
                 Ok(write_result) => LockedWriteResult::Success {
                     write_result,
-                    locked_files: std::iter::once(file).chain(dependents).collect(),
-                    wait_time_ms,
+                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
+                    wait_time_ms: 0,
                 },
                 Err(e) => LockedWriteResult::WriteError(e),
             }
         }
-        LockResult::Blocked { blocked_by, reason } => {
-            LockedWriteResult::Blocked { blocked_by, reason }
-        }
+        LockResult::Blocked {
+            blocked_by, reason, ..
+        } => LockedWriteResult::Blocked { blocked_by, reason },
     }
 }
 
@@ -144,17 +153,24 @@ pub fn batch_replace_locked(
     manager: &LockManager,
     graph: &CodeGraph,
 ) -> BatchLockedWriteResult {
-    let mut locked_files = Vec::new();
+    let mut locked_symbols = Vec::new();
     let mut lock_errors = Vec::new();
 
     // Phase 1: Acquire all locks
     for path in paths {
         match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-            LockResult::Acquired { file, dependents } | LockResult::AcquiredAfterWait { file, dependents, .. } => {
-                locked_files.push(file);
-                locked_files.extend(dependents);
+            LockResult::Acquired {
+                symbol, dependents, ..
             }
-            LockResult::Blocked { blocked_by, reason } => {
+            | LockResult::AcquiredAfterWait {
+                symbol, dependents, ..
+            } => {
+                locked_symbols.push(symbol);
+                locked_symbols.extend(dependents);
+            }
+            LockResult::Blocked {
+                blocked_by, reason, ..
+            } => {
                 lock_errors.push((path.clone(), blocked_by, reason));
             }
         }
@@ -167,8 +183,11 @@ pub fn batch_replace_locked(
         }
         return BatchLockedWriteResult {
             successful: vec![],
-            failed: lock_errors.iter().map(|(p, _, r)| (p.clone(), r.clone())).collect(),
-            total_locked_files: 0,
+            failed: lock_errors
+                .iter()
+                .map(|(p, _, r)| (p.clone(), r.clone()))
+                .collect(),
+            total_locked_symbols: 0,
         };
     }
 
@@ -194,7 +213,7 @@ pub fn batch_replace_locked(
     BatchLockedWriteResult {
         successful,
         failed,
-        total_locked_files: locked_files.len(),
+        total_locked_symbols: locked_symbols.len(),
     }
 }
 
@@ -203,7 +222,7 @@ pub fn batch_replace_locked(
 pub struct BatchLockedWriteResult {
     pub successful: Vec<WriteResult>,
     pub failed: Vec<(std::path::PathBuf, String)>,
-    pub total_locked_files: usize,
+    pub total_locked_symbols: usize,
 }
 
 impl BatchLockedWriteResult {
@@ -213,10 +232,10 @@ impl BatchLockedWriteResult {
 
     pub fn summary(&self) -> String {
         format!(
-            "{} succeeded, {} failed, {} files locked",
+            "{} succeeded, {} failed, {} symbols locked",
             self.successful.len(),
             self.failed.len(),
-            self.total_locked_files
+            self.total_locked_symbols
         )
     }
 }
