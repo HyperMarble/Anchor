@@ -203,116 +203,35 @@ fn process_request(
         // ─── Write Operations (with locking) ───────────────────
         Request::Create { path, content } => {
             let file_path = root.join(&path);
-            let g = match graph.read() {
-                Ok(g) => g,
-                Err(e) => return Response::error(format!("graph lock error: {}", e)),
-            };
-
-            // Acquire file lock with dependency awareness
-            let lock_result = lock_manager.acquire_with_wait(
-                &file_path,
-                &g,
-                std::time::Duration::from_secs(30),
-            );
-            drop(g); // Release graph read lock before writing
-
-            match lock_result {
-                crate::lock::LockResult::Acquired { dependents, .. }
-                | crate::lock::LockResult::AcquiredAfterWait { dependents, .. } => {
-                    // Create parent directories
-                    if let Some(parent) = file_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-
-                    let result = write::create_file(&file_path, &content);
-                    lock_manager.release(&file_path);
-
-                    match result {
-                        Ok(wr) => Response::ok(serde_json::json!({
-                            "success": true,
-                            "path": wr.path,
-                            "lines_written": wr.lines_written,
-                            "locked_dependents": dependents.len()
-                        })),
-                        Err(e) => Response::error(format!("write error: {}", e)),
-                    }
+            with_file_lock(&file_path, graph, lock_manager, |fp| {
+                if let Some(parent) = fp.parent() {
+                    let _ = std::fs::create_dir_all(parent);
                 }
-                crate::lock::LockResult::Blocked { blocked_by, reason } => {
-                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
-                }
-            }
+                let wr = write::create_file(fp, &content)?;
+                Ok(serde_json::json!({
+                    "success": true, "path": wr.path, "lines_written": wr.lines_written
+                }))
+            })
         }
 
         Request::Insert { path, pattern, content } => {
             let file_path = root.join(&path);
-            let g = match graph.read() {
-                Ok(g) => g,
-                Err(e) => return Response::error(format!("graph lock error: {}", e)),
-            };
-
-            let lock_result = lock_manager.acquire_with_wait(
-                &file_path,
-                &g,
-                std::time::Duration::from_secs(30),
-            );
-            drop(g);
-
-            match lock_result {
-                crate::lock::LockResult::Acquired { dependents, .. }
-                | crate::lock::LockResult::AcquiredAfterWait { dependents, .. } => {
-                    let result = write::insert_after(&file_path, &pattern, &content);
-                    lock_manager.release(&file_path);
-
-                    match result {
-                        Ok(wr) => Response::ok(serde_json::json!({
-                            "success": true,
-                            "path": wr.path,
-                            "lines_written": wr.lines_written,
-                            "locked_dependents": dependents.len()
-                        })),
-                        Err(e) => Response::error(format!("write error: {}", e)),
-                    }
-                }
-                crate::lock::LockResult::Blocked { blocked_by, reason } => {
-                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
-                }
-            }
+            with_file_lock(&file_path, graph, lock_manager, |fp| {
+                let wr = write::insert_after(fp, &pattern, &content)?;
+                Ok(serde_json::json!({
+                    "success": true, "path": wr.path, "lines_written": wr.lines_written
+                }))
+            })
         }
 
         Request::Replace { path, old, new } => {
             let file_path = root.join(&path);
-            let g = match graph.read() {
-                Ok(g) => g,
-                Err(e) => return Response::error(format!("graph lock error: {}", e)),
-            };
-
-            let lock_result = lock_manager.acquire_with_wait(
-                &file_path,
-                &g,
-                std::time::Duration::from_secs(30),
-            );
-            drop(g);
-
-            match lock_result {
-                crate::lock::LockResult::Acquired { dependents, .. }
-                | crate::lock::LockResult::AcquiredAfterWait { dependents, .. } => {
-                    let result = write::replace_all(&file_path, &old, &new);
-                    lock_manager.release(&file_path);
-
-                    match result {
-                        Ok(wr) => Response::ok(serde_json::json!({
-                            "success": true,
-                            "path": wr.path,
-                            "replacements": wr.replacements,
-                            "locked_dependents": dependents.len()
-                        })),
-                        Err(e) => Response::error(format!("write error: {}", e)),
-                    }
-                }
-                crate::lock::LockResult::Blocked { blocked_by, reason } => {
-                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
-                }
-            }
+            with_file_lock(&file_path, graph, lock_manager, |fp| {
+                let wr = write::replace_all(fp, &old, &new)?;
+                Ok(serde_json::json!({
+                    "success": true, "path": wr.path, "replacements": wr.replacements
+                }))
+            })
         }
 
         // ─── Lock Management ───────────────────────────────────
@@ -425,6 +344,50 @@ pub fn is_daemon_running(root: &Path) -> bool {
     }
 
     false
+}
+
+/// Acquire a file lock, run a write operation, release the lock.
+fn with_file_lock<F>(
+    file_path: &Path,
+    graph: &Arc<RwLock<CodeGraph>>,
+    lock_manager: &Arc<LockManager>,
+    write_fn: F,
+) -> Response
+where
+    F: FnOnce(&Path) -> Result<serde_json::Value, write::WriteError>,
+{
+    let g = match graph.read() {
+        Ok(g) => g,
+        Err(e) => return Response::error(format!("graph lock error: {}", e)),
+    };
+
+    let lock_result = lock_manager.acquire_with_wait(
+        file_path,
+        &g,
+        std::time::Duration::from_secs(30),
+    );
+    drop(g);
+
+    match lock_result {
+        crate::lock::LockResult::Acquired { dependents, .. }
+        | crate::lock::LockResult::AcquiredAfterWait { dependents, .. } => {
+            let result = write_fn(file_path);
+            lock_manager.release(file_path);
+
+            match result {
+                Ok(mut data) => {
+                    data.as_object_mut().map(|obj| {
+                        obj.insert("locked_dependents".to_string(), dependents.len().into());
+                    });
+                    Response::ok(data)
+                }
+                Err(e) => Response::error(format!("write error: {}", e)),
+            }
+        }
+        crate::lock::LockResult::Blocked { blocked_by, reason } => {
+            Response::error(format!("Blocked by {}: {}", blocked_by, reason))
+        }
+    }
 }
 
 /// Send a request to the daemon and get a response.
