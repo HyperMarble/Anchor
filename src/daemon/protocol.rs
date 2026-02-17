@@ -57,6 +57,14 @@ pub enum Request {
     #[serde(rename = "locks")]
     Locks,
 
+    /// Lock a specific symbol (with dependency locking)
+    #[serde(rename = "lock_symbol")]
+    LockSymbol { file: String, symbol: String },
+
+    /// Unlock a specific symbol
+    #[serde(rename = "unlock_symbol")]
+    UnlockSymbol { file: String, symbol: String },
+
     // ─── System ────────────────────────────────────────────────
     /// Force rebuild the graph
     #[serde(rename = "rebuild")]

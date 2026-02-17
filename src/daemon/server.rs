@@ -238,11 +238,7 @@ fn process_request(
                     }
                 }
                 crate::lock::LockResult::Blocked { blocked_by, reason } => {
-                    Response::error(format!(
-                        "Blocked by {}: {}",
-                        blocked_by.display(),
-                        reason
-                    ))
+                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
                 }
             }
         }
@@ -278,11 +274,7 @@ fn process_request(
                     }
                 }
                 crate::lock::LockResult::Blocked { blocked_by, reason } => {
-                    Response::error(format!(
-                        "Blocked by {}: {}",
-                        blocked_by.display(),
-                        reason
-                    ))
+                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
                 }
             }
         }
@@ -318,11 +310,7 @@ fn process_request(
                     }
                 }
                 crate::lock::LockResult::Blocked { blocked_by, reason } => {
-                    Response::error(format!(
-                        "Blocked by {}: {}",
-                        blocked_by.display(),
-                        reason
-                    ))
+                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
                 }
             }
         }
@@ -338,7 +326,8 @@ fn process_request(
                 LockStatus::Locked { by, duration_ms } => Response::ok(serde_json::json!({
                     "locked": true,
                     "path": path,
-                    "locked_by": by.display().to_string(),
+                    "locked_by": by.to_string(),
+                    "locked_by_symbol": by.name,
                     "duration_ms": duration_ms
                 })),
             }
@@ -350,9 +339,9 @@ fn process_request(
                 .iter()
                 .map(|l| {
                     serde_json::json!({
-                        "primary_file": l.primary_file.display().to_string(),
-                        "locked_files": l.locked_files.iter()
-                            .map(|f| f.display().to_string())
+                        "primary_symbol": l.primary_symbol.to_string(),
+                        "locked_symbols": l.locked_symbols.iter()
+                            .map(|s| s.to_string())
                             .collect::<Vec<_>>(),
                         "duration_ms": l.duration_ms
                     })
@@ -362,6 +351,42 @@ fn process_request(
                 "count": locks.len(),
                 "locks": lock_infos
             }))
+        }
+
+        // ─── Symbol Locking ────────────────────────────────────
+        Request::LockSymbol { file, symbol } => {
+            let file_path = root.join(&file);
+            let g = match graph.read() {
+                Ok(g) => g,
+                Err(e) => return Response::error(format!("graph lock error: {}", e)),
+            };
+            let key = crate::lock::SymbolKey::new(file_path, symbol);
+            match lock_manager.acquire_symbol_with_wait(
+                &key,
+                &g,
+                std::time::Duration::from_secs(30),
+            ) {
+                crate::lock::LockResult::Acquired {
+                    symbol, dependents, ..
+                }
+                | crate::lock::LockResult::AcquiredAfterWait {
+                    symbol, dependents, ..
+                } => Response::ok(serde_json::json!({
+                    "locked": true,
+                    "symbol": symbol.to_string(),
+                    "dependents": dependents.iter().map(|d| d.to_string()).collect::<Vec<_>>()
+                })),
+                crate::lock::LockResult::Blocked { blocked_by, reason } => {
+                    Response::error(format!("Blocked by {}: {}", blocked_by, reason))
+                }
+            }
+        }
+
+        Request::UnlockSymbol { file, symbol } => {
+            let file_path = root.join(&file);
+            let key = crate::lock::SymbolKey::new(file_path, symbol);
+            lock_manager.release_symbol(&key);
+            Response::ok(serde_json::json!({ "unlocked": true }))
         }
 
         // ─── System ────────────────────────────────────────────
