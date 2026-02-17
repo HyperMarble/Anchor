@@ -1,98 +1,28 @@
-//! MCP (Model Context Protocol) server for Anchor.
-//!
-//! Exposes Anchor's code intelligence as native MCP tools.
-//! Agents connect via stdio and get: context, search, map.
+//! MCP tool implementations (context, search, map, impact, write).
 
 use rmcp::{
-    handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
     model::*,
-    schemars, tool, tool_handler, tool_router, ServerHandler, ServiceExt,
+    tool, tool_router,
 };
-use serde::Deserialize;
-use std::borrow::Cow;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
+use super::format::{escape_graphql, format_symbol, short_kind};
+use super::types::*;
+use super::AnchorMcp;
 use crate::graph::{build_graph, CodeGraph};
 use crate::graphql::{build_schema, execute};
 
-// ─── MCP Server ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct AnchorMcp {
-    root: PathBuf,
-    tool_router: ToolRouter<AnchorMcp>,
-}
-
-// ─── Tool Input Types ────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ContextRequest {
-    #[schemars(description = "Symbol names to get context for (e.g. [\"login\", \"UserService\"])")]
-    pub symbols: Vec<String>,
-
-    #[schemars(description = "Max results per symbol (default: 5)")]
-    pub limit: Option<usize>,
-
-    #[schemars(description = "Show full unsliced code (default: false). Use when you need every line, not just dependency-relevant ones.")]
-    pub full: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct SearchRequest {
-    #[schemars(description = "Symbol name to search for")]
-    pub query: String,
-
-    #[schemars(description = "Regex pattern for advanced search (Brzozowski derivatives, ReDoS-safe)")]
-    pub pattern: Option<String>,
-
-    #[schemars(description = "Max results (default: 20)")]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct MapRequest {
-    #[schemars(description = "Optional scope to zoom into (e.g. \"src/graph\" or \"auth\")")]
-    pub scope: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct WriteRequest {
-    #[schemars(description = "Relative file path (e.g. \"src/main.rs\")")]
-    pub path: String,
-
-    #[schemars(description = "Start line (1-indexed, inclusive)")]
-    pub start_line: usize,
-
-    #[schemars(description = "End line (1-indexed, inclusive)")]
-    pub end_line: usize,
-
-    #[schemars(description = "New code to replace the line range with")]
-    pub new_content: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ImpactRequest {
-    #[schemars(description = "Symbol name to analyze impact for (e.g. \"login\", \"UserService\")")]
-    pub symbol: String,
-
-    #[schemars(description = "Optional new signature if you're changing the function (e.g. \"fn login(user: &str, token: &str) -> Result<bool>\")")]
-    pub new_signature: Option<String>,
-}
-
-// ─── Tool Implementations ────────────────────────────────────────────────────
-
 #[tool_router]
 impl AnchorMcp {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: std::path::PathBuf) -> Self {
         Self {
             root,
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Load or build the graph
     fn load_graph(&self) -> Result<CodeGraph, ErrorData> {
         let cache_path = self.root.join(".anchor/graph.bin");
 
@@ -102,7 +32,6 @@ impl AnchorMcp {
             }
         }
 
-        // Auto-build if no cache
         let graph = build_graph(&self.root);
         if let Some(parent) = cache_path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -114,7 +43,7 @@ impl AnchorMcp {
     fn err(msg: impl Into<String>) -> ErrorData {
         ErrorData {
             code: ErrorCode::INTERNAL_ERROR,
-            message: Cow::from(msg.into()),
+            message: std::borrow::Cow::from(msg.into()),
             data: None,
         }
     }
@@ -362,12 +291,10 @@ impl AnchorMcp {
             return Ok(CallToolResult::success(vec![Content::text(output)]));
         }
 
-        // Symbol info
         if let Some(sym) = response.symbols.first() {
             output.push_str(&format!("{} {} {}:{}\n", sym.name, sym.kind, sym.file, sym.line));
         }
 
-        // Who uses this (callers that would break)
         if !response.used_by.is_empty() {
             output.push_str(&format!("\nBREAKS ({} callers):\n", response.used_by.len()));
             for r in &response.used_by {
@@ -377,7 +304,6 @@ impl AnchorMcp {
             output.push_str("\nBREAKS: nothing (no callers)\n");
         }
 
-        // Suggested edits
         if !response.edits.is_empty() {
             output.push_str(&format!("\nEDITS ({} changes needed):\n", response.edits.len()));
             for edit in &response.edits {
@@ -395,7 +321,6 @@ impl AnchorMcp {
             }
         }
 
-        // Related tests
         if !response.tests.is_empty() {
             output.push_str(&format!("\nTESTS ({} to update):\n", response.tests.len()));
             for test in &response.tests {
@@ -420,10 +345,8 @@ impl AnchorMcp {
 
         let mut output = String::new();
 
-        // 1. Find symbols affected by this line range
         let affected = graph.symbols_in_range(&full_path, req.start_line, req.end_line);
 
-        // 2. Run impact analysis for each affected symbol
         if !affected.is_empty() {
             output.push_str(&format!(
                 "IMPACT: {}:{}-{}\n",
@@ -460,7 +383,6 @@ impl AnchorMcp {
             output.push('\n');
         }
 
-        // 3. Execute the write
         let result = crate::write::replace_range(
             &full_path,
             req.start_line,
@@ -475,122 +397,5 @@ impl AnchorMcp {
         ));
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-}
-
-// ─── ServerHandler ───────────────────────────────────────────────────────────
-
-#[tool_handler]
-impl ServerHandler for AnchorMcp {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-            server_info: Implementation {
-                name: "anchor".into(),
-                version: crate::updater::VERSION.into(),
-                title: None,
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: Some(
-                "Anchor: Code intelligence for AI agents. Replaces Read, Grep, cat, find for code tasks. \
-                 \n\n'context' replaces Read — returns graph-sliced code (only lines that matter) + callers + callees + exact line numbers. Handles multiple symbols in one call. \
-                 \n'search' replaces Grep/find — returns NAME KIND FILE:LINE. \
-                 \n'map' — codebase overview: modules, entry points, top connected symbols. \
-                 \n'impact' — what breaks if you change a symbol: affected callers, suggested fixes, tests. \
-                 \n'write' — line-range replacement with automatic impact analysis. Line numbers from 'context' go directly into 'write'.".into()
-            ),
-        }
-    }
-}
-
-// ─── Entry Point ─────────────────────────────────────────────────────────────
-
-/// Run the MCP server on stdio
-pub async fn run(root: PathBuf) -> anyhow::Result<()> {
-    let service = AnchorMcp::new(root);
-    let server = service.serve(rmcp::transport::stdio()).await?;
-    server.waiting().await?;
-    Ok(())
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-fn escape_graphql(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-}
-
-fn format_symbol(output: &mut String, sym: &serde_json::Value) {
-    let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-    let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
-    let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
-
-    let file_name = Path::new(file)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| file.to_string());
-
-    output.push_str(&format!("{} {} {}:{}\n", name, kind, file_name, line));
-
-    // Callers
-    if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
-        let mut names: Vec<&str> = callers.iter()
-            .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
-            .filter(|n| !is_file_name(n))
-            .collect();
-        names.sort();
-        names.dedup();
-        if !names.is_empty() {
-            output.push_str(&format!("> {}\n", names.join(" ")));
-        }
-    }
-
-    // Callees
-    if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
-        let mut names: Vec<&str> = callees.iter()
-            .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
-            .filter(|n| !is_file_name(n))
-            .collect();
-        names.sort();
-        names.dedup();
-        if !names.is_empty() {
-            output.push_str(&format!("< {}\n", names.join(" ")));
-        }
-    }
-
-    // Code
-    if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
-        output.push_str("---\n");
-        output.push_str(code);
-        output.push('\n');
-    }
-}
-
-fn is_file_name(s: &str) -> bool {
-    s.ends_with(".rs") || s.ends_with(".py") || s.ends_with(".js") || s.ends_with(".ts")
-}
-
-fn short_kind(kind: &str) -> &str {
-    match kind {
-        "function" => "fn",
-        "method" => "m",
-        "struct" => "st",
-        "class" => "cl",
-        "trait" => "tr",
-        "interface" => "if",
-        "enum" => "en",
-        "constant" => "c",
-        "module" => "mod",
-        "type" => "ty",
-        "variable" => "v",
-        "impl" => "impl",
-        _ => kind,
     }
 }
