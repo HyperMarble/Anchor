@@ -1,7 +1,9 @@
 //! Write operations for Anchor: create, insert, and refactor files.
 //!
 //! These operations enable AI agents to modify code with minimal tokens.
+//! Graph-guided write order ensures dependencies are written before dependents.
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -180,7 +182,8 @@ pub fn replace_range(
 
     if start_line == 0 || end_line == 0 || start_line > end_line {
         return Err(WriteError::InvalidInput(format!(
-            "Invalid line range: {}..{}", start_line, end_line
+            "Invalid line range: {}..{}",
+            start_line, end_line
         )));
     }
 
@@ -192,7 +195,8 @@ pub fn replace_range(
 
     if start_line > total_lines {
         return Err(WriteError::InvalidInput(format!(
-            "Start line {} exceeds file length {}", start_line, total_lines
+            "Start line {} exceeds file length {}",
+            start_line, total_lines
         )));
     }
 
@@ -332,6 +336,184 @@ impl BatchWriteResult {
     }
 }
 
+// ─── Graph-Guided Write Order ─────────────────────────────────────────
+
+use crate::graph::CodeGraph;
+
+/// A write operation with symbol info for dependency ordering.
+#[derive(Debug, Clone)]
+pub struct WriteOp {
+    pub path: PathBuf,
+    pub content: String,
+    pub symbol: Option<String>,
+}
+
+/// Result of graph-guided write with ordering info.
+#[derive(Debug, serde::Serialize)]
+pub struct OrderedWriteResult {
+    pub total_operations: usize,
+    pub write_order: Vec<String>,
+    pub results: Vec<WriteResult>,
+    pub total_time_ms: u64,
+}
+
+/// Write multiple operations in dependency order using existing CodeGraph.
+///
+/// Uses the graph's dependency data to ensure dependencies are written before dependents.
+pub fn write_ordered(
+    graph: &CodeGraph,
+    operations: &[WriteOp],
+) -> Result<OrderedWriteResult, WriteError> {
+    let start = std::time::Instant::now();
+    let total_operations = operations.len();
+
+    // Build dependency edges using existing graph
+    let mut op_deps: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
+    let mut op_dependents: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
+    let mut symbol_to_op: HashMap<String, usize> = HashMap::new();
+
+    // Map symbols to operation indices
+    for (i, op) in operations.iter().enumerate() {
+        if let Some(ref symbol) = op.symbol {
+            symbol_to_op.insert(symbol.clone(), i);
+        }
+    }
+
+    // Use existing graph to find dependencies
+    for (i, op) in operations.iter().enumerate() {
+        if let Some(ref symbol) = op.symbol {
+            // Get what this symbol depends on from the graph
+            for dep in graph.dependencies(symbol) {
+                if let Some(&dep_idx) = symbol_to_op.get(&dep.symbol) {
+                    op_deps[i].push(dep_idx);
+                    op_dependents[dep_idx].push(i);
+                }
+            }
+        }
+    }
+
+    // Topological sort using Kahn's algorithm
+    let mut in_degree: Vec<usize> = op_deps.iter().map(|d| d.len()).collect();
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    let mut order: Vec<usize> = Vec::new();
+
+    // Start with operations that have no dependencies
+    for (i, &degree) in in_degree.iter().enumerate() {
+        if degree == 0 {
+            queue.push_back(i);
+        }
+    }
+
+    while let Some(idx) = queue.pop_front() {
+        order.push(idx);
+
+        for &dependent in &op_dependents[idx] {
+            in_degree[dependent] -= 1;
+            if in_degree[dependent] == 0 {
+                queue.push_back(dependent);
+            }
+        }
+    }
+
+    // Handle cycles - append remaining
+    if order.len() != operations.len() {
+        let ordered_set: HashSet<usize> = order.iter().copied().collect();
+        for i in 0..operations.len() {
+            if !ordered_set.contains(&i) {
+                order.push(i);
+            }
+        }
+    }
+
+    // Execute writes in order
+    let mut results: Vec<WriteResult> = Vec::with_capacity(operations.len());
+    let mut write_order: Vec<String> = Vec::with_capacity(operations.len());
+
+    for idx in &order {
+        let op = &operations[*idx];
+
+        if let Some(parent) = op.path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+
+        let result = create_file(&op.path, &op.content)?;
+
+        write_order.push(format!(
+            "{} ({})",
+            op.path.display(),
+            op.symbol.as_deref().unwrap_or("file")
+        ));
+
+        results.push(result);
+    }
+
+    let elapsed = start.elapsed();
+
+    Ok(OrderedWriteResult {
+        total_operations,
+        write_order,
+        results,
+        total_time_ms: elapsed.as_millis() as u64,
+    })
+}
+
+/// Analyze write operations and return ordered execution plan using existing graph.
+pub fn plan_write_order(graph: &CodeGraph, operations: &[WriteOp]) -> Vec<usize> {
+    let mut symbol_to_op: HashMap<String, usize> = HashMap::new();
+    let mut op_deps: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
+    let mut op_dependents: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
+
+    for (i, op) in operations.iter().enumerate() {
+        if let Some(ref symbol) = op.symbol {
+            symbol_to_op.insert(symbol.clone(), i);
+        }
+    }
+
+    for (i, op) in operations.iter().enumerate() {
+        if let Some(ref symbol) = op.symbol {
+            for dep in graph.dependencies(symbol) {
+                if let Some(&dep_idx) = symbol_to_op.get(&dep.symbol) {
+                    op_deps[i].push(dep_idx);
+                    op_dependents[dep_idx].push(i);
+                }
+            }
+        }
+    }
+
+    // Topological sort
+    let mut in_degree: Vec<usize> = op_deps.iter().map(|d| d.len()).collect();
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    let mut order: Vec<usize> = Vec::new();
+
+    for (i, &degree) in in_degree.iter().enumerate() {
+        if degree == 0 {
+            queue.push_back(i);
+        }
+    }
+
+    while let Some(idx) = queue.pop_front() {
+        order.push(idx);
+
+        for &dependent in &op_dependents[idx] {
+            in_degree[dependent] -= 1;
+            if in_degree[dependent] == 0 {
+                queue.push_back(dependent);
+            }
+        }
+    }
+
+    if order.len() != operations.len() {
+        let ordered_set: HashSet<usize> = order.iter().copied().collect();
+        for i in 0..operations.len() {
+            if !ordered_set.contains(&i) {
+                order.push(i);
+            }
+        }
+    }
+
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,7 +557,10 @@ mod tests {
 
         assert!(result.success);
         let content = fs::read_to_string(&path).unwrap();
-        assert_eq!(content, "line 1\nreplaced line A\nreplaced line B\nline 5\n");
+        assert_eq!(
+            content,
+            "line 1\nreplaced line A\nreplaced line B\nline 5\n"
+        );
         assert_eq!(result.lines_written, 2);
     }
 
@@ -393,5 +578,79 @@ mod tests {
         assert!(!content.contains("foo"));
         assert!(content.contains("qux"));
         assert_eq!(result.replacements, Some(3));
+    }
+
+    #[test]
+    fn test_write_ordered() {
+        use crate::graph::build_graph;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+
+        // Create test files first
+        let user_path = dir.path().join("user.rs");
+        let auth_path = dir.path().join("auth.rs");
+
+        fs::write(&user_path, "pub struct UserService {}").unwrap();
+        fs::write(
+            &auth_path,
+            "use super::user::UserService;\npub struct AuthService { user: UserService }",
+        )
+        .unwrap();
+
+        // Build graph from files
+        let graph = build_graph(dir.path());
+
+        // Write operations
+        let user_op = WriteOp {
+            path: user_path.clone(),
+            content: "pub struct UserService { id: u32 }".to_string(),
+            symbol: Some("UserService".to_string()),
+        };
+
+        let auth_op = WriteOp {
+            path: auth_path.clone(),
+            content: "use super::user::UserService;\npub struct AuthService { user: UserService }"
+                .to_string(),
+            symbol: Some("AuthService".to_string()),
+        };
+
+        // Pass in wrong order (auth before user)
+        let result = write_ordered(&graph, &[auth_op, user_op]).unwrap();
+
+        assert_eq!(result.total_operations, 2);
+        assert!(user_path.exists());
+        assert!(auth_path.exists());
+    }
+
+    #[test]
+    fn test_plan_write_order() {
+        use crate::graph::CodeGraph;
+
+        // Create a minimal graph for testing
+        let graph = CodeGraph::new();
+
+        let ops = vec![
+            WriteOp {
+                path: PathBuf::from("a.rs"),
+                content: String::new(),
+                symbol: Some("A".to_string()),
+            },
+            WriteOp {
+                path: PathBuf::from("b.rs"),
+                content: String::new(),
+                symbol: Some("B".to_string()),
+            },
+            WriteOp {
+                path: PathBuf::from("c.rs"),
+                content: String::new(),
+                symbol: Some("C".to_string()),
+            },
+        ];
+
+        let order = plan_write_order(&graph, &ops);
+
+        // With no dependencies, order should be 0, 1, 2
+        assert_eq!(order.len(), 3);
     }
 }
