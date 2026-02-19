@@ -5,13 +5,17 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ContextRequest {
-    #[schemars(description = "Symbol names to get context for (e.g. [\"login\", \"UserService\"])")]
+    #[schemars(
+        description = "Symbol names to get context for (e.g. [\"login\", \"UserService\"])"
+    )]
     pub symbols: Vec<String>,
 
     #[schemars(description = "Max results per symbol (default: 5)")]
     pub limit: Option<usize>,
 
-    #[schemars(description = "Show full unsliced code (default: false). Use when you need every line, not just dependency-relevant ones.")]
+    #[schemars(
+        description = "Show full unsliced code (default: false). Use when you need every line, not just dependency-relevant ones."
+    )]
     pub full: Option<bool>,
 }
 
@@ -20,7 +24,9 @@ pub struct SearchRequest {
     #[schemars(description = "Symbol name to search for")]
     pub query: String,
 
-    #[schemars(description = "Regex pattern for advanced search (Brzozowski derivatives, ReDoS-safe)")]
+    #[schemars(
+        description = "Regex pattern for advanced search (Brzozowski derivatives, ReDoS-safe)"
+    )]
     pub pattern: Option<String>,
 
     #[schemars(description = "Max results (default: 20)")]
@@ -50,9 +56,33 @@ pub struct WriteRequest {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ImpactRequest {
-    #[schemars(description = "Symbol name to analyze impact for (e.g. \"login\", \"UserService\")")]
+    #[schemars(
+        description = "Symbol name to analyze impact for (e.g. \"login\", \"UserService\")"
+    )]
     pub symbol: String,
 
-    #[schemars(description = "Optional new signature if you're changing the function (e.g. \"fn login(user: &str, token: &str) -> Result<bool>\")")]
+    #[schemars(
+        description = "Optional new signature if you're changing the function (e.g. \"fn login(user: &str, token: &str) -> Result<bool>\")"
+    )]
     pub new_signature: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OrderedWriteRequest {
+    #[schemars(description = "List of write operations with paths, content, and dependencies")]
+    pub operations: Vec<WriteOpRequest>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct WriteOpRequest {
+    #[schemars(description = "Relative file path (e.g. \"src/auth.rs\")")]
+    pub path: String,
+
+    #[schemars(description = "File content to write")]
+    pub content: String,
+
+    #[schemars(
+        description = "Symbol name this file defines (e.g. \"AuthService\"). Used to determine write order from existing graph."
+    )]
+    pub symbol: Option<String>,
 }

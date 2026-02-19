@@ -398,4 +398,46 @@ impl AnchorMcp {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    #[tool(description = "Write multiple files in dependency order. Uses existing graph to analyze dependencies and writes base classes/utilities BEFORE dependent code. Prevents broken imports and missing dependencies.")]
+    async fn write_ordered(
+        &self,
+        Parameters(req): Parameters<OrderedWriteRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let graph = self.load_graph()?;
+        
+        let operations: Vec<crate::write::WriteOp> = req
+            .operations
+            .into_iter()
+            .map(|op| crate::write::WriteOp {
+                path: self.root.join(&op.path),
+                content: op.content,
+                symbol: op.symbol,
+            })
+            .collect();
+
+        let result = crate::write::write_ordered(&graph, &operations)
+            .map_err(|e| Self::err(e.to_string()))?;
+
+        let mut output = String::new();
+        output.push_str("<ordered_write>\n");
+        output.push_str(&format!("<total_operations>{}</total_operations>\n", result.total_operations));
+        output.push_str("<write_order>\n");
+        for (i, path) in result.write_order.iter().enumerate() {
+            output.push_str(&format!("  {}. {}\n", i + 1, path));
+        }
+        output.push_str("</write_order>\n");
+        output.push_str(&format!("<total_time_ms>{}</total_time_ms>\n", result.total_time_ms));
+        output.push_str("<results>\n");
+        for r in &result.results {
+            output.push_str(&format!(
+                "  <file path=\"{}\" lines=\"{}\" bytes=\"{}\"/>\n",
+                r.path, r.lines_written, r.bytes_written
+            ));
+        }
+        output.push_str("</results>\n");
+        output.push_str("</ordered_write>\n");
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
 }
