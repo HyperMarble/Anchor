@@ -13,7 +13,12 @@ use crate::graphql::{build_schema, execute};
 /// Search for symbols by name or pattern (supports multiple queries).
 ///
 /// Wraps GraphQL `search` query with optional regex pattern.
-pub fn search(graph: &CodeGraph, queries: &[String], pattern: Option<&str>, limit: usize) -> Result<()> {
+pub fn search(
+    graph: &CodeGraph,
+    queries: &[String],
+    pattern: Option<&str>,
+    limit: usize,
+) -> Result<()> {
     let schema = build_schema(Arc::new(graph.clone()));
     let rt = tokio::runtime::Runtime::new()?;
 
@@ -51,7 +56,7 @@ pub fn search(graph: &CodeGraph, queries: &[String], pattern: Option<&str>, limi
             if let Some(arr) = errors.as_array() {
                 if !arr.is_empty() {
                     if let Some(msg) = arr[0].get("message") {
-                        println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                        println!("<error>{}</error>", msg.as_str().unwrap_or("unknown"));
                         continue;
                     }
                 }
@@ -60,14 +65,23 @@ pub fn search(graph: &CodeGraph, queries: &[String], pattern: Option<&str>, limi
 
         let data = json.get("data");
 
-        if let Some(symbols) = data.and_then(|d| d.get("search")).and_then(|s| s.as_array()) {
+        if let Some(symbols) = data
+            .and_then(|d| d.get("search"))
+            .and_then(|s| s.as_array())
+        {
             if symbols.is_empty() {
-                println!("No symbols match '{}'", query);
+                println!("<results query=\"{}\" count=\"0\"/>", query);
                 continue;
             }
+            println!(
+                "<results query=\"{}\" count=\"{}\">",
+                query,
+                symbols.len().min(limit)
+            );
             for sym in symbols.iter().take(limit) {
-                print_symbol_compact(sym);
+                print_symbol_structured(sym);
             }
+            println!("</results>");
         }
     }
 
@@ -93,7 +107,7 @@ pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
         if let Some(arr) = errors.as_array() {
             if !arr.is_empty() {
                 if let Some(msg) = arr[0].get("message") {
-                    println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                    println!("<error>{}</error>", msg.as_str().unwrap_or("unknown"));
                     return Ok(());
                 }
             }
@@ -108,59 +122,57 @@ pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
     let symbols = match symbols {
         Some(s) if !s.is_empty() => s,
         _ => {
-            println!("Symbol '{}' not found", symbol);
+            println!("<error>symbol '{}' not found</error>", symbol);
             return Ok(());
         }
     };
 
     let sym = &symbols[0];
 
-    // Header: symbol Kind file:line
     let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
 
-    let file_name = Path::new(file)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| file.to_string());
+    let mut caller_names: Vec<&str> = Vec::new();
+    let mut callee_names: Vec<&str> = Vec::new();
 
-    println!("{} {} {}:{}", name, kind, file_name, line);
-
-    // Callers (who calls this) - unique names only
     if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
-        let mut caller_names: Vec<&str> = callers
+        caller_names = callers
             .iter()
             .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
             .filter(|n| !is_file_name(n))
             .collect();
         caller_names.sort();
         caller_names.dedup();
-        if !caller_names.is_empty() {
-            println!("> {}", caller_names.join(" "));
-        }
     }
 
-    // Callees (what this calls) - unique names only
     if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
-        let mut callee_names: Vec<&str> = callees
+        callee_names = callees
             .iter()
             .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
             .filter(|n| !is_file_name(n))
             .collect();
         callee_names.sort();
         callee_names.dedup();
-        if !callee_names.is_empty() {
-            println!("< {}", callee_names.join(" "));
-        }
     }
 
-    // Code
-    if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
-        println!("---");
-        println!("{}", code);
+    let code = sym.get("code").and_then(|c| c.as_str()).unwrap_or("");
+    println!("<symbol>");
+    println!("<name>{}</name>", name);
+    println!("<kind>{}</kind>", kind);
+    println!("<file>{}</file>", file);
+    println!("<line>{}</line>", line);
+    if !caller_names.is_empty() {
+        println!("<callers>{}</callers>", caller_names.join(" "));
     }
+    if !callee_names.is_empty() {
+        println!("<callees>{}</callees>", callee_names.join(" "));
+    }
+    println!("<code>");
+    println!("{}", code);
+    println!("</code>");
+    println!("</symbol>");
 
     Ok(())
 }
@@ -171,7 +183,6 @@ pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
 pub fn context(graph: &CodeGraph, queries: &[String], limit: usize, full: bool) -> Result<()> {
     let schema = build_schema(Arc::new(graph.clone()));
     let rt = tokio::runtime::Runtime::new()?;
-    let mut first = true;
 
     for query in queries {
         let gql_query = format!(
@@ -187,7 +198,7 @@ pub fn context(graph: &CodeGraph, queries: &[String], limit: usize, full: bool) 
             if let Some(arr) = errors.as_array() {
                 if !arr.is_empty() {
                     if let Some(msg) = arr[0].get("message") {
-                        println!("Error: {}", msg.as_str().unwrap_or("unknown"));
+                        println!("<error>{}</error>", msg.as_str().unwrap_or("unknown"));
                         continue;
                     }
                 }
@@ -202,60 +213,65 @@ pub fn context(graph: &CodeGraph, queries: &[String], limit: usize, full: bool) 
         let symbols = match symbols {
             Some(s) if !s.is_empty() => s,
             _ => {
-                println!("No results for '{}'", query);
+                println!("<results query=\"{}\" count=\"0\"/>", query);
                 continue;
             }
         };
 
-        for sym in symbols.iter().take(limit) {
-            if !first {
-                println!("\n===");
-            }
-            first = false;
+        println!(
+            "<results query=\"{}\" count=\"{}\">",
+            query,
+            symbols.len().min(limit)
+        );
 
+        for sym in symbols.iter().take(limit) {
             let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
             let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
             let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
 
-            let file_name = Path::new(file)
-                .file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| file.to_string());
-
-            println!("{} {} {}:{}", name, kind, file_name, line);
+            let mut caller_names: Vec<&str> = Vec::new();
+            let mut callee_names: Vec<&str> = Vec::new();
 
             if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
-                let mut caller_names: Vec<&str> = callers
+                caller_names = callers
                     .iter()
                     .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
                     .filter(|n| !is_file_name(n))
                     .collect();
                 caller_names.sort();
                 caller_names.dedup();
-                if !caller_names.is_empty() {
-                    println!("> {}", caller_names.join(" "));
-                }
             }
 
             if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
-                let mut callee_names: Vec<&str> = callees
+                callee_names = callees
                     .iter()
                     .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
                     .filter(|n| !is_file_name(n))
                     .collect();
                 callee_names.sort();
                 callee_names.dedup();
-                if !callee_names.is_empty() {
-                    println!("< {}", callee_names.join(" "));
-                }
             }
 
-            if let Some(code) = sym.get("code").and_then(|c| c.as_str()) {
-                println!("---");
-                println!("{}", code);
+            let code = sym.get("code").and_then(|c| c.as_str()).unwrap_or("");
+            println!("<symbol>");
+            println!("<name>{}</name>", name);
+            println!("<kind>{}</kind>", kind);
+            println!("<file>{}</file>", file);
+            println!("<line>{}</line>", line);
+            if !caller_names.is_empty() {
+                println!("<callers>{}</callers>", caller_names.join(" "));
             }
+            if !callee_names.is_empty() {
+                println!("<callees>{}</callees>", callee_names.join(" "));
+            }
+            println!("<code>");
+            println!("{}", code);
+            println!("</code>");
+            println!("</symbol>");
         }
+
+        println!("</results>");
     }
 
     Ok(())
@@ -263,13 +279,16 @@ pub fn context(graph: &CodeGraph, queries: &[String], limit: usize, full: bool) 
 
 /// Build/rebuild the code graph
 pub fn build(root: &Path, cache_path: &Path) -> Result<()> {
-    println!("Building...");
     let graph = crate::graph::build_graph(root);
     std::fs::create_dir_all(cache_path.parent().unwrap())?;
     graph.save(cache_path)?;
 
     let stats = graph.stats();
-    println!("files:{} symbols:{} edges:{}", stats.file_count, stats.symbol_count, stats.total_edges);
+    println!("<build>");
+    println!("<files>{}</files>", stats.file_count);
+    println!("<symbols>{}</symbols>", stats.symbol_count);
+    println!("<edges>{}</edges>", stats.total_edges);
+    println!("</build>");
     Ok(())
 }
 
@@ -285,25 +304,37 @@ pub fn stats(graph: &CodeGraph) -> Result<()> {
         let files = stats.get("files").and_then(|v| v.as_i64()).unwrap_or(0);
         let symbols = stats.get("symbols").and_then(|v| v.as_i64()).unwrap_or(0);
         let edges = stats.get("edges").and_then(|v| v.as_i64()).unwrap_or(0);
-        println!("files:{} symbols:{} edges:{}", files, symbols, edges);
+        println!("<stats>");
+        println!("<files>{}</files>", files);
+        println!("<symbols>{}</symbols>", symbols);
+        println!("<edges>{}</edges>", edges);
+        println!("</stats>");
     }
 
     Ok(())
 }
 
-/// Print a symbol in compact format: name Kind file:line
-fn print_symbol_compact(sym: &serde_json::Value) {
+/// Print a symbol in structured format for AI
+fn print_symbol_structured(sym: &serde_json::Value) {
     let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
     let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
     let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
+    let code = sym.get("code").and_then(|v| v.as_str()).unwrap_or("");
 
-    let file_name = Path::new(file)
-        .file_name()
-        .map(|f| f.to_string_lossy().to_string())
-        .unwrap_or_else(|| file.to_string());
-
-    println!("{} {} {}:{}", name, kind, file_name, line);
+    println!("<symbol>");
+    println!("<name>{}</name>", name);
+    println!("<kind>{}</kind>", kind);
+    println!("<file>{}</file>", file);
+    println!("<line>{}</line>", line);
+    if !code.is_empty() {
+        println!("<code>");
+        for line in code.lines() {
+            println!("{}", line);
+        }
+        println!("</code>");
+    }
+    println!("</symbol>");
 }
 
 /// Check if a string looks like a file name
@@ -321,48 +352,57 @@ fn escape_graphql(s: &str) -> String {
 /// Show codebase overview - files grouped by directory with symbol counts
 pub fn overview(graph: &CodeGraph) -> Result<()> {
     let stats = graph.stats();
-    println!("files:{} symbols:{} edges:{}", stats.file_count, stats.symbol_count, stats.total_edges);
-    println!();
+    println!("<overview>");
+    println!("<files>{}</files>", stats.file_count);
+    println!("<symbols>{}</symbols>", stats.symbol_count);
+    println!("<edges>{}</edges>", stats.total_edges);
 
     // Get all files and group by directory
-    let mut dirs: std::collections::BTreeMap<String, Vec<(String, usize)>> = std::collections::BTreeMap::new();
+    let mut dirs: std::collections::BTreeMap<String, Vec<(String, usize)>> =
+        std::collections::BTreeMap::new();
 
     for file_path in graph.all_files() {
         let symbols = graph.symbols_in_file(&file_path);
-        let dir = file_path.parent()
+        let dir = file_path
+            .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
-        let file_name = file_path.file_name()
+        let file_name = file_path
+            .file_name()
             .map(|f| f.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        dirs.entry(dir).or_default().push((file_name, symbols.len()));
+        dirs.entry(dir)
+            .or_default()
+            .push((file_name, symbols.len()));
     }
 
+    println!("<directories>");
     for (dir, files) in &dirs {
-        println!("{}/", dir);
+        println!("<dir path=\"{}\">", dir);
         for (file, count) in files {
-            println!("  {} ({})", file, count);
+            println!("<file name=\"{}\" symbols=\"{}\"/>", file, count);
         }
+        println!("</dir>");
     }
+    println!("</directories>");
+    println!("</overview>");
 
     Ok(())
 }
 
 /// List all indexed files as tree
 pub fn files(graph: &CodeGraph) -> Result<()> {
-    for file_path in graph.all_files() {
-        println!("{}", file_path.display());
+    let all_files = graph.all_files();
+    println!("<files count=\"{}\">", all_files.len());
+    for file_path in all_files {
+        println!("<file>{}</file>", file_path.display());
     }
+    println!("</files>");
     Ok(())
 }
 
 /// Show codebase map - compact view for AI agents
-///
-/// Format:
-/// module(symbols) module(symbols) ...
-/// ENTRY: symbols with no callers
-/// TOP: most connected symbols
 pub fn map(graph: &CodeGraph, scope: Option<&str>) -> Result<()> {
     use std::collections::{BTreeMap, HashSet};
 
@@ -371,7 +411,8 @@ pub fn map(graph: &CodeGraph, scope: Option<&str>) -> Result<()> {
     let mut all_symbols: Vec<(String, String, usize, usize, String)> = Vec::new();
 
     for file_path in graph.all_files() {
-        let dir = file_path.parent()
+        let dir = file_path
+            .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
 
@@ -384,7 +425,10 @@ pub fn map(graph: &CodeGraph, scope: Option<&str>) -> Result<()> {
 
         for symbol in graph.symbols_in_file(&file_path) {
             // Skip imports and files
-            if matches!(symbol.kind, crate::graph::types::NodeKind::Import | crate::graph::types::NodeKind::File) {
+            if matches!(
+                symbol.kind,
+                crate::graph::types::NodeKind::Import | crate::graph::types::NodeKind::File
+            ) {
                 continue;
             }
 
@@ -392,80 +436,61 @@ pub fn map(graph: &CodeGraph, scope: Option<&str>) -> Result<()> {
             let callees = graph.dependencies(&symbol.name).len();
             let short_module = dir.split('/').last().unwrap_or(&dir).to_string();
 
-            modules.entry(dir.clone())
-                .or_default()
-                .push((symbol.name.clone(), symbol.kind.to_string(), callers, callees));
+            modules.entry(dir.clone()).or_default().push((
+                symbol.name.clone(),
+                symbol.kind.to_string(),
+                callers,
+                callees,
+            ));
 
-            all_symbols.push((symbol.name.clone(), symbol.kind.to_string(), callers, callees, short_module));
+            all_symbols.push((
+                symbol.name.clone(),
+                symbol.kind.to_string(),
+                callers,
+                callees,
+                short_module,
+            ));
         }
     }
 
     if modules.is_empty() {
-        println!("No symbols found");
+        println!("<map/>");
         return Ok(());
     }
 
-    // If scope specified, show detailed view of that module
-    if scope.is_some() {
-        for (dir, symbols) in &modules {
-            println!("@{}", dir);
-            for (name, kind, callers, callees) in symbols {
-                let mut parts = Vec::new();
-                if *callees > 0 {
-                    let deps: Vec<String> = graph.dependencies(name)
-                        .iter()
-                        .take(5)
-                        .map(|d| d.symbol.clone())
-                        .collect();
-                    if !deps.is_empty() {
-                        parts.push(format!(">{}", deps.join(",")));
-                    }
-                }
-                if *callers > 0 {
-                    let callers_list: Vec<String> = graph.dependents(name)
-                        .iter()
-                        .take(5)
-                        .map(|d| d.symbol.clone())
-                        .collect();
-                    if !callers_list.is_empty() {
-                        parts.push(format!("<{}", callers_list.join(",")));
-                    }
-                }
-                if parts.is_empty() {
-                    println!("  {}.{}", name, short_kind(kind));
-                } else {
-                    println!("  {}.{} {}", name, short_kind(kind), parts.join(" "));
-                }
-            }
-        }
-        return Ok(());
+    println!("<map>");
+
+    // Modules with counts
+    println!("<modules>");
+    for (dir, symbols) in &modules {
+        let short_dir = dir.split('/').last().unwrap_or(dir);
+        println!(
+            "<module name=\"{}\" symbols=\"{}\"/>",
+            short_dir,
+            symbols.len()
+        );
     }
+    println!("</modules>");
 
-    // Top level view: modules with counts
-    let module_line: Vec<String> = modules.iter()
-        .map(|(dir, symbols)| {
-            let short_dir = dir.split('/').last().unwrap_or(dir);
-            format!("{}({}s)", short_dir, symbols.len())
-        })
-        .collect();
-    println!("{}", module_line.join(" "));
-
-    // Entry points: functions/methods with 0 callers AND have callees (actually do something)
-    let entries: Vec<String> = all_symbols.iter()
+    // Entry points: functions/methods with 0 callers AND have callees
+    let entries: Vec<String> = all_symbols
+        .iter()
         .filter(|(name, kind, callers, callees, _)| {
-            *callers == 0 && *callees > 0 &&
-            (kind == "function" || kind == "method") &&
-            !name.starts_with("test_") && name != "new"
+            *callers == 0
+                && *callees > 0
+                && (kind == "function" || kind == "method")
+                && !name.starts_with("test_")
+                && name != "new"
         })
         .map(|(name, _, _, _, module)| format!("{}:{}", module, name))
         .take(10)
         .collect();
 
     if !entries.is_empty() {
-        println!("ENTRY: {}", entries.join(" "));
+        println!("<entry>{}</entry>", entries.join(" "));
     }
 
-    // Top connected: symbols with most relationships (deduplicated by name)
+    // Top connected: symbols with most relationships
     let mut by_connections = all_symbols.clone();
     by_connections.sort_by(|a, b| (b.2 + b.3).cmp(&(a.2 + a.3)));
 
@@ -485,8 +510,10 @@ pub fn map(graph: &CodeGraph, scope: Option<&str>) -> Result<()> {
     }
 
     if !top.is_empty() {
-        println!("TOP: {}", top.join(" "));
+        println!("<top>{}</top>", top.join(" "));
     }
+
+    println!("</map>");
 
     Ok(())
 }

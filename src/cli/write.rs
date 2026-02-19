@@ -3,9 +3,7 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::write::{
-    batch_replace_all, create_file, insert_after, replace_all, BatchWriteResult,
-};
+use crate::write::{batch_replace_all, create_file, insert_after, replace_all, BatchWriteResult};
 
 /// Create a new file
 pub fn create(path: &str, content: &str) -> Result<()> {
@@ -18,12 +16,18 @@ pub fn create(path: &str, content: &str) -> Result<()> {
 
     match create_file(path, content) {
         Ok(result) => {
-            println!("Created: {}", result.path);
-            println!("  Lines: {}", result.lines_written);
-            println!("  Bytes: {}", result.bytes_written);
+            println!("<result>");
+            println!("<path>{}</path>", result.path);
+            println!("<status>created</status>");
+            println!("<lines>{}</lines>", result.lines_written);
+            println!("<bytes>{}</bytes>", result.bytes_written);
+            println!("</result>");
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            println!("<result>");
+            println!("<status>error</status>");
+            println!("<message>{}</message>", e);
+            println!("</result>");
         }
     }
     Ok(())
@@ -34,12 +38,18 @@ pub fn insert(path: &str, pattern: &str, content: &str) -> Result<()> {
     let path = Path::new(path);
     match insert_after(path, pattern, content) {
         Ok(result) => {
-            println!("Inserted in: {}", result.path);
-            println!("  After: '{}'", pattern);
-            println!("  Lines added: {}", result.lines_written);
+            println!("<result>");
+            println!("<path>{}</path>", result.path);
+            println!("<status>inserted</status>");
+            println!("<lines>{}</lines>", result.lines_written);
+            println!("<pattern>{}</pattern>", pattern);
+            println!("</result>");
         }
         Err(e) => {
-            eprintln!("Error: {}", e);
+            println!("<result>");
+            println!("<status>error</status>");
+            println!("<message>{}</message>", e);
+            println!("</result>");
         }
     }
     Ok(())
@@ -50,7 +60,10 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
     let paths = expand_glob(root, pattern)?;
 
     if paths.is_empty() {
-        println!("No files match pattern: {}", pattern);
+        println!("<result>");
+        println!("<status>no_match</status>");
+        println!("<pattern>{}</pattern>", pattern);
+        println!("</result>");
         return Ok(());
     }
 
@@ -58,13 +71,20 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         // Single file
         match replace_all(&paths[0], old, new) {
             Ok(result) => {
-                println!("Replaced in: {}", result.path);
-                if let Some(count) = result.replacements {
-                    println!("  Replacements: {}", count);
-                }
+                let count = result.replacements.unwrap_or(0);
+                println!("<result>");
+                println!("<path>{}</path>", result.path);
+                println!("<status>replaced</status>");
+                println!("<replacements>{}</replacements>", count);
+                println!("<old>{}</old>", old);
+                println!("<new>{}</new>", new);
+                println!("</result>");
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                println!("<result>");
+                println!("<status>error</status>");
+                println!("<message>{}</message>", e);
+                println!("</result>");
             }
         }
     } else {
@@ -72,26 +92,31 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         let results = batch_replace_all(&paths, old, new);
         let summary = BatchWriteResult::from_results(results);
 
-        println!("Replace: '{}' → '{}'", old, new);
-        println!();
-        println!("  Files matched: {}", summary.total_files);
-        println!("  Successful:    {}", summary.successful);
-        println!("  Failed:        {}", summary.failed);
-        println!("  Time:          {}ms", summary.total_time_ms);
+        let total_replacements: usize = summary.results.iter().filter_map(|r| r.replacements).sum();
 
-        let total_replacements: usize =
-            summary.results.iter().filter_map(|r| r.replacements).sum();
-        println!("  Total replacements: {}", total_replacements);
-
-        if !summary.results.is_empty() {
-            println!();
-            println!("Modified files:");
-            for result in &summary.results {
-                if let Some(count) = result.replacements {
-                    println!("    {} ({} replacements)", result.path, count);
-                }
+        println!("<result>");
+        println!("<status>batch_replaced</status>");
+        println!("<total_files>{}</total_files>", summary.total_files);
+        println!("<successful>{}</successful>", summary.successful);
+        println!("<failed>{}</failed>", summary.failed);
+        println!(
+            "<total_replacements>{}</total_replacements>",
+            total_replacements
+        );
+        println!("<time_ms>{}</time_ms>", summary.total_time_ms);
+        println!("<old>{}</old>", old);
+        println!("<new>{}</new>", new);
+        println!("<files>");
+        for result in &summary.results {
+            if let Some(count) = result.replacements {
+                println!(
+                    "<file path=\"{}\" replacements=\"{}\"/>",
+                    result.path, count
+                );
             }
         }
+        println!("</files>");
+        println!("</result>");
     }
     Ok(())
 }
