@@ -3,11 +3,9 @@
 //! Commands:
 //! - Read/Search: search, read, context
 //! - Write: write, edit (TODO: ACI-based)
-//! - Parallel: plan
 //! - System: build, stats, daemon
 
 pub mod daemon;
-pub mod plan;
 pub mod read;
 pub mod write;
 
@@ -44,7 +42,6 @@ Start here:
 Query:
   context <sym> [sym2…]  Code + callers + callees
   search <q> [q2…]      Find symbols
-  plan <file.json>      Batch operations (parallel)
 
 Write:
   write <path> <content>      Create/overwrite file
@@ -89,19 +86,9 @@ pub enum Commands {
         limit: usize,
     },
 
-    // ─── Parallel (1 command) ─────────────────────────────────────
-    /// Execute parallel read operations from plan.json
-    Plan {
-        /// Path to plan JSON file
-        file: String,
-    },
-
     // ─── Write Commands ──────────────────────────────────────────
     /// Create or overwrite a file
-    Write {
-        path: String,
-        content: String,
-    },
+    Write { path: String, content: String },
 
     /// Edit a file (insert, replace, delete)
     Edit {

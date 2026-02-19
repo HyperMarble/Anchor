@@ -9,9 +9,6 @@
 //!   anchor write <path> <content>    Create/overwrite file
 //!   anchor edit <path> ...           Edit existing file
 //!
-//! Parallel:
-//!   anchor plan <plan.json>          Parallel operations
-//!
 //! System:
 //!   anchor build                     Build graph
 //!   anchor stats                     Show stats
@@ -45,12 +42,20 @@ fn run(cli: Cli) -> Result<()> {
 
     match cli.command.unwrap() {
         // ─── Query Commands ───────────────────────────────────────
-        Commands::Context { queries, limit, full } => {
+        Commands::Context {
+            queries,
+            limit,
+            full,
+        } => {
             let graph = load_or_build_graph(&root, &cache_path)?;
             cli_read::context(&graph, &queries, limit, full)
         }
 
-        Commands::Search { queries, pattern, limit } => {
+        Commands::Search {
+            queries,
+            pattern,
+            limit,
+        } => {
             let graph = load_or_build_graph(&root, &cache_path)?;
             cli_read::search(&graph, &queries, pattern.as_deref(), limit)
         }
@@ -62,35 +67,53 @@ fn run(cli: Cli) -> Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&full_path, &content)?;
-            println!(r#"{{"status": "created", "path": "{}"}}"#, path);
+            println!("<result>");
+            println!("<path>{}</path>", path);
+            println!("<status>created</status>");
+            println!("<bytes>{}</bytes>", content.len());
+            println!("</result>");
             Ok(())
         }
 
-        Commands::Edit { path, action, pattern, content } => {
+        Commands::Edit {
+            path,
+            action,
+            pattern,
+            content,
+        } => {
             let full_path = root.join(&path);
             match action.as_str() {
                 "insert" => {
-                    let c = content.ok_or_else(|| anyhow::anyhow!("Content required for insert"))?;
+                    let c =
+                        content.ok_or_else(|| anyhow::anyhow!("Content required for insert"))?;
                     anchor::insert_after(&full_path, &pattern, &c)?;
-                    println!(r#"{{"status": "inserted", "path": "{}"}}"#, path);
+                    println!("<result>");
+                    println!("<path>{}</path>", path);
+                    println!("<status>inserted</status>");
+                    println!("<pattern>{}</pattern>", pattern);
+                    println!("</result>");
                 }
                 "replace" => {
-                    let c = content.ok_or_else(|| anyhow::anyhow!("Content required for replace"))?;
+                    let c =
+                        content.ok_or_else(|| anyhow::anyhow!("Content required for replace"))?;
                     anchor::replace_all(&full_path, &pattern, &c)?;
-                    println!(r#"{{"status": "replaced", "path": "{}"}}"#, path);
+                    println!("<result>");
+                    println!("<path>{}</path>", path);
+                    println!("<status>replaced</status>");
+                    println!("<pattern>{}</pattern>", pattern);
+                    println!("</result>");
                 }
                 "delete" => {
                     anchor::replace_all(&full_path, &pattern, "")?;
-                    println!(r#"{{"status": "deleted", "path": "{}"}}"#, path);
+                    println!("<result>");
+                    println!("<path>{}</path>", path);
+                    println!("<status>deleted</status>");
+                    println!("<pattern>{}</pattern>", pattern);
+                    println!("</result>");
                 }
                 _ => return Err(anyhow::anyhow!("Unknown action: {}", action)),
             }
             Ok(())
-        }
-
-        // ─── Parallel Command ─────────────────────────────────────
-        Commands::Plan { file } => {
-            cli::plan::execute(&root, &file)
         }
 
         // ─── System Commands ──────────────────────────────────────
@@ -99,7 +122,6 @@ fn run(cli: Cli) -> Result<()> {
             // Auto-start daemon for file watching
             if !anchor::daemon::is_daemon_running(&root) {
                 cli::daemon::start_background(&root)?;
-                println!("daemon: watching for changes");
             }
             Ok(())
         }
@@ -124,23 +146,15 @@ fn run(cli: Cli) -> Result<()> {
             cli_read::stats(&graph)
         }
 
-        Commands::Mcp => {
-            tokio::runtime::Runtime::new()
-                .expect("Failed to create tokio runtime")
-                .block_on(anchor::mcp::run(root))
-        }
+        Commands::Mcp => tokio::runtime::Runtime::new()
+            .expect("Failed to create tokio runtime")
+            .block_on(anchor::mcp::run(root)),
 
-        Commands::Daemon { action } => {
-            cli::daemon::handle(&root, action.as_ref())
-        }
+        Commands::Daemon { action } => cli::daemon::handle(&root, action.as_ref()),
 
-        Commands::Update => {
-            updater::update()
-        }
+        Commands::Update => updater::update(),
 
-        Commands::Uninstall => {
-            uninstall()
-        }
+        Commands::Uninstall => uninstall(),
 
         Commands::Version => {
             println!("v{}", updater::VERSION);
@@ -164,10 +178,7 @@ fn uninstall() -> Result<()> {
         echo "Anchor uninstalled."
     "#;
 
-    Command::new("sh")
-        .arg("-c")
-        .arg(script)
-        .status()?;
+    Command::new("sh").arg("-c").arg(script).status()?;
 
     Ok(())
 }
