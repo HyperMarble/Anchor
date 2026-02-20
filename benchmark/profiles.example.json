@@ -1,0 +1,28 @@
+{
+  "with_anchor": {
+    "mode_hint": "Use Anchor for search/read/understand/write when beneficial.",
+    "prompt_rules": [
+      "Prefer Anchor context/search/map/write tools over raw file traversal whenever possible.",
+      "Minimize tool calls by batching retrieval and targeted edits."
+    ],
+    "agent_cmd_template": "codex run --cwd {repo_path} --prompt-file {prompt_file}",
+    "pre_cmds": [
+      "anchor build"
+    ],
+    "env": {},
+    "token_usage_regex": "tokens\\s*[:=]\\s*(\\d+)",
+    "tool_calls_regex": "tool\\s*calls\\s*[:=]\\s*(\\d+)"
+  },
+  "without_anchor": {
+    "mode_hint": "Do not use Anchor. Use native file traversal and editing tools only.",
+    "prompt_rules": [
+      "Do not invoke Anchor CLI or Anchor MCP tools.",
+      "Use native repo/file traversal and editing commands only."
+    ],
+    "agent_cmd_template": "codex run --cwd {repo_path} --prompt-file {prompt_file}",
+    "pre_cmds": [],
+    "env": {},
+    "token_usage_regex": "tokens\\s*[:=]\\s*(\\d+)",
+    "tool_calls_regex": "tool\\s*calls\\s*[:=]\\s*(\\d+)"
+  }
+}
