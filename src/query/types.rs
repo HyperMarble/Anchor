@@ -1,6 +1,9 @@
-//! Query response types.
-//!
-//! Separated for modularity - types can evolve independently of logic.
+//
+//  types.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use serde::{Deserialize, Serialize};
 

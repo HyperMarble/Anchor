@@ -1,10 +1,9 @@
-//! Kotlin API endpoint detection via AST traversal.
-//!
-//! Detects Ktor and Spring Boot patterns:
-//!   - get("/api/users") { ... }  (Ktor)
-//!   - post("/api/users") { ... }  (Ktor)
-//!   - @GetMapping("/api/users")   (Spring)
-//!   - @PostMapping("/api/users")  (Spring)
+//
+//  kotlin.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

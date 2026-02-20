@@ -1,10 +1,9 @@
-//! Java API endpoint detection via AST traversal.
-//!
-//! Detects Spring Boot annotations:
-//!   - @GetMapping("/api/users")
-//!   - @PostMapping("/api/users")
-//!   - @RequestMapping(value = "/api/users", method = RequestMethod.GET)
-//!   - @RestController + @RequestMapping("/api")
+//
+//  java.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

@@ -1,9 +1,9 @@
-//! Locked write operations - automatically acquire locks before writing.
-//!
-//! These are the "safe" versions of write operations that:
-//! 1. Acquire lock on target file + dependents
-//! 2. Execute the write
-//! 3. Release lock (automatically via guard)
+//
+//  write.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::path::Path;
 use std::time::Duration;

@@ -1,7 +1,9 @@
-//! Code graph module — the structural backbone of Anchor.
-//!
-//! Provides the graph data model, engine, query capabilities,
-//! and directory scanning/building for the code graph.
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod builder;
 pub mod engine;

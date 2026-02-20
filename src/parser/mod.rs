@@ -1,7 +1,9 @@
-//! Parser module — tree-sitter based multi-language AST extraction.
-//!
-//! Handles parsing source files into structured symbol data
-//! that feeds into the code graph.
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod extractor;
 pub mod language;

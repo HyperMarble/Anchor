@@ -1,7 +1,9 @@
-//! Graph persistence — save and load CodeGraph to/from disk.
-//!
-//! Uses bincode for compact binary serialization. Atomic writes
-//! (write to .tmp, then rename) prevent corruption from crashes.
+//
+//  persistence.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use serde::{Deserialize, Serialize};
 use std::fs;

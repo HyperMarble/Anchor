@@ -1,15 +1,9 @@
-//! Query module — high-level search and context queries.
-//!
-//! The main interface for AI agents to query the code graph.
-//!
-//! ## Core API
-//!
-//! ```ignore
-//! // Three intents - that's it
-//! get_context(graph, "login", "explore")  // What is it? How does it work?
-//! get_context(graph, "login", "change")   // I'm modifying - what breaks?
-//! get_context(graph, "login", "create")   // Adding similar - show patterns
-//! ```
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod context;
 pub mod search;

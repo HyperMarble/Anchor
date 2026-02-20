@@ -1,6 +1,9 @@
-//! Query operations on the code graph.
-//!
-//! Search, traversal, stats, and dependency lookups.
+//
+//  query.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;

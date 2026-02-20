@@ -1,9 +1,9 @@
-//! Generic symbol extraction using tree-sitter tags queries.
-//!
-//! Each grammar crate ships a `TAGS_QUERY` that defines patterns for
-//! `@definition.*` (symbols) and `@reference.call` (calls). This module
-//! runs those queries and maps captures to our graph types — one extractor
-//! for all languages instead of per-language code.
+//
+//  tags.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::collections::HashSet;
 

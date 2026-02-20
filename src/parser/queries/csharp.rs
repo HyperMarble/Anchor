@@ -1,10 +1,9 @@
-//! C# API endpoint detection via AST traversal.
-//!
-//! Detects ASP.NET Core patterns:
-//!   - [HttpGet("/api/users")]
-//!   - [HttpPost("/api/users")]
-//!   - [Route("/api/users")]
-//!   - app.MapGet("/api/users", handler) (Minimal APIs)
+//
+//  csharp.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

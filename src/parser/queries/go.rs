@@ -1,11 +1,9 @@
-//! Go API endpoint detection via AST traversal.
-//!
-//! Detects popular Go web frameworks:
-//!   - Gin: r.GET("/api/users", handler)
-//!   - Echo: e.GET("/api/users", handler)
-//!   - Chi: r.Get("/api/users", handler)
-//!   - Fiber: app.Get("/api/users", handler)
-//!   - net/http: http.HandleFunc("/api/users", handler)
+//
+//  go.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

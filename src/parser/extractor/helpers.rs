@@ -1,4 +1,9 @@
-//! Shared helper functions for symbol extraction.
+//
+//  helpers.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 

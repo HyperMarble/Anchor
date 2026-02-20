@@ -1,8 +1,9 @@
-//! JavaScript/TypeScript API endpoint detection via AST traversal.
-//!
-//! Detects:
-//! - Frontend API calls: fetch(), axios.get(), etc.
-//! - Backend route definitions: app.get(), router.post(), etc.
+//
+//  javascript.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

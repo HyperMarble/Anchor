@@ -1,8 +1,9 @@
-//! Symbol extraction from source code using tree-sitter tags queries.
-//!
-//! Instead of per-language extraction logic, we use the `TAGS_QUERY`
-//! shipped by each grammar crate. One generic extractor handles all
-//! languages — adding a new language only requires its tags query.
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 mod helpers;
 mod tags;

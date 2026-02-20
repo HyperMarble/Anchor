@@ -1,10 +1,9 @@
-//! Ruby API endpoint detection via AST traversal.
-//!
-//! Detects Rails and Sinatra routes:
-//!   - get '/api/users', to: 'users#index'
-//!   - post '/api/users', to: 'users#create'
-//!   - resources :users
-//!   - Sinatra: get '/api/users' do
+//
+//  ruby.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

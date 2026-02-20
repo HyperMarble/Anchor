@@ -1,4 +1,9 @@
-//! Lock manager — dependency-aware symbol and file locking.
+//
+//  manager.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

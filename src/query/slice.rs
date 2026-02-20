@@ -1,11 +1,9 @@
-//! Graph-aware code slicing.
-//!
-//! Given a symbol's full code and its call lines from the graph,
-//! returns only the lines that matter: signature, dependency calls,
-//! returns, and closing brace.
-//!
-//! This is NOT academic program slicing. It's graph-informed filtering:
-//! "show only the lines where this symbol interacts with its dependencies."
+//
+//  slice.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 /// Result of slicing a symbol's code.
 pub struct SliceResult {

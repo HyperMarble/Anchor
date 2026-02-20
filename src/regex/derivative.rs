@@ -1,7 +1,9 @@
-//! Brzozowski Derivatives - ReDoS-immune regex matching.
-//!
-//! Instead of NFA/DFA construction, we compute derivatives directly.
-//! Linear in input length, no catastrophic backtracking.
+//
+//  derivative.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -1,4 +1,9 @@
-//! Self-updater — checks for new versions and updates the binary.
+//
+//  updater.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use anyhow::Result;
 use serde::Deserialize;

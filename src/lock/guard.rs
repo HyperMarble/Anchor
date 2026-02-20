@@ -1,4 +1,9 @@
-//! RAII lock guard — automatically releases lock when dropped.
+//
+//  guard.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::path::Path;
 use std::time::Duration;

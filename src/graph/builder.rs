@@ -1,7 +1,9 @@
-//! Graph builder — scans a directory and builds the code graph.
-//!
-//! Walks source files respecting .gitignore, parses each with tree-sitter,
-//! and assembles the complete code graph with all relationships.
+//
+//  builder.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use ignore::WalkBuilder;
 use rayon::prelude::*;

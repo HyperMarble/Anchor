@@ -1,7 +1,9 @@
-//! Unified API endpoint detection via AST traversal.
-//!
-//! This module provides a single entry point for extracting API endpoints
-//! from any supported language using direct AST walking.
+//
+//  api.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::path::Path;
 use tree_sitter::Node;

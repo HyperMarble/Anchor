@@ -1,8 +1,9 @@
-//! AST-based API endpoint detection for multiple languages.
-//!
-//! Each language module walks the AST directly to find API definitions
-//! and consumptions. This approach is more reliable than regex-based
-//! pattern matching.
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod api;
 pub mod python;

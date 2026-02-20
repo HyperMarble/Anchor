@@ -1,7 +1,9 @@
-//! Core types for the Anchor code graph.
-//!
-//! Defines node kinds, edge kinds, and the data structures
-//! that represent code elements and their relationships.
+//
+//  types.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use serde::{Deserialize, Serialize};
 use std::fmt;

@@ -1,7 +1,9 @@
-//! Write operations for Anchor: create, insert, and refactor files.
-//!
-//! These operations enable AI agents to modify code with minimal tokens.
-//! Graph-guided write order ensures dependencies are written before dependents.
+//
+//  write.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;

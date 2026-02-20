@@ -1,7 +1,9 @@
-//! The core graph engine for Anchor.
-//!
-//! Defines the CodeGraph struct and provides basic node/edge operations.
-//! Query methods are in `query.rs`, mutation methods in `mutation.rs`.
+//
+//  engine.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;

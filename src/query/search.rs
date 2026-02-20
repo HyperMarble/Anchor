@@ -1,7 +1,9 @@
-//! Basic search functions.
-//!
-//! These are the lower-level search operations. For high-level
-//! agent queries, use `get_context` from the context module.
+//
+//  search.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use crate::graph::{CodeGraph, GraphSearchResult};
 

@@ -1,9 +1,9 @@
-//! Python API endpoint detection via AST traversal.
-//!
-//! Detects Flask/FastAPI/Django route decorators:
-//!   @app.route("/api/users")
-//!   @router.get("/api/users/{id}")
-//!   @app.post("/api/items")
+//
+//  python.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use tree_sitter::Node;
 use crate::graph::types::{ExtractedApiEndpoint, ApiEndpointKind};

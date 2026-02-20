@@ -1,6 +1,9 @@
-//! Simple regex parser.
-//!
-//! Supports: literals, ., *, +, ?, |, &, ~, ^, $, (), []
+//
+//  parser.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::sync::Arc;
 

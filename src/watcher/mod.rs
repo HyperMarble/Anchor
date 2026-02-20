@@ -1,7 +1,9 @@
-//! File watcher module — real-time incremental graph updates.
-//!
-//! Watches the project directory for file changes and incrementally
-//! updates the code graph without requiring a full rebuild.
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use notify_debouncer_mini::{new_debouncer, DebouncedEventKind};
 use std::path::{Path, PathBuf};

@@ -1,6 +1,9 @@
-//! Regex AST - Algebraic representation.
-//!
-//! No backtracking. Regex is data, not a program.
+//
+//  ast.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};

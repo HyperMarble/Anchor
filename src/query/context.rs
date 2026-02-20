@@ -1,9 +1,9 @@
-//! Context engine - the main query interface for AI agents.
-//!
-//! Three intents:
-//! - `explore`: "What is this? How does it work?"
-//! - `change`: "I'm modifying this - what breaks?"
-//! - `create`: "I'm adding something like this - show me patterns"
+//
+//  context.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::fs;
 use std::path::Path;

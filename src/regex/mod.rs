@@ -1,32 +1,9 @@
-//! Brzozowski Derivatives Regex Engine
-//!
-//! ReDoS-immune regex matching using algebraic derivatives.
-//! Supports boolean operations: intersection (&), negation (~), complement.
-//!
-//! # Why Derivatives?
-//!
-//! Traditional regex engines use backtracking which can explode exponentially.
-//! Derivatives compute matches in O(n * |R|) time - linear in input length.
-//! No catastrophic backtracking. No ReDoS vulnerabilities.
-//!
-//! # Boolean Algebra
-//!
-//! Unlike standard regex, this engine supports:
-//! - `R1 & R2` - intersection (match both)
-//! - `~R` - negation (match anything except R)
-//!
-//! This enables queries like "starts with Config AND ends with Manager":
-//! `Config.* & .*Manager`
-//!
-//! # Example
-//!
-//! ```ignore
-//! use anchor::regex::{parse, matches};
-//!
-//! let pattern = parse("Config.*Manager").unwrap();
-//! assert!(matches(&pattern, "ConfigFileManager"));
-//! assert!(!matches(&pattern, "ConfigFile"));
-//! ```
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 mod ast;
 mod derivative;
