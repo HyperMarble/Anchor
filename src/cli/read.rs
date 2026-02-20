@@ -1,7 +1,9 @@
-//! Read/Search operations: search, read, context
-//!
-//! All operations go through GraphQL queries internally.
-//! This ensures consistent behavior between CLI and any future API.
+//
+//  read.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use anyhow::Result;
 use std::path::Path;

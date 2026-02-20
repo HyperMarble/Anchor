@@ -1,4 +1,9 @@
-//! Daemon protocol — request/response types for CLI-daemon communication.
+//
+//  protocol.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use serde::{Deserialize, Serialize};
 

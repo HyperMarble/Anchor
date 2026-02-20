@@ -1,4 +1,9 @@
-//! MCP tool implementations (context, search, map, impact, write).
+//
+//  tools.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use rmcp::{
     handler::server::wrapper::Parameters,

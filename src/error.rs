@@ -1,4 +1,9 @@
-//! Error types for Anchor SDK.
+//
+//  error.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::path::PathBuf;
 use thiserror::Error;

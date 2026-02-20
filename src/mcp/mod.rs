@@ -1,7 +1,9 @@
-//! MCP (Model Context Protocol) server for Anchor.
-//!
-//! Exposes Anchor's infrastructure as native MCP tools.
-//! Agents connect via stdio and get: context, search, map, impact, write.
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod format;
 pub mod tools;

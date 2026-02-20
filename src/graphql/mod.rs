@@ -1,19 +1,9 @@
-//! GraphQL API for Anchor.
-//!
-//! Provides a flexible query interface where clients specify exactly what they need.
-//!
-//! ## Example
-//!
-//! ```graphql
-//! # Minimal - just location
-//! { symbol(name: "Config") { file line } }
-//!
-//! # With code
-//! { symbol(name: "Config") { file line code } }
-//!
-//! # With relationships
-//! { symbol(name: "Config") { file line callers { name file } } }
-//! ```
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod mutation;
 pub mod query;

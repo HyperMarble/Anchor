@@ -1,9 +1,9 @@
-//! CLI module for Anchor.
-//!
-//! Commands:
-//! - Read/Search: search, read, context
-//! - Write: write, edit (TODO: ACI-based)
-//! - System: build, stats, daemon
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod daemon;
 pub mod read;

@@ -1,28 +1,9 @@
-//! Daemon module — background process for real-time graph updates.
-//!
-//! The daemon keeps the code graph in memory, watches for file changes,
-//! and serves queries over a Unix socket. This enables instant queries
-//! without loading the graph from disk on every CLI command.
-//!
-//! ## Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────┐
-//! │           anchor daemon                  │
-//! │  - graph in memory                      │
-//! │  - file watcher (incremental updates)   │
-//! │  - Unix socket server                   │
-//! └─────────────────────────────────────────┘
-//!           ▲
-//!           │ .anchor/anchor.sock
-//!           ▼
-//! ┌─────────────────────────────────────────┐
-//! │           anchor CLI                     │
-//! │  - connects to daemon                   │
-//! │  - sends JSON requests                  │
-//! │  - receives JSON responses              │
-//! └─────────────────────────────────────────┘
-//! ```
+//
+//  mod.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod protocol;
 pub mod server;

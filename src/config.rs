@@ -1,6 +1,9 @@
-//! Configuration for Anchor.
-//!
-//! Loads from `.anchor/config.toml` or uses sensible defaults.
+//
+//  config.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

@@ -1,4 +1,9 @@
-//! Output formatting helpers for MCP tool responses.
+//
+//  format.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use std::path::Path;
 

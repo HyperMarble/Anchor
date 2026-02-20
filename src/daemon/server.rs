@@ -1,4 +1,9 @@
-//! Daemon server — Unix socket server that handles CLI requests.
+//
+//  server.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use anyhow::Result;
 use std::io::{BufRead, BufReader, Write};

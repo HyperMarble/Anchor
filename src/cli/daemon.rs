@@ -1,4 +1,9 @@
-//! Daemon management: start, stop, status
+//
+//  daemon.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use anyhow::Result;
 use clap::Subcommand;

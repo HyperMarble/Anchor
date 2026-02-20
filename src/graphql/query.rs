@@ -1,6 +1,9 @@
-//! GraphQL Query resolvers.
-//!
-//! Read operations for the code graph.
+//
+//  query.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use async_graphql::{Context, Object, Result};
 use std::sync::Arc;

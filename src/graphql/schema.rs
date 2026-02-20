@@ -1,6 +1,9 @@
-//! GraphQL schema types.
-//!
-//! These types are returned by queries and define the shape of responses.
+//
+//  schema.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use async_graphql::{ComplexObject, Context, Result, SimpleObject};
 use std::sync::Arc;

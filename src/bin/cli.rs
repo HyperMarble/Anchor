@@ -1,18 +1,9 @@
-//! Anchor CLI - Code Intelligence for AI Agents.
-//!
-//! Read/Search:
-//!   anchor search <query>            Find symbols
-//!   anchor read <symbol>             Full context
-//!   anchor context <query>           Search + Read combined
-//!
-//! Write:
-//!   anchor write <path> <content>    Create/overwrite file
-//!   anchor edit <path> ...           Edit existing file
-//!
-//! System:
-//!   anchor build                     Build graph
-//!   anchor stats                     Show stats
-//!   anchor daemon [start|stop]       Manage daemon
+//
+//  cli.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 use anchor::cli::{self, read as cli_read, Cli, Commands};
 use anchor::graph::{build_graph, CodeGraph};

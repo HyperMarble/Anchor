@@ -1,30 +1,9 @@
-//! # Anchor
-//!
-//! Code intelligence for AI agents. LSP for AI.
-//!
-//! Anchor provides a persistent code graph that AI agents can query to understand
-//! codebases without repeated file traversal.
-//!
-//! ## Key Features
-//!
-//! - **Graph-based**: Pre-computed relationships between symbols
-//! - **Persistent**: Graph survives across sessions
-//! - **Real-time**: File watcher keeps graph in sync
-//! - **Multi-language**: Rust, Python, JavaScript, TypeScript
-//!
-//! ## Quick Start
-//!
-//! ```rust,no_run
-//! use anchor::{build_graph, get_context};
-//! use std::path::Path;
-//!
-//! // Build graph from project directory
-//! let graph = build_graph(Path::new("."));
-//!
-//! // Query for a symbol with full context
-//! let result = get_context(&graph, "login", "understand");
-//! // Returns: symbol code + dependencies + dependents
-//! ```
+//
+//  lib.rs
+//  Anchor
+//
+//  Created by hak (tharun)
+//
 
 pub mod cli;
 pub mod config;
