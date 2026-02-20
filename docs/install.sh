@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Anchor installer (production-grade)
-# Usage:
-#   curl -fsSL https://tharun-10dragneel.github.io/Anchor/install.sh | bash
-#
-
 set -euo pipefail
 
 REPO="Tharun-10Dragneel/Anchor"
 
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+if [ -z "${INSTALL_DIR:-}" ]; then
+  if echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
+    INSTALL_DIR="$HOME/.local/bin"
+  elif echo ":$PATH:" | grep -q ":$HOME/.cargo/bin:"; then
+    INSTALL_DIR="$HOME/.cargo/bin"
+  else
+    INSTALL_DIR="$HOME/.local/bin"
+  fi
+fi
 
 mkdir -p "$INSTALL_DIR"
 
@@ -51,24 +54,26 @@ trap 'rm -rf "$TMP"' EXIT
 
 curl -fsSL "$URL" | tar -xz -C "$TMP"
 
-FILES=("anchor" "anchor-mcp")
+if [ ! -f "$TMP/anchor" ]; then
+  echo "Downloaded archive does not contain 'anchor' binary"
+  exit 1
+fi
 
-install_file () {
+install_binary () {
   src="$1"
   dest="$2"
 
   if [ -w "$INSTALL_DIR" ]; then
-    mv "$src" "$dest"
+    cp "$src" "$dest"
+    chmod +x "$dest"
   else
     echo "Requesting sudo permission..."
-    sudo mv "$src" "$dest"
+    sudo cp "$src" "$dest"
+    sudo chmod +x "$dest"
   fi
 }
 
-for f in "${FILES[@]}"; do
-  install_file "$TMP/$f" "$INSTALL_DIR/$f"
-  chmod +x "$INSTALL_DIR/$f"
-done
+install_binary "$TMP/anchor" "$INSTALL_DIR/anchor"
 
 echo ""
 echo " █████╗ ███╗   ██╗ ██████╗██╗  ██╗ ██████╗ ██████╗"
@@ -77,7 +82,7 @@ echo "███████║██╔██╗ ██║██║     ██�
 echo "██╔══██║██║╚██╗██║██║     ██╔══██║██║   ██║██╔══██╗"
 echo "██║  ██║██║ ╚████║╚██████╗██║  ██║╚██████╔╝██║  ██║"
 echo "╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝"
-echo "       Code Intelligence for AI Agents"
+echo "       Agent-Code Interface"
 echo ""
 echo "Get started:"
 echo "  cd your-project"
@@ -90,6 +95,8 @@ echo ""
 
 # PATH hint
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-  echo "Tip: add ~/.local/bin to PATH:"
-  echo '  export PATH="$HOME/.local/bin:$PATH"'
+  if ! echo ":$PATH:" | grep -q ":$INSTALL_DIR:"; then
+    echo "Tip: add $INSTALL_DIR to PATH:"
+    echo "  export PATH=\"$INSTALL_DIR:\$PATH\""
+  fi
 fi

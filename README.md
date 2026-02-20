@@ -60,7 +60,7 @@ Or build from source:
 git clone https://github.com/Tharun-10Dragneel/Anchor.git
 cd Anchor
 cargo build --release
-sudo ./local_install.sh
+bash ./local_install.sh
 ```
 
 ## Quick Start

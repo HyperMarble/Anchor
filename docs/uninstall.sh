@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+if [ -n "${INSTALL_DIR:-}" ]; then
+  TARGET_DIRS=("$INSTALL_DIR")
+else
+  TARGET_DIRS=("$HOME/.local/bin" "$HOME/.cargo/bin" "/usr/local/bin")
+fi
 
 remove() {
-  if [ -e "$1" ]; then
-    if [ -w "$INSTALL_DIR" ]; then
-      rm -f "$1"
+  path="$1"
+  dir=$(dirname "$path")
+  if [ -e "$path" ]; then
+    if [ -w "$dir" ]; then
+      rm -f "$path"
     else
-      sudo rm -f "$1"
+      sudo rm -f "$path"
     fi
   fi
 }
 
-remove "$INSTALL_DIR/anchor"
-remove "$INSTALL_DIR/anchor-mcp"
+for dir in "${TARGET_DIRS[@]}"; do
+  remove "$dir/anchor"
+done
 
 echo ""
 echo "Anchor uninstalled."
