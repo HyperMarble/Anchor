@@ -16,33 +16,36 @@ use std::sync::Arc;
 use super::format::{escape_graphql, format_symbol, short_kind};
 use super::types::*;
 use super::AnchorMcp;
-use crate::graph::{build_graph, CodeGraph};
+use crate::graph::{build_graph, rebuild_file, CodeGraph};
 use crate::graphql::{build_schema, execute};
+use crate::lock::{LockManager, LockResult, SymbolKey};
 
 #[tool_router]
 impl AnchorMcp {
     pub fn new(root: std::path::PathBuf) -> Self {
+        let cache_path = root.join(".anchor/graph.bin");
+        let graph = if cache_path.exists() {
+            CodeGraph::load(&cache_path).unwrap_or_else(|_| build_graph(&root))
+        } else {
+            let graph = build_graph(&root);
+            if let Some(parent) = cache_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = graph.save(&cache_path);
+            graph
+        };
+
         Self {
             root,
             tool_router: Self::tool_router(),
+            graph: Arc::new(std::sync::RwLock::new(graph)),
+            lock_manager: Arc::new(LockManager::new()),
         }
     }
 
-    fn load_graph(&self) -> Result<CodeGraph, ErrorData> {
-        let cache_path = self.root.join(".anchor/graph.bin");
-
-        if cache_path.exists() {
-            if let Ok(graph) = CodeGraph::load(&cache_path) {
-                return Ok(graph);
-            }
-        }
-
-        let graph = build_graph(&self.root);
-        if let Some(parent) = cache_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = graph.save(&cache_path);
-        Ok(graph)
+    fn load_graph(&self) -> Result<Arc<CodeGraph>, ErrorData> {
+        let guard = self.graph.read().map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
+        Ok(Arc::new(guard.clone()))
     }
 
     fn err(msg: impl Into<String>) -> ErrorData {
@@ -59,7 +62,7 @@ impl AnchorMcp {
         Parameters(req): Parameters<ContextRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let graph = self.load_graph()?;
-        let schema = build_schema(Arc::new(graph));
+        let schema = build_schema(graph);
         let limit = req.limit.unwrap_or(5);
         let full = req.full.unwrap_or(false);
 
@@ -106,7 +109,7 @@ impl AnchorMcp {
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let graph = self.load_graph()?;
-        let schema = build_schema(Arc::new(graph));
+        let schema = build_schema(graph);
         let limit = req.limit.unwrap_or(20);
 
         let gql_query = if let Some(pat) = &req.pattern {
@@ -302,13 +305,15 @@ impl AnchorMcp {
 
         if !response.used_by.is_empty() {
             output.push_str(&format!("\nBREAKS ({} callers):\n", response.used_by.len()));
-            for r in &response.used_by {
+            for r in response.used_by.iter().take(5) {
                 output.push_str(&format!("  {} in {}:{}\n", r.name, r.file, r.line));
+            }
+            if response.used_by.len() > 5 {
+                output.push_str(&format!("  ... and {} more\n", response.used_by.len() - 5));
             }
         } else {
             output.push_str("\nBREAKS: nothing (no callers)\n");
         }
-
         if !response.edits.is_empty() {
             output.push_str(&format!("\nEDITS ({} changes needed):\n", response.edits.len()));
             for edit in &response.edits {
@@ -336,27 +341,127 @@ impl AnchorMcp {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Replace code by line range with automatic impact analysis. Shows what breaks before writing. Line numbers from 'context' output work directly here.")]
+    #[tool(description = "Unified write tool. mode='range' replaces a line range with impact analysis. mode='ordered' writes multiple files in graph dependency order.")]
     async fn write(
         &self,
         Parameters(req): Parameters<WriteRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let graph = self.load_graph()?;
-        let full_path = self.root.join(&req.path);
+        let mode_lower = req.mode.trim().to_ascii_lowercase();
+        let mode = match mode_lower.as_str() {
+            "range" => "range",
+            "ordered" => "ordered",
+            other => {
+                return Err(Self::err(format!(
+                    "Invalid write mode '{}'. Use 'range' or 'ordered'.",
+                    other
+                )));
+            }
+        };
 
+        if mode == "ordered" {
+            let operations = req.operations.as_ref().ok_or_else(|| {
+                Self::err("write mode 'ordered' requires 'operations'")
+            })?;
+            if operations.is_empty() {
+                return Err(Self::err(
+                    "write mode 'ordered' requires at least one operation",
+                ));
+            }
+
+            let ops: Vec<crate::write::WriteOp> = operations
+                .iter()
+                .map(|op| crate::write::WriteOp {
+                    path: self.root.join(&op.path),
+                    content: op.content.clone(),
+                    symbol: op.symbol.clone(),
+                })
+                .collect();
+
+            let result =
+                crate::write::write_ordered(&graph, &ops).map_err(|e| Self::err(e.to_string()))?;
+
+            // Re-index each written file so the graph stays in sync
+            if let Ok(mut graph_mut) = self.graph.write() {
+                for op in &ops {
+                    let _ = rebuild_file(&mut graph_mut, &op.path);
+                }
+            }
+
+            let mut output = String::new();
+            output.push_str("<ordered_write>\n");
+            output.push_str(&format!(
+                "<total_operations>{}</total_operations>\n",
+                result.total_operations
+            ));
+            output.push_str("<write_order>\n");
+            for (i, path) in result.write_order.iter().enumerate() {
+                output.push_str(&format!("  {}. {}\n", i + 1, path));
+            }
+            output.push_str("</write_order>\n");
+            output.push_str(&format!(
+                "<total_time_ms>{}</total_time_ms>\n",
+                result.total_time_ms
+            ));
+            output.push_str("<results>\n");
+            for r in &result.results {
+                output.push_str(&format!(
+                    "  <file path=\"{}\" lines=\"{}\" bytes=\"{}\"/>\n",
+                    r.path, r.lines_written, r.bytes_written
+                ));
+            }
+            output.push_str("</results>\n");
+            output.push_str("</ordered_write>\n");
+
+            return Ok(CallToolResult::success(vec![Content::text(output)]));
+        }
+
+        let path = req
+            .path
+            .as_deref()
+            .ok_or_else(|| Self::err("write mode 'range' requires 'path'"))?;
+        let start_line = req
+            .start_line
+            .ok_or_else(|| Self::err("write mode 'range' requires 'start_line'"))?;
+        let end_line = req
+            .end_line
+            .ok_or_else(|| Self::err("write mode 'range' requires 'end_line'"))?;
+        let new_content = req
+            .new_content
+            .as_deref()
+            .ok_or_else(|| Self::err("write mode 'range' requires 'new_content'"))?;
+
+        let full_path = self.root.join(path);
         if !full_path.exists() {
-            return Err(Self::err(format!("File not found: {}", req.path)));
+            return Err(Self::err(format!("File not found: {}", path)));
         }
 
         let mut output = String::new();
+        let affected = graph.symbols_in_range(&full_path, start_line, end_line);
+        let affected_names: Vec<String> = affected.iter().map(|s| s.name.clone()).collect();
 
-        let affected = graph.symbols_in_range(&full_path, req.start_line, req.end_line);
+        // Lock affected symbols before writing
+        let mut locked_symbols = Vec::new();
+        {
+            let graph_ref = self.graph.read()
+                .map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
+            for name in &affected_names {
+                let key = SymbolKey::new(&full_path, name.as_str());
+                match self.lock_manager.try_acquire_symbol(&key, &graph_ref) {
+                    LockResult::Acquired { symbol, .. }
+                    | LockResult::AcquiredAfterWait { symbol, .. } => locked_symbols.push(symbol),
+                    LockResult::Blocked { reason, .. } => {
+                        for s in &locked_symbols {
+                            self.lock_manager.release_symbol(s);
+                        }
+                        return Err(Self::err(format!("BLOCKED: {}", reason)));
+                    }
+                }
+            }
+        }
 
         if !affected.is_empty() {
-            output.push_str(&format!(
-                "IMPACT: {}:{}-{}\n",
-                req.path, req.start_line, req.end_line
-            ));
+            output.push_str(&format!("IMPACT: {}:{}-{}\n", path, start_line, end_line));
 
             for sym in &affected {
                 let response = crate::query::get_context_for_change(
@@ -372,15 +477,23 @@ impl AnchorMcp {
                         sym.name,
                         response.used_by.len()
                     ));
-                    for r in &response.used_by {
+                    for r in response.used_by.iter().take(5) {
                         output.push_str(&format!("    > {} in {}:{}\n", r.name, r.file, r.line));
+                    }
+                    if response.used_by.len() > 5 {
+                        output.push_str(&format!("    ... and {} more\n", response.used_by.len() - 5));
                     }
                 }
 
                 if !response.tests.is_empty() {
                     output.push_str(&format!(
                         "  tests: {}\n",
-                        response.tests.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")
+                        response
+                            .tests
+                            .iter()
+                            .map(|t| t.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
             }
@@ -388,60 +501,29 @@ impl AnchorMcp {
             output.push('\n');
         }
 
-        let result = crate::write::replace_range(
-            &full_path,
-            req.start_line,
-            req.end_line,
-            &req.new_content,
-        )
-        .map_err(|e| Self::err(e.to_string()))?;
+        let result = crate::write::replace_range(&full_path, start_line, end_line, new_content)
+            .map_err(|e| {
+                // Release locks on write failure
+                for s in &locked_symbols {
+                    self.lock_manager.release_symbol(s);
+                }
+                Self::err(e.to_string())
+            })?;
+
+        // Re-index the changed file so the graph stays in sync
+        if let Ok(mut graph_mut) = self.graph.write() {
+            let _ = rebuild_file(&mut graph_mut, &full_path);
+        }
+
+        // Release all locks after write + rebuild
+        for s in &locked_symbols {
+            self.lock_manager.release_symbol(s);
+        }
 
         output.push_str(&format!(
             "WRITTEN: {}:{}-{} ({} lines)\n",
-            req.path, req.start_line, req.end_line, result.lines_written
+            path, start_line, end_line, result.lines_written
         ));
-
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    #[tool(description = "Write multiple files in dependency order. Uses existing graph to analyze dependencies and writes base classes/utilities BEFORE dependent code. Prevents broken imports and missing dependencies.")]
-    async fn write_ordered(
-        &self,
-        Parameters(req): Parameters<OrderedWriteRequest>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let graph = self.load_graph()?;
-        
-        let operations: Vec<crate::write::WriteOp> = req
-            .operations
-            .into_iter()
-            .map(|op| crate::write::WriteOp {
-                path: self.root.join(&op.path),
-                content: op.content,
-                symbol: op.symbol,
-            })
-            .collect();
-
-        let result = crate::write::write_ordered(&graph, &operations)
-            .map_err(|e| Self::err(e.to_string()))?;
-
-        let mut output = String::new();
-        output.push_str("<ordered_write>\n");
-        output.push_str(&format!("<total_operations>{}</total_operations>\n", result.total_operations));
-        output.push_str("<write_order>\n");
-        for (i, path) in result.write_order.iter().enumerate() {
-            output.push_str(&format!("  {}. {}\n", i + 1, path));
-        }
-        output.push_str("</write_order>\n");
-        output.push_str(&format!("<total_time_ms>{}</total_time_ms>\n", result.total_time_ms));
-        output.push_str("<results>\n");
-        for r in &result.results {
-            output.push_str(&format!(
-                "  <file path=\"{}\" lines=\"{}\" bytes=\"{}\"/>\n",
-                r.path, r.lines_written, r.bytes_written
-            ));
-        }
-        output.push_str("</results>\n");
-        output.push_str("</ordered_write>\n");
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }

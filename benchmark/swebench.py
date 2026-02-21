@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
@@ -8,18 +10,59 @@ from typing import Any, Dict, Iterable, List
 def load_instances(dataset: str, split: str, limit: int) -> List[Dict[str, Any]]:
     try:
         from datasets import load_dataset  # type: ignore
-    except ImportError as e:
-        raise SystemExit(
-            "Missing dependency: datasets\n"
-            "Install with: pip install datasets"
-        ) from e
+        ds = load_dataset(dataset, split=split)
+        rows: List[Dict[str, Any]] = []
+        for i, ex in enumerate(ds):
+            if i >= limit:
+                break
+            rows.append(dict(ex))
+        return rows
+    except ImportError:
+        return load_instances_via_hf_api(dataset, split, limit)
 
-    ds = load_dataset(dataset, split=split)
+
+def load_instances_via_hf_api(dataset: str, split: str, limit: int) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
-    for i, ex in enumerate(ds):
-        if i >= limit:
+    page_size = min(100, max(1, limit))
+    offset = 0
+
+    while len(rows) < limit:
+        length = min(page_size, limit - len(rows))
+        params = urllib.parse.urlencode(
+            {
+                "dataset": dataset,
+                "config": "default",
+                "split": split,
+                "offset": offset,
+                "length": length,
+            }
+        )
+        url = f"https://datasets-server.huggingface.co/rows?{params}"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "anchor-benchmark-importer"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+
+        page = payload.get("rows", [])
+        if not page:
             break
-        rows.append(dict(ex))
+
+        for item in page:
+            row = item.get("row")
+            if isinstance(row, dict):
+                rows.append(row)
+                if len(rows) >= limit:
+                    break
+
+        offset += len(page)
+
+    if not rows:
+        raise SystemExit(
+            "Failed to fetch SWE-bench rows from Hugging Face dataset API.\n"
+            "Install datasets package or check network access."
+        )
     return rows
 
 
