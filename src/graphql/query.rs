@@ -68,6 +68,7 @@ impl Query {
                 line: r.line_start as i32,
                 code_internal: Some(r.code),
                 call_lines: r.call_lines,
+                features: r.features,
             })
             .collect())
     }
@@ -96,6 +97,7 @@ impl Query {
                 line: d.line as i32,
                 code_internal: None,
                 call_lines: vec![],
+                features: vec![],
             })
             .collect())
     }
@@ -114,6 +116,7 @@ impl Query {
                 line: d.line as i32,
                 code_internal: None,
                 call_lines: vec![],
+                features: vec![],
             })
             .collect())
     }
@@ -155,18 +158,48 @@ impl Query {
         // Get all symbols from the graph and filter with regex (case-insensitive)
         let all_symbols = graph.all_symbols();
         let matched: Vec<_> = all_symbols
-            .into_iter()
+            .iter()
             .filter(|r| matcher.is_match(&r.symbol.to_lowercase()))
             .take(limit as usize)
             .map(|r| Symbol {
-                name: r.symbol,
+                name: r.symbol.clone(),
                 kind: r.kind.to_string(),
                 file: r.file.to_string_lossy().to_string(),
                 line: r.line_start as i32,
-                code_internal: Some(r.code),
-                call_lines: r.call_lines,
+                code_internal: Some(r.code.clone()),
+                call_lines: r.call_lines.clone(),
+                features: r.features.clone(),
             })
             .collect();
+
+        // If regex found nothing, fall back to feature-based search
+        if matched.is_empty() {
+            let query_terms: Vec<&str> = pattern.split(&['*', '.', ' '][..])
+                .filter(|t| t.len() > 2)
+                .collect();
+            if !query_terms.is_empty() {
+                let mut scored: Vec<(usize, &_)> = all_symbols
+                    .iter()
+                    .filter(|r| !r.features.is_empty())
+                    .filter_map(|r| {
+                        let hits = query_terms.iter()
+                            .filter(|t| r.features.iter().any(|f| f.contains(&t.to_lowercase().as_str())))
+                            .count();
+                        if hits > 0 { Some((query_terms.len() - hits, r)) } else { None }
+                    })
+                    .collect();
+                scored.sort_by_key(|(score, _)| *score);
+                return Ok(scored.into_iter().take(limit as usize).map(|(_, r)| Symbol {
+                    name: r.symbol.clone(),
+                    kind: r.kind.to_string(),
+                    file: r.file.to_string_lossy().to_string(),
+                    line: r.line_start as i32,
+                    code_internal: Some(r.code.clone()),
+                    call_lines: r.call_lines.clone(),
+                    features: r.features.clone(),
+                }).collect());
+            }
+        }
 
         Ok(matched)
     }

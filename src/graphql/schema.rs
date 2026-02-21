@@ -29,6 +29,9 @@ pub struct Symbol {
     /// Call lines for graph slicing
     #[graphql(skip)]
     pub call_lines: Vec<usize>,
+    /// Static semantic features
+    #[graphql(skip)]
+    pub features: Vec<String>,
 }
 
 #[ComplexObject]
@@ -68,6 +71,7 @@ impl Symbol {
                 line: d.line as i32,
                 code_internal: None,
                 call_lines: vec![],
+                features: vec![],
             })
             .collect())
     }
@@ -86,6 +90,7 @@ impl Symbol {
                 line: d.line as i32,
                 code_internal: None,
                 call_lines: vec![],
+                features: vec![],
             })
             .collect())
     }
@@ -116,6 +121,7 @@ impl File {
                 line: s.line_start as i32,
                 code_internal: Some(s.code_snippet.clone()),
                 call_lines: s.call_lines.clone(),
+                features: s.features.clone(),
             })
             .collect())
     }

@@ -81,6 +81,7 @@ mod tests {
                     line_end: 14,
                     code_snippet: long_code.to_string(),
                     parent: None,
+                    features: vec![],
                 },
                 ExtractedSymbol {
                     name: "callee".to_string(),
@@ -89,6 +90,7 @@ mod tests {
                     line_end: 22,
                     code_snippet: "fn callee() -> i32 { 42 }".to_string(),
                     parent: None,
+                    features: vec![],
                 },
             ],
             imports: vec![],
