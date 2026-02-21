@@ -25,6 +25,7 @@ pub fn build_graph(root: &Path) -> CodeGraph {
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        .add_custom_ignore_filename(".anchorignore")
         .build()
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
