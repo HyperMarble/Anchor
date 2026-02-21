@@ -107,7 +107,8 @@ pub fn extract_file(path: &Path, source: &str) -> crate::error::Result<FileExtra
         .ok_or_else(|| AnchorError::TreeSitterParseFailed(path.to_path_buf()))?;
 
     let query_src = build_query(lang);
-    let (symbols, calls) = tags::extract_with_tags(&tree, source.as_bytes(), &query_src, &ts_lang);
+    let file_str = path.to_string_lossy();
+    let (symbols, calls) = tags::extract_with_tags(&tree, source.as_bytes(), &query_src, &ts_lang, &file_str);
     let imports = tags::extract_imports(&tree.root_node(), source.as_bytes(), lang);
 
     Ok(FileExtractions {

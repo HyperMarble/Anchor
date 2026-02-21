@@ -133,6 +133,10 @@ pub struct NodeData {
     /// and cleaned up during compaction.
     #[serde(default)]
     pub removed: bool,
+    /// Static semantic features extracted from name, parent, file path, and kind.
+    /// Used for feature-aware search (find symbols by intent, not just name).
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 impl NodeData {
@@ -150,6 +154,7 @@ impl NodeData {
             code_snippet: String::new(),
             call_lines: Vec::new(),
             removed: false,
+            features: Vec::new(),
         }
     }
 
@@ -170,6 +175,7 @@ impl NodeData {
             code_snippet,
             call_lines: Vec::new(),
             removed: false,
+            features: Vec::new(),
         }
     }
 }
@@ -188,7 +194,6 @@ impl EdgeData {
 }
 
 /// A symbol extracted from parsing a source file.
-/// This is an intermediate representation before being added to the graph.
 #[derive(Debug, Clone)]
 pub struct ExtractedSymbol {
     /// Symbol name.
@@ -203,6 +208,8 @@ pub struct ExtractedSymbol {
     pub code_snippet: String,
     /// Parent symbol name (for methods inside classes/impls).
     pub parent: Option<String>,
+    /// Static semantic features for intent-based search.
+    pub features: Vec<String>,
 }
 
 /// An import extracted from a source file.
@@ -280,7 +287,6 @@ pub struct ConnectionInfo {
 }
 
 // ─── Query Result Types ─────────────────────────────────────────
-
 /// A search result returned by `CodeGraph::search`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -294,6 +300,7 @@ pub struct SearchResult {
     pub calls: Vec<SymbolRef>,
     pub called_by: Vec<SymbolRef>,
     pub imports: Vec<String>,
+    pub features: Vec<String>,
 }
 
 /// A reference to a symbol (lightweight, for connections).

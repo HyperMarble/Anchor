@@ -241,6 +241,7 @@ mod tests {
                     line_end: 3,
                     code_snippet: "fn add(a: i32, b: i32) -> i32 { a + b }".to_string(),
                     parent: None,
+                    features: vec![],
                 },
                 ExtractedSymbol {
                     name: "multiply".to_string(),
@@ -249,6 +250,7 @@ mod tests {
                     line_end: 7,
                     code_snippet: "fn multiply(a: i32, b: i32) -> i32 { a * b }".to_string(),
                     parent: None,
+                    features: vec![],
                 },
             ],
             imports: vec![],
@@ -662,5 +664,41 @@ mod tests {
         graph.add_edge(file_idx, fn_idx, EdgeKind::Contains);
 
         assert_eq!(graph.stats().total_edges, 2);
+    }
+
+    #[test]
+    fn test_write_then_rebuild_updates_line_numbers() {
+        use std::io::Write;
+
+        // Create a temp file with two functions
+        let dir = tempfile::tempdir().unwrap();
+        let test_file = dir.path().join("test.rs");
+        {
+            let mut f = std::fs::File::create(&test_file).unwrap();
+            write!(f, "fn foo() {{\n    let x = 1;\n}}\n\nfn bar() {{\n    let y = 2;\n}}\n").unwrap();
+        }
+
+        // Build graph
+        let source = std::fs::read_to_string(&test_file).unwrap();
+        let extraction = crate::parser::extractor::extract_file(&test_file, &source).unwrap();
+        let mut graph = CodeGraph::new();
+        graph.build_from_extractions(vec![extraction]);
+
+        // bar starts at line 5
+        let results = graph.search("bar", 5);
+        assert!(!results.is_empty(), "bar should be found");
+        assert_eq!(results[0].line_start, 5);
+
+        // Write: add 2 lines inside foo (lines shift)
+        crate::write::replace_range(&test_file, 2, 2, "    let x = 1;\n    let z = 3;\n    let w = 4;").unwrap();
+
+        // Before rebuild: graph still says bar is at line 5 (stale)
+        let results = graph.search("bar", 5);
+        assert_eq!(results[0].line_start, 5, "should be stale before rebuild");
+
+        // After rebuild: bar should be at line 7
+        crate::graph::rebuild_file(&mut graph, &test_file).unwrap();
+        let results = graph.search("bar", 5);
+        assert_eq!(results[0].line_start, 7, "rebuild should update line numbers");
     }
 }

@@ -57,11 +57,77 @@ fn precise_kind(node_kind: &str, capture_kind: NodeKind) -> NodeKind {
 }
 
 /// Extract symbols and calls from a parsed tree using a tags query.
+/// Split an identifier into tokens by snake_case and camelCase boundaries.
+/// E.g. "validate_authToken" → ["validate", "auth", "token"]
+fn split_identifier(name: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    // First split on underscores
+    for part in name.split('_') {
+        if part.is_empty() {
+            continue;
+        }
+        // Then split camelCase
+        let mut current = String::new();
+        for ch in part.chars() {
+            if ch.is_uppercase() && !current.is_empty() {
+                tokens.push(current.to_lowercase());
+                current = String::new();
+            }
+            current.push(ch);
+        }
+        if !current.is_empty() {
+            tokens.push(current.to_lowercase());
+        }
+    }
+    // Filter short tokens (≤2 chars)
+    tokens.retain(|t| t.len() > 2);
+    tokens
+}
+
+/// Generate static semantic features from symbol metadata.
+/// Combines name tokens, kind, parent scope, and file path segments.
+fn generate_features(name: &str, kind: NodeKind, parent: Option<&str>, file_path: &str) -> Vec<String> {
+    let mut features = split_identifier(name);
+
+    // Kind token
+    let kind_str = format!("{:?}", kind).to_lowercase();
+    features.push(kind_str);
+
+    // Parent scope tokens
+    if let Some(p) = parent {
+        features.extend(split_identifier(p));
+    }
+
+    // File path segments (skip "src" and file extension)
+    for segment in file_path.split(&['/', '\\'][..]) {
+        let stem = segment.strip_suffix(".rs")
+            .or_else(|| segment.strip_suffix(".py"))
+            .or_else(|| segment.strip_suffix(".ts"))
+            .or_else(|| segment.strip_suffix(".tsx"))
+            .or_else(|| segment.strip_suffix(".js"))
+            .or_else(|| segment.strip_suffix(".jsx"))
+            .or_else(|| segment.strip_suffix(".go"))
+            .or_else(|| segment.strip_suffix(".java"))
+            .or_else(|| segment.strip_suffix(".cs"))
+            .or_else(|| segment.strip_suffix(".cpp"))
+            .or_else(|| segment.strip_suffix(".swift"))
+            .unwrap_or(segment);
+        if stem.len() > 2 && stem != "src" && stem != "lib" && stem != "mod" {
+            features.extend(split_identifier(stem));
+        }
+    }
+
+    features.sort();
+    features.dedup();
+    features
+}
+
 pub fn extract_with_tags(
     tree: &Tree,
     source: &[u8],
     query_src: &str,
     ts_lang: &Language,
+    file_path: &str,
 ) -> (Vec<ExtractedSymbol>, Vec<ExtractedCall>) {
     let query = match Query::new(ts_lang, query_src) {
         Ok(q) => q,
@@ -113,6 +179,7 @@ pub fn extract_with_tags(
                     line_end: node.end_position().row + 1,
                     code_snippet: bounded_snippet(&node, source),
                     parent: None,
+                    features: generate_features(name, refined, None, file_path),
                 });
             }
         }
@@ -134,6 +201,16 @@ pub fn extract_with_tags(
     }
 
     resolve_parents(&mut symbols);
+
+    // Enrich features with parent scope tokens
+    for sym in &mut symbols {
+        if let Some(ref parent) = sym.parent {
+            let parent_tokens = split_identifier(parent);
+            sym.features.extend(parent_tokens);
+            sym.features.sort();
+            sym.features.dedup();
+        }
+    }
 
     (symbols, calls)
 }
