@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "anchor")]
-#[command(about = "Code Intelligence for AI Agents")]
+#[command(about = "Infrastructure for Coding AI agents")]
 #[command(override_help = HELP_TEXT)]
 pub struct Cli {
     /// Project root directory (default: current directory)
@@ -32,7 +32,7 @@ const HELP_TEXT: &str = "
  ██╔══██║██║╚██╗██║██║     ██╔══██║██║   ██║██╔══██╗
  ██║  ██║██║ ╚████║╚██████╗██║  ██║╚██████╔╝██║  ██║
  ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
-        Code Intelligence for AI Agents
+    Infrastructure for Coding AI agents
 
 Start here:
   build                 Index codebase
@@ -157,7 +157,7 @@ pub fn print_banner() {
 ██║  ██║██║ ╚████║╚██████╗██║  ██║╚██████╔╝██║  ██║
 ╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
 
-        Code Intelligence for AI Agents
+    Infrastructure for Coding AI agents
 "#
     );
 }
