@@ -108,13 +108,21 @@ pub fn extract_file(path: &Path, source: &str) -> crate::error::Result<FileExtra
 
     let query_src = build_query(lang);
     let file_str = path.to_string_lossy();
-    let (symbols, calls) = tags::extract_with_tags(&tree, source.as_bytes(), &query_src, &ts_lang, &file_str);
+    let (symbols, calls) =
+        tags::extract_with_tags(&tree, source.as_bytes(), &query_src, &ts_lang, &file_str);
     let imports = tags::extract_imports(&tree.root_node(), source.as_bytes(), lang);
+    let api_endpoints = crate::parser::queries::api::extract_api_endpoints(
+        &tree.root_node(),
+        source.as_bytes(),
+        lang,
+        path,
+    );
 
     Ok(FileExtractions {
         file_path: path.to_path_buf(),
         symbols,
         imports,
         calls,
+        api_endpoints,
     })
 }

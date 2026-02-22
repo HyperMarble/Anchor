@@ -15,6 +15,119 @@ use super::engine::CodeGraph;
 use super::types::*;
 
 impl CodeGraph {
+    /// Soft-delete a node: mark removed and clean up indexes.
+    fn soft_delete_node(&mut self, node_idx: NodeIndex) {
+        if let Some(node) = self.graph.node_weight_mut(node_idx) {
+            let name = node.name.clone();
+            let file_path = node.file_path.clone();
+            node.removed = true;
+
+            if let Some(indexes) = self.symbol_index.get_mut(&name) {
+                indexes.retain(|&idx| idx != node_idx);
+                if indexes.is_empty() {
+                    self.symbol_index.remove(&name);
+                }
+            }
+            self.qualified_index.remove(&(file_path, name));
+        }
+    }
+
+    /// Resolve a call edge: add Calls edge and track call_lines on the caller.
+    fn resolve_call(&mut self, caller_idx: NodeIndex, call: &ExtractedCall) {
+        if let Some(callee_indexes) = self.symbol_index.get(&call.callee).cloned() {
+            if let Some(&callee_idx) = callee_indexes.first() {
+                self.add_edge(caller_idx, callee_idx, EdgeKind::Calls);
+                if let Some(node) = self.graph.node_weight_mut(caller_idx) {
+                    for line in call.line..=call.line_end {
+                        if !node.call_lines.contains(&line) {
+                            node.call_lines.push(line);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sort and dedup call_lines on a set of nodes.
+    fn finalize_call_lines(&mut self, nodes: impl IntoIterator<Item = NodeIndex>) {
+        for idx in nodes {
+            if let Some(node) = self.graph.node_weight_mut(idx) {
+                node.call_lines.sort();
+                node.call_lines.dedup();
+            }
+        }
+    }
+
+    /// Resolve contains relationships (parent -> child) for symbols in a file.
+    fn resolve_contains(
+        &mut self,
+        file: &Path,
+        symbols: &[ExtractedSymbol],
+        filter: Option<&HashSet<NodeIndex>>,
+    ) {
+        for symbol in symbols {
+            if let Some(ref parent_name) = symbol.parent {
+                let child_key = (file.to_path_buf(), symbol.name.clone());
+                let parent_key = (file.to_path_buf(), parent_name.clone());
+
+                if let Some(&child_idx) = self.qualified_index.get(&child_key) {
+                    if let Some(set) = filter {
+                        if !set.contains(&child_idx) {
+                            continue;
+                        }
+                    }
+                    if let Some(&parent_idx) = self.qualified_index.get(&parent_key) {
+                        self.add_edge(parent_idx, child_idx, EdgeKind::Contains);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Add a symbol node with features and a Defines edge from file.
+    fn ingest_symbol(
+        &mut self,
+        file_idx: NodeIndex,
+        file_path: &Path,
+        sym: &ExtractedSymbol,
+    ) -> NodeIndex {
+        let sym_idx = self.add_symbol(
+            sym.name.clone(),
+            sym.kind,
+            file_path.to_path_buf(),
+            sym.line_start,
+            sym.line_end,
+            sym.code_snippet.clone(),
+        );
+        if !sym.features.is_empty() {
+            if let Some(node) = self.graph.node_weight_mut(sym_idx) {
+                node.features = sym.features.clone();
+            }
+        }
+        self.add_edge(file_idx, sym_idx, EdgeKind::Defines);
+        sym_idx
+    }
+
+    /// Add import nodes from an extraction.
+    fn ingest_imports(
+        &mut self,
+        file_idx: NodeIndex,
+        file_path: &Path,
+        imports: &[ExtractedImport],
+    ) {
+        for import in imports {
+            let import_idx = self.add_symbol(
+                import.path.clone(),
+                NodeKind::Import,
+                file_path.to_path_buf(),
+                import.line,
+                import.line,
+                String::new(),
+            );
+            self.add_edge(file_idx, import_idx, EdgeKind::Imports);
+        }
+    }
+
     /// Build the graph from a set of file extractions.
     pub fn build_from_extractions(&mut self, extractions: Vec<FileExtractions>) {
         debug!(
@@ -26,78 +139,68 @@ impl CodeGraph {
             let file_idx = self.add_file(extraction.file_path.clone());
 
             for symbol in &extraction.symbols {
-                let sym_idx = self.add_symbol(
-                    symbol.name.clone(),
-                    symbol.kind,
-                    extraction.file_path.clone(),
-                    symbol.line_start,
-                    symbol.line_end,
-                    symbol.code_snippet.clone(),
-                );
-
-                self.add_edge(file_idx, sym_idx, EdgeKind::Defines);
+                self.ingest_symbol(file_idx, &extraction.file_path, symbol);
             }
 
-            for import in &extraction.imports {
-                let import_idx = self.add_symbol(
-                    import.path.clone(),
-                    NodeKind::Import,
-                    extraction.file_path.clone(),
-                    import.line,
-                    import.line,
-                    String::new(),
-                );
-                self.add_edge(file_idx, import_idx, EdgeKind::Imports);
-            }
+            self.ingest_imports(file_idx, &extraction.file_path, &extraction.imports);
         }
 
         // Phase 2: Resolve cross-references (calls) and collect call lines
         for extraction in &extractions {
             for call in &extraction.calls {
                 let caller_key = (extraction.file_path.clone(), call.caller.clone());
-                let callee_nodes = self.symbol_index.get(&call.callee).cloned();
-
                 if let Some(&caller_idx) = self.qualified_index.get(&caller_key) {
-                    if let Some(callee_indexes) = callee_nodes {
-                        if let Some(&callee_idx) = callee_indexes.first() {
-                            self.add_edge(caller_idx, callee_idx, EdgeKind::Calls);
+                    self.resolve_call(caller_idx, call);
+                }
+            }
+        }
 
-                            if let Some(node) = self.graph.node_weight_mut(caller_idx) {
-                                for line in call.line..=call.line_end {
-                                    if !node.call_lines.contains(&line) {
-                                        node.call_lines.push(line);
-                                    }
-                                }
-                            }
+        self.finalize_call_lines(self.graph.node_indices().collect::<Vec<_>>());
+
+        // Phase 3: Resolve contains relationships (parent -> child)
+        for extraction in &extractions {
+            self.resolve_contains(&extraction.file_path, &extraction.symbols, None);
+        }
+
+        // Phase 4: Cross-language API boundary edges
+        // Match route definitions with client calls by normalized URL
+        let mut defines: HashMap<String, Vec<NodeIndex>> = HashMap::new();
+        let mut consumes: Vec<(String, NodeIndex)> = Vec::new();
+
+        for extraction in &extractions {
+            for endpoint in &extraction.api_endpoints {
+                let url = normalize_api_url(&endpoint.url);
+                // Resolve scope to a node index — the function containing this endpoint
+                let scope_idx = endpoint.scope.as_ref().and_then(|scope_name| {
+                    let key = (extraction.file_path.clone(), scope_name.clone());
+                    self.qualified_index.get(&key).copied()
+                });
+
+                if let Some(idx) = scope_idx {
+                    match endpoint.kind {
+                        ApiEndpointKind::Defines => {
+                            defines.entry(url).or_default().push(idx);
+                        }
+                        ApiEndpointKind::Consumes => {
+                            consumes.push((url, idx));
                         }
                     }
                 }
             }
         }
 
-        // Sort call_lines for consistent slicing
-        for idx in self.graph.node_indices() {
-            if let Some(node) = self.graph.node_weight_mut(idx) {
-                node.call_lines.sort();
-                node.call_lines.dedup();
+        let mut api_edges = 0;
+        for (url, consumer_idx) in &consumes {
+            if let Some(provider_indexes) = defines.get(url) {
+                for &provider_idx in provider_indexes {
+                    self.add_edge(*consumer_idx, provider_idx, EdgeKind::ApiCall);
+                    api_edges += 1;
+                }
             }
         }
 
-        // Phase 3: Resolve contains relationships (parent -> child)
-        for extraction in &extractions {
-            for symbol in &extraction.symbols {
-                if let Some(ref parent_name) = symbol.parent {
-                    let child_key = (extraction.file_path.clone(), symbol.name.clone());
-                    let parent_key = (extraction.file_path.clone(), parent_name.clone());
-
-                    if let (Some(&parent_idx), Some(&child_idx)) = (
-                        self.qualified_index.get(&parent_key),
-                        self.qualified_index.get(&child_key),
-                    ) {
-                        self.add_edge(parent_idx, child_idx, EdgeKind::Contains);
-                    }
-                }
-            }
+        if api_edges > 0 {
+            debug!(api_edges, "cross-language API edges created");
         }
     }
 
@@ -112,11 +215,7 @@ impl CodeGraph {
     /// Incrementally update a file's symbols in the graph.
     /// Diffs old vs new symbols by name — only touches changed/added/removed nodes.
     /// Unchanged symbols keep their NodeIndex (stable graph references).
-    pub fn update_file_incremental(
-        &mut self,
-        file: &Path,
-        new_extraction: FileExtractions,
-    ) {
+    pub fn update_file_incremental(&mut self, file: &Path, new_extraction: FileExtractions) {
         let file_idx = self.add_file(file.to_path_buf());
 
         // Collect old symbols: name -> (NodeIndex, code_snippet)
@@ -148,33 +247,14 @@ impl CodeGraph {
         // Removed symbols (in old, not in new)
         for (name, (node_idx, _)) in &old_symbols {
             if !new_symbols.contains_key(name) {
-                if let Some(node) = self.graph.node_weight_mut(*node_idx) {
-                    node.removed = true;
-                    let file_path = node.file_path.clone();
-
-                    if let Some(indexes) = self.symbol_index.get_mut(name) {
-                        indexes.retain(|&idx| idx != *node_idx);
-                        if indexes.is_empty() {
-                            self.symbol_index.remove(name);
-                        }
-                    }
-                    self.qualified_index.remove(&(file_path, name.clone()));
-                }
+                self.soft_delete_node(*node_idx);
             }
         }
 
         // Added symbols (in new, not in old)
         for (name, sym) in &new_symbols {
             if !old_symbols.contains_key(name) {
-                let sym_idx = self.add_symbol(
-                    sym.name.clone(),
-                    sym.kind,
-                    file.to_path_buf(),
-                    sym.line_start,
-                    sym.line_end,
-                    sym.code_snippet.clone(),
-                );
-                self.add_edge(file_idx, sym_idx, EdgeKind::Defines);
+                let sym_idx = self.ingest_symbol(file_idx, file, sym);
                 needs_call_resolution.push(sym_idx);
             }
         }
@@ -220,30 +300,9 @@ impl CodeGraph {
             .map(|e| e.target())
             .collect();
         for &imp_idx in &old_import_nodes {
-            if let Some(node) = self.graph.node_weight_mut(imp_idx) {
-                let name = node.name.clone();
-                let fp = node.file_path.clone();
-                node.removed = true;
-                if let Some(indexes) = self.symbol_index.get_mut(&name) {
-                    indexes.retain(|&idx| idx != imp_idx);
-                    if indexes.is_empty() {
-                        self.symbol_index.remove(&name);
-                    }
-                }
-                self.qualified_index.remove(&(fp, name));
-            }
+            self.soft_delete_node(imp_idx);
         }
-        for import in &new_extraction.imports {
-            let import_idx = self.add_symbol(
-                import.path.clone(),
-                NodeKind::Import,
-                file.to_path_buf(),
-                import.line,
-                import.line,
-                String::new(),
-            );
-            self.add_edge(file_idx, import_idx, EdgeKind::Imports);
-        }
+        self.ingest_imports(file_idx, file, &new_extraction.imports);
 
         // Re-resolve calls for changed/added symbols
         let nodes_needing_resolution: HashSet<NodeIndex> =
@@ -252,48 +311,20 @@ impl CodeGraph {
         for call in &new_extraction.calls {
             let caller_key = (file.to_path_buf(), call.caller.clone());
             if let Some(&caller_idx) = self.qualified_index.get(&caller_key) {
-                if !nodes_needing_resolution.contains(&caller_idx) {
-                    continue;
-                }
-                if let Some(callee_indexes) = self.symbol_index.get(&call.callee).cloned() {
-                    if let Some(&callee_idx) = callee_indexes.first() {
-                        self.add_edge(caller_idx, callee_idx, EdgeKind::Calls);
-                        if let Some(node) = self.graph.node_weight_mut(caller_idx) {
-                            for line in call.line..=call.line_end {
-                                if !node.call_lines.contains(&line) {
-                                    node.call_lines.push(line);
-                                }
-                            }
-                        }
-                    }
+                if nodes_needing_resolution.contains(&caller_idx) {
+                    self.resolve_call(caller_idx, call);
                 }
             }
         }
 
-        // Sort call_lines for changed nodes
-        for &idx in &nodes_needing_resolution {
-            if let Some(node) = self.graph.node_weight_mut(idx) {
-                node.call_lines.sort();
-                node.call_lines.dedup();
-            }
-        }
+        self.finalize_call_lines(nodes_needing_resolution.iter().copied());
 
         // Re-resolve contains for changed/added symbols
-        for sym in &new_extraction.symbols {
-            if let Some(ref parent_name) = sym.parent {
-                let child_key = (file.to_path_buf(), sym.name.clone());
-                let parent_key = (file.to_path_buf(), parent_name.clone());
-
-                if let Some(&child_idx) = self.qualified_index.get(&child_key) {
-                    if !nodes_needing_resolution.contains(&child_idx) {
-                        continue;
-                    }
-                    if let Some(&parent_idx) = self.qualified_index.get(&parent_key) {
-                        self.add_edge(parent_idx, child_idx, EdgeKind::Contains);
-                    }
-                }
-            }
-        }
+        self.resolve_contains(
+            file,
+            &new_extraction.symbols,
+            Some(&nodes_needing_resolution),
+        );
     }
 
     /// Soft-delete all nodes originating from a specific file.
@@ -307,19 +338,7 @@ impl CodeGraph {
                 .collect();
 
             for &node_idx in &child_nodes {
-                if let Some(node) = self.graph.node_weight_mut(node_idx) {
-                    let name = node.name.clone();
-                    let file = node.file_path.clone();
-                    node.removed = true;
-
-                    if let Some(indexes) = self.symbol_index.get_mut(&name) {
-                        indexes.retain(|&idx| idx != node_idx);
-                        if indexes.is_empty() {
-                            self.symbol_index.remove(&name);
-                        }
-                    }
-                    self.qualified_index.remove(&(file, name));
-                }
+                self.soft_delete_node(node_idx);
             }
 
             if let Some(file_node) = self.graph.node_weight_mut(file_idx) {
@@ -365,6 +384,11 @@ impl CodeGraph {
                     node.line_end,
                     node.code_snippet.clone(),
                 );
+                // Restore metadata that add_symbol doesn't carry
+                if let Some(new_node) = new_graph.graph.node_weight_mut(new_idx) {
+                    new_node.features = node.features.clone();
+                    new_node.call_lines = node.call_lines.clone();
+                }
                 old_to_new.insert(idx, new_idx);
             }
         }
@@ -390,4 +414,36 @@ impl CodeGraph {
             "compact complete"
         );
     }
+}
+
+/// Normalize a URL for cross-language matching.
+/// Lowercases, strips trailing slash, replaces path params with `:param`.
+fn normalize_api_url(url: &str) -> String {
+    let url = url.to_lowercase();
+    let url = url.trim_end_matches('/');
+    let mut result = String::with_capacity(url.len());
+    let mut chars = url.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '{' || c == '<' {
+            let close = if c == '{' { '}' } else { '>' };
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == close {
+                    break;
+                }
+            }
+            result.push_str(":param");
+        } else if c == ':' && result.ends_with('/') {
+            while let Some(&next) = chars.peek() {
+                if next == '/' {
+                    break;
+                }
+                chars.next();
+            }
+            result.push_str(":param");
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }

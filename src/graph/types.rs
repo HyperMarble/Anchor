@@ -90,6 +90,10 @@ pub enum EdgeKind {
     Parameter,
     /// Return type relationship (Function -> Type).
     Returns,
+    /// Cross-language API boundary (matched by URL pattern).
+    ApiCall,
+    /// Environment variable reference (definition ↔ usage).
+    EnvRef,
 }
 
 impl fmt::Display for EdgeKind {
@@ -106,6 +110,8 @@ impl fmt::Display for EdgeKind {
             EdgeKind::References => write!(f, "references"),
             EdgeKind::Parameter => write!(f, "parameter"),
             EdgeKind::Returns => write!(f, "returns"),
+            EdgeKind::ApiCall => write!(f, "api_call"),
+            EdgeKind::EnvRef => write!(f, "env_ref"),
         }
     }
 }
@@ -236,6 +242,30 @@ pub struct ExtractedCall {
     pub line_end: usize,
 }
 
+/// Whether an API endpoint is defined (server) or consumed (client).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiEndpointKind {
+    /// Server-side route definition (e.g., @app.route, app.get).
+    Defines,
+    /// Client-side API call (e.g., fetch, axios.get).
+    Consumes,
+}
+
+/// An API endpoint extracted from source code.
+#[derive(Debug, Clone)]
+pub struct ExtractedApiEndpoint {
+    /// Normalized URL path (e.g., "/api/users/:param").
+    pub url: String,
+    /// HTTP method if known (GET, POST, etc.).
+    pub method: Option<String>,
+    /// Whether this defines or consumes the endpoint.
+    pub kind: ApiEndpointKind,
+    /// Enclosing function/method name.
+    pub scope: Option<String>,
+    /// Line number (1-indexed).
+    pub line: usize,
+}
+
 /// All extracted information from a single source file.
 #[derive(Debug, Clone)]
 pub struct FileExtractions {
@@ -247,6 +277,8 @@ pub struct FileExtractions {
     pub imports: Vec<ExtractedImport>,
     /// Function/method calls.
     pub calls: Vec<ExtractedCall>,
+    /// API endpoints (routes defined or consumed).
+    pub api_endpoints: Vec<ExtractedApiEndpoint>,
 }
 
 // ─── Graph Search Results ─────────────────────────────────────────────────────

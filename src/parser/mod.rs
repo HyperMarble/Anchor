@@ -7,6 +7,7 @@
 
 pub mod extractor;
 pub mod language;
+pub mod queries;
 
 pub use extractor::extract_file;
 pub use language::SupportedLanguage;

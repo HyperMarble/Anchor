@@ -19,18 +19,22 @@ use crate::parser::{extract_file, SupportedLanguage};
 ///
 /// Respects .gitignore, walks recursively, parses all supported
 /// language files, and returns a fully connected CodeGraph.
-pub fn build_graph(root: &Path) -> CodeGraph {
-    let files: Vec<_> = WalkBuilder::new(root)
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .add_custom_ignore_filename(".anchorignore")
-        .build()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
-        .filter(|entry| SupportedLanguage::from_path(entry.path()).is_some())
-        .map(|entry| entry.into_path())
+pub fn build_graph(roots: &[&Path]) -> CodeGraph {
+    let files: Vec<_> = roots
+        .iter()
+        .flat_map(|root| {
+            WalkBuilder::new(root)
+                .hidden(true)
+                .git_ignore(true)
+                .git_global(true)
+                .git_exclude(true)
+                .add_custom_ignore_filename(".anchorignore")
+                .build()
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
+                .filter(|entry| SupportedLanguage::from_path(entry.path()).is_some())
+                .map(|entry| entry.into_path())
+        })
         .collect();
     let extractions: Mutex<Vec<FileExtractions>> = Mutex::new(Vec::with_capacity(files.len()));
 
