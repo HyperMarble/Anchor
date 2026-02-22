@@ -51,7 +51,7 @@ pub fn start_daemon(root: &Path) -> Result<()> {
 
     // Build initial graph
     info!(root = %root.display(), "building initial graph");
-    let graph = build_graph(&root);
+    let graph = build_graph(&[&root]);
     let graph = Arc::new(RwLock::new(graph));
 
     // Create lock manager
@@ -219,7 +219,11 @@ fn process_request(
             })
         }
 
-        Request::Insert { path, pattern, content } => {
+        Request::Insert {
+            path,
+            pattern,
+            content,
+        } => {
             let file_path = root.join(&path);
             with_file_lock(&file_path, graph, lock_manager, |fp| {
                 let wr = write::insert_after(fp, &pattern, &content)?;
@@ -315,7 +319,7 @@ fn process_request(
 
         // ─── System ────────────────────────────────────────────
         Request::Rebuild => {
-            let new_graph = build_graph(root);
+            let new_graph = build_graph(&[root]);
             let mut g = match graph.write() {
                 Ok(g) => g,
                 Err(e) => return Response::error(format!("lock error: {}", e)),
@@ -366,11 +370,8 @@ where
         Err(e) => return Response::error(format!("graph lock error: {}", e)),
     };
 
-    let lock_result = lock_manager.acquire_with_wait(
-        file_path,
-        &g,
-        std::time::Duration::from_secs(30),
-    );
+    let lock_result =
+        lock_manager.acquire_with_wait(file_path, &g, std::time::Duration::from_secs(30));
     drop(g);
 
     match lock_result {
@@ -381,9 +382,9 @@ where
 
             match result {
                 Ok(mut data) => {
-                    data.as_object_mut().map(|obj| {
+                    if let Some(obj) = data.as_object_mut() {
                         obj.insert("locked_dependents".to_string(), dependents.len().into());
-                    });
+                    }
                     Response::ok(data)
                 }
                 Err(e) => Response::error(format!("write error: {}", e)),

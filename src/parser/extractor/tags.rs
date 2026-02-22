@@ -7,8 +7,8 @@
 
 use std::collections::HashSet;
 
-use tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator, Tree};
 use tracing::warn;
+use tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator, Tree};
 
 use super::helpers::{bounded_snippet, node_text};
 use crate::graph::types::*;
@@ -86,7 +86,12 @@ fn split_identifier(name: &str) -> Vec<String> {
 
 /// Generate static semantic features from symbol metadata.
 /// Combines name tokens, kind, parent scope, and file path segments.
-fn generate_features(name: &str, kind: NodeKind, parent: Option<&str>, file_path: &str) -> Vec<String> {
+fn generate_features(
+    name: &str,
+    kind: NodeKind,
+    parent: Option<&str>,
+    file_path: &str,
+) -> Vec<String> {
     let mut features = split_identifier(name);
 
     // Kind token
@@ -100,7 +105,8 @@ fn generate_features(name: &str, kind: NodeKind, parent: Option<&str>, file_path
 
     // File path segments (skip "src" and file extension)
     for segment in file_path.split(&['/', '\\'][..]) {
-        let stem = segment.strip_suffix(".rs")
+        let stem = segment
+            .strip_suffix(".rs")
             .or_else(|| segment.strip_suffix(".py"))
             .or_else(|| segment.strip_suffix(".ts"))
             .or_else(|| segment.strip_suffix(".tsx"))
@@ -312,9 +318,9 @@ pub fn extract_imports(
     let import_kinds: &[&str] = match lang {
         SupportedLanguage::Rust => &["use_declaration"],
         SupportedLanguage::Python => &["import_statement", "import_from_statement"],
-        SupportedLanguage::JavaScript
-        | SupportedLanguage::Tsx
-        | SupportedLanguage::TypeScript => &["import_statement"],
+        SupportedLanguage::JavaScript | SupportedLanguage::Tsx | SupportedLanguage::TypeScript => {
+            &["import_statement"]
+        }
         SupportedLanguage::Go => &["import_declaration"],
         SupportedLanguage::Java => &["import_declaration"],
         SupportedLanguage::CSharp => &["using_directive"],
@@ -328,12 +334,7 @@ pub fn extract_imports(
     imports
 }
 
-fn collect_imports(
-    node: &Node,
-    source: &[u8],
-    kinds: &[&str],
-    imports: &mut Vec<ExtractedImport>,
-) {
+fn collect_imports(node: &Node, source: &[u8], kinds: &[&str], imports: &mut Vec<ExtractedImport>) {
     if kinds.contains(&node.kind()) {
         let text = node_text(node, source);
         let path = clean_import_path(&text);

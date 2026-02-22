@@ -40,17 +40,15 @@ impl Query {
 
         let filtered: Vec<_> = if let Some(ref pat) = pattern {
             // Use Brzozowski derivatives regex - ReDoS-safe, case-insensitive
-            let regex = parse(&pat.to_lowercase()).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+            let regex =
+                parse(&pat.to_lowercase()).map_err(|e| async_graphql::Error::new(e.to_string()))?;
             let mut matcher = Matcher::new(regex);
             results
                 .into_iter()
                 .filter(|r| matcher.is_match(&r.symbol.to_lowercase()))
                 .collect()
         } else if exact {
-            results
-                .into_iter()
-                .filter(|r| r.symbol == name)
-                .collect()
+            results.into_iter().filter(|r| r.symbol == name).collect()
         } else {
             results
                 .into_iter()
@@ -152,7 +150,8 @@ impl Query {
         #[graphql(default = 20)] limit: i32,
     ) -> Result<Vec<Symbol>> {
         let graph = ctx.data::<Arc<CodeGraph>>()?;
-        let regex = parse(&pattern.to_lowercase()).map_err(|e| async_graphql::Error::new(e.to_string()))?;
+        let regex =
+            parse(&pattern.to_lowercase()).map_err(|e| async_graphql::Error::new(e.to_string()))?;
         let mut matcher = Matcher::new(regex);
 
         // Get all symbols from the graph and filter with regex (case-insensitive)
@@ -174,7 +173,8 @@ impl Query {
 
         // If regex found nothing, fall back to feature-based search
         if matched.is_empty() {
-            let query_terms: Vec<&str> = pattern.split(&['*', '.', ' '][..])
+            let query_terms: Vec<&str> = pattern
+                .split(&['*', '.', ' '][..])
                 .filter(|t| t.len() > 2)
                 .collect();
             if !query_terms.is_empty() {
@@ -182,22 +182,35 @@ impl Query {
                     .iter()
                     .filter(|r| !r.features.is_empty())
                     .filter_map(|r| {
-                        let hits = query_terms.iter()
-                            .filter(|t| r.features.iter().any(|f| f.contains(&t.to_lowercase().as_str())))
+                        let hits = query_terms
+                            .iter()
+                            .filter(|t| {
+                                r.features
+                                    .iter()
+                                    .any(|f| f.contains(t.to_lowercase().as_str()))
+                            })
                             .count();
-                        if hits > 0 { Some((query_terms.len() - hits, r)) } else { None }
+                        if hits > 0 {
+                            Some((query_terms.len() - hits, r))
+                        } else {
+                            None
+                        }
                     })
                     .collect();
                 scored.sort_by_key(|(score, _)| *score);
-                return Ok(scored.into_iter().take(limit as usize).map(|(_, r)| Symbol {
-                    name: r.symbol.clone(),
-                    kind: r.kind.to_string(),
-                    file: r.file.to_string_lossy().to_string(),
-                    line: r.line_start as i32,
-                    code_internal: Some(r.code.clone()),
-                    call_lines: r.call_lines.clone(),
-                    features: r.features.clone(),
-                }).collect());
+                return Ok(scored
+                    .into_iter()
+                    .take(limit as usize)
+                    .map(|(_, r)| Symbol {
+                        name: r.symbol.clone(),
+                        kind: r.kind.to_string(),
+                        file: r.file.to_string_lossy().to_string(),
+                        line: r.line_start as i32,
+                        code_internal: Some(r.code.clone()),
+                        call_lines: r.call_lines.clone(),
+                        features: r.features.clone(),
+                    })
+                    .collect());
             }
         }
 

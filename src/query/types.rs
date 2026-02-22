@@ -280,17 +280,19 @@ impl Signature {
 
     /// Compare with another signature and return (added_params, removed_params)
     pub fn diff(&self, new: &Signature) -> (Vec<Param>, Vec<Param>) {
-        let old_names: std::collections::HashSet<_> =
-            self.params.iter().map(|p| &p.name).collect();
-        let new_names: std::collections::HashSet<_> =
-            new.params.iter().map(|p| &p.name).collect();
+        let old_names: std::collections::HashSet<_> = self.params.iter().map(|p| &p.name).collect();
+        let new_names: std::collections::HashSet<_> = new.params.iter().map(|p| &p.name).collect();
 
-        let added: Vec<Param> = new.params.iter()
+        let added: Vec<Param> = new
+            .params
+            .iter()
             .filter(|p| !old_names.contains(&p.name))
             .cloned()
             .collect();
 
-        let removed: Vec<Param> = self.params.iter()
+        let removed: Vec<Param> = self
+            .params
+            .iter()
             .filter(|p| !new_names.contains(&p.name))
             .cloned()
             .collect();

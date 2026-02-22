@@ -100,16 +100,27 @@ mod tests {
                 line: 11,
                 line_end: 11,
             }],
+            api_endpoints: vec![],
         }]);
 
         let schema = build_schema(Arc::new(graph));
-        let result = execute(&schema, r#"{ symbol(name: "caller", exact: true) { name code } }"#).await;
+        let result = execute(
+            &schema,
+            r#"{ symbol(name: "caller", exact: true) { name code } }"#,
+        )
+        .await;
 
         eprintln!("GraphQL result: {}", result);
 
         // Sliced code should contain "..." and line numbers
-        assert!(result.contains("callee()"), "should contain the call to callee");
-        assert!(result.contains("..."), "should have ... for skipped sections");
+        assert!(
+            result.contains("callee()"),
+            "should contain the call to callee"
+        );
+        assert!(
+            result.contains("..."),
+            "should have ... for skipped sections"
+        );
         assert!(result.contains("fn caller()"), "should have the signature");
     }
 }

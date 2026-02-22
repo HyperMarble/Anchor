@@ -195,7 +195,7 @@ const API_URL = "https://api.example.com";
     fn test_build_graph_self() {
         use std::path::Path;
         let src_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let graph = build_graph(&src_dir);
+        let graph = build_graph(&[src_dir.as_path()]);
 
         let stats = graph.stats();
         assert!(stats.file_count > 0);
@@ -211,7 +211,10 @@ const API_URL = "https://api.example.com";
         // Check call_lines are populated on symbols with graph dependencies
         let results = graph.search("build_from_extractions", 3);
         assert!(!results.is_empty());
-        assert!(!results[0].call_lines.is_empty(), "call_lines should be populated for functions with graph dependencies");
+        assert!(
+            !results[0].call_lines.is_empty(),
+            "call_lines should be populated for functions with graph dependencies"
+        );
     }
 
     #[test]
@@ -477,7 +480,7 @@ mod benchmarks {
     #[test]
     fn benchmark_search() {
         let repo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-        let graph = build_graph(&repo_path);
+        let graph = build_graph(&[repo_path.as_path()]);
 
         let start = std::time::Instant::now();
         let _result = graph_search(&graph, "CodeGraph", 2);

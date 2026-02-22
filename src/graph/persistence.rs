@@ -117,6 +117,9 @@ impl CodeGraph {
                 if !node.call_lines.is_empty() {
                     n.call_lines = node.call_lines;
                 }
+                if !node.features.is_empty() {
+                    n.features = node.features;
+                }
             }
 
             index_map.push(idx);

@@ -28,29 +28,47 @@ impl CodeGraph {
             }
         }
 
-        // If no exact match, fuzzy search
+        // If no exact match, fuzzy search by name + features
         if results.is_empty() {
-            let mut scored: Vec<(usize, petgraph::graph::NodeIndex)> = self
-                .symbol_index
-                .iter()
-                .filter(|(name, _)| name.to_lowercase().contains(&query_lower))
-                .flat_map(|(_, indexes)| {
-                    indexes.iter().filter_map(|&idx| {
-                        let node = &self.graph[idx];
-                        if node.removed {
-                            return None;
-                        }
+            let mut scored: Vec<(usize, petgraph::graph::NodeIndex)> = Vec::new();
+            let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+
+            for (name, indexes) in &self.symbol_index {
+                let name_lower = name.to_lowercase();
+                for &idx in indexes {
+                    let node = &self.graph[idx];
+                    if node.removed {
+                        continue;
+                    }
+
+                    // Name-based scoring
+                    if name_lower.contains(&query_lower) {
                         let score = if node.name == query {
                             0
-                        } else if node.name.to_lowercase().starts_with(&query_lower) {
+                        } else if name_lower.starts_with(&query_lower) {
                             1
                         } else {
                             2
                         };
-                        Some((score, idx))
-                    })
-                })
-                .collect();
+                        scored.push((score, idx));
+                    } else if !node.features.is_empty() {
+                        // Feature-based scoring: count how many query terms match features
+                        let feature_matches = query_terms
+                            .iter()
+                            .filter(|t| t.len() > 2 && node.features.iter().any(|f| f.contains(*t)))
+                            .count();
+                        if feature_matches > 0 {
+                            // Score 3 for single-term match, 2 for multi-term (better than substring)
+                            let score = if feature_matches >= query_terms.len() {
+                                3
+                            } else {
+                                4
+                            };
+                            scored.push((score, idx));
+                        }
+                    }
+                }
+            }
 
             scored.sort_by_key(|(score, _)| *score);
 
@@ -469,6 +487,7 @@ impl CodeGraph {
             calls,
             called_by,
             imports,
+            features: node.features.clone(),
         })
     }
 }

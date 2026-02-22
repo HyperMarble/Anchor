@@ -75,10 +75,7 @@ pub(crate) struct LockEntry {
 #[derive(Debug, Clone)]
 pub enum LockStatus {
     Unlocked,
-    Locked {
-        by: SymbolKey,
-        duration_ms: u64,
-    },
+    Locked { by: SymbolKey, duration_ms: u64 },
 }
 
 /// Information about an active lock.

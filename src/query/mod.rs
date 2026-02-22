@@ -13,8 +13,8 @@ pub mod types;
 // Re-export the main API
 pub use context::{get_context, get_context_for_change};
 pub use types::{
-    ContextResponse, DependencyResponse, Edit, FileSymbolEntry, FileSymbolsResponse, Param,
-    Query, Reference, SearchResponse, Signature, StatsResponse, Symbol,
+    ContextResponse, DependencyResponse, Edit, FileSymbolEntry, FileSymbolsResponse, Param, Query,
+    Reference, SearchResponse, Signature, StatsResponse, Symbol,
 };
 
 // Re-export search functions for backwards compatibility

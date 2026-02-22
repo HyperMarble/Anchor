@@ -439,8 +439,8 @@ fn find_similar(graph: &CodeGraph, reference: &SearchResult) -> Vec<Symbol> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::Signature;
+    use super::*;
     use crate::parser;
     use std::path::PathBuf;
 

@@ -110,7 +110,8 @@ impl Matcher {
 
         for c in s.chars() {
             let key = (current.clone(), c);
-            current = self.cache
+            current = self
+                .cache
                 .entry(key)
                 .or_insert_with_key(|(r, ch)| derivative(r, *ch))
                 .clone();
@@ -130,7 +131,8 @@ impl Matcher {
 
         for c in s.chars() {
             let key = (current.clone(), c);
-            current = self.cache
+            current = self
+                .cache
                 .entry(key)
                 .or_insert_with_key(|(r, ch)| derivative(r, *ch))
                 .clone();

@@ -260,6 +260,7 @@ mod tests {
                 line: 6,
                 line_end: 6,
             }],
+            api_endpoints: vec![],
         }];
 
         let mut graph = CodeGraph::new();
@@ -675,7 +676,11 @@ mod tests {
         let test_file = dir.path().join("test.rs");
         {
             let mut f = std::fs::File::create(&test_file).unwrap();
-            write!(f, "fn foo() {{\n    let x = 1;\n}}\n\nfn bar() {{\n    let y = 2;\n}}\n").unwrap();
+            write!(
+                f,
+                "fn foo() {{\n    let x = 1;\n}}\n\nfn bar() {{\n    let y = 2;\n}}\n"
+            )
+            .unwrap();
         }
 
         // Build graph
@@ -690,7 +695,13 @@ mod tests {
         assert_eq!(results[0].line_start, 5);
 
         // Write: add 2 lines inside foo (lines shift)
-        crate::write::replace_range(&test_file, 2, 2, "    let x = 1;\n    let z = 3;\n    let w = 4;").unwrap();
+        crate::write::replace_range(
+            &test_file,
+            2,
+            2,
+            "    let x = 1;\n    let z = 3;\n    let w = 4;",
+        )
+        .unwrap();
 
         // Before rebuild: graph still says bar is at line 5 (stale)
         let results = graph.search("bar", 5);
@@ -699,6 +710,9 @@ mod tests {
         // After rebuild: bar should be at line 7
         crate::graph::rebuild_file(&mut graph, &test_file).unwrap();
         let results = graph.search("bar", 5);
-        assert_eq!(results[0].line_start, 7, "rebuild should update line numbers");
+        assert_eq!(
+            results[0].line_start, 7,
+            "rebuild should update line numbers"
+        );
     }
 }

@@ -24,8 +24,9 @@ impl<'a> LockGuard<'a> {
     pub fn new(manager: &'a LockManager, file: &Path, graph: &CodeGraph) -> Result<Self, String> {
         let key = SymbolKey::new(file, "__file__");
         match manager.try_acquire_symbol(&key, graph) {
-            LockResult::Acquired { symbol, .. }
-            | LockResult::AcquiredAfterWait { symbol, .. } => Ok(Self { manager, symbol }),
+            LockResult::Acquired { symbol, .. } | LockResult::AcquiredAfterWait { symbol, .. } => {
+                Ok(Self { manager, symbol })
+            }
             LockResult::Blocked {
                 blocked_by, reason, ..
             } => Err(format!("Blocked by {}: {}", blocked_by, reason)),
@@ -39,8 +40,9 @@ impl<'a> LockGuard<'a> {
         graph: &CodeGraph,
     ) -> Result<Self, String> {
         match manager.try_acquire_symbol(&symbol, graph) {
-            LockResult::Acquired { symbol, .. }
-            | LockResult::AcquiredAfterWait { symbol, .. } => Ok(Self { manager, symbol }),
+            LockResult::Acquired { symbol, .. } | LockResult::AcquiredAfterWait { symbol, .. } => {
+                Ok(Self { manager, symbol })
+            }
             LockResult::Blocked {
                 blocked_by, reason, ..
             } => Err(format!("Blocked by {}: {}", blocked_by, reason)),
@@ -56,8 +58,9 @@ impl<'a> LockGuard<'a> {
     ) -> Result<Self, String> {
         let key = SymbolKey::new(file, "__file__");
         match manager.acquire_symbol_with_wait(&key, graph, timeout) {
-            LockResult::Acquired { symbol, .. }
-            | LockResult::AcquiredAfterWait { symbol, .. } => Ok(Self { manager, symbol }),
+            LockResult::Acquired { symbol, .. } | LockResult::AcquiredAfterWait { symbol, .. } => {
+                Ok(Self { manager, symbol })
+            }
             LockResult::Blocked {
                 blocked_by, reason, ..
             } => Err(format!("Blocked by {}: {}", blocked_by, reason)),

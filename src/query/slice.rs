@@ -74,9 +74,12 @@ pub fn slice_code(code: &str, call_lines: &[usize], line_start: usize) -> SliceR
     // Also keep return statements
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with("return ") || trimmed.starts_with("return;")
-            || trimmed.starts_with("Ok(") || trimmed.starts_with("Err(")
-            || trimmed.starts_with("raise ") || trimmed.starts_with("throw ")
+        if trimmed.starts_with("return ")
+            || trimmed.starts_with("return;")
+            || trimmed.starts_with("Ok(")
+            || trimmed.starts_with("Err(")
+            || trimmed.starts_with("raise ")
+            || trimmed.starts_with("throw ")
         {
             keep[i] = true;
         }
