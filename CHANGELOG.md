@@ -2,7 +2,7 @@
 
 All notable changes to Anchor are documented here.
 
-## [Unreleased]
+## [0.1.6] - 2026-02-xx
 
 ### Added
 - **Cross-language API boundary detection**: Unified pattern-driven extractor matches route definitions with client calls across languages via `ApiCall` edges
