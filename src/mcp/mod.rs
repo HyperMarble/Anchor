@@ -10,9 +10,7 @@ pub mod tools;
 pub mod types;
 
 use rmcp::{
-    handler::server::router::tool::ToolRouter,
-    model::*,
-    tool_handler, ServerHandler, ServiceExt,
+    handler::server::router::tool::ToolRouter, model::*, tool_handler, ServerHandler, ServiceExt,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -65,8 +63,8 @@ impl ServerHandler for AnchorMcp {
 }
 
 /// Run the MCP server on stdio.
-pub async fn run(root: PathBuf) -> anyhow::Result<()> {
-    let service = AnchorMcp::new(root);
+pub async fn run(roots: Vec<PathBuf>) -> anyhow::Result<()> {
+    let service = AnchorMcp::new(roots);
     let server = service.serve(rmcp::transport::stdio()).await?;
     server.waiting().await?;
     Ok(())

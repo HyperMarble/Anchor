@@ -10,9 +10,16 @@ use anchor::graph::{build_graph, CodeGraph};
 use anchor::updater;
 use anyhow::Result;
 use clap::Parser;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tracing_subscriber::EnvFilter;
 
 fn main() {
+    // Initialize tracing — control with RUST_LOG env var (e.g. RUST_LOG=debug)
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
@@ -22,23 +29,30 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let root = cli.root.canonicalize().unwrap_or(cli.root);
+    let roots: Vec<_> = cli
+        .root
+        .into_iter()
+        .map(|r| r.canonicalize().unwrap_or(r))
+        .collect();
+    let root = roots[0].clone(); // primary root for cache/daemon
     let cache_path = root.join(".anchor/graph.bin");
 
-    // No command = show help
-    if cli.command.is_none() {
-        cli::print_usage();
-        return Ok(());
-    }
+    let command = match cli.command {
+        Some(cmd) => cmd,
+        None => {
+            cli::print_usage();
+            return Ok(());
+        }
+    };
 
-    match cli.command.unwrap() {
+    match command {
         // ─── Query Commands ───────────────────────────────────────
         Commands::Context {
             queries,
             limit,
             full,
         } => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
+            let graph = load_or_build_graph(&roots, &cache_path)?;
             cli_read::context(&graph, &queries, limit, full)
         }
 
@@ -47,7 +61,7 @@ fn run(cli: Cli) -> Result<()> {
             pattern,
             limit,
         } => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
+            let graph = load_or_build_graph(&roots, &cache_path)?;
             cli_read::search(&graph, &queries, pattern.as_deref(), limit)
         }
 
@@ -109,7 +123,7 @@ fn run(cli: Cli) -> Result<()> {
 
         // ─── System Commands ──────────────────────────────────────
         Commands::Build => {
-            cli_read::build(&root, &cache_path)?;
+            cli_read::build(&roots, &cache_path)?;
             // Auto-start daemon for file watching
             if !anchor::daemon::is_daemon_running(&root) {
                 cli::daemon::start_background(&root)?;
@@ -118,28 +132,28 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Commands::Map { scope } => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
+            let graph = load_or_build_graph(&roots, &cache_path)?;
             cli_read::map(&graph, scope.as_deref())
         }
 
         Commands::Overview => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
+            let graph = load_or_build_graph(&roots, &cache_path)?;
             cli_read::overview(&graph)
         }
 
         Commands::Files => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
+            let graph = load_or_build_graph(&roots, &cache_path)?;
             cli_read::files(&graph)
         }
 
         Commands::Stats => {
-            let graph = load_or_build_graph(&root, &cache_path)?;
+            let graph = load_or_build_graph(&roots, &cache_path)?;
             cli_read::stats(&graph)
         }
 
         Commands::Mcp => tokio::runtime::Runtime::new()
             .expect("Failed to create tokio runtime")
-            .block_on(anchor::mcp::run(root)),
+            .block_on(anchor::mcp::run(roots)),
 
         Commands::Daemon { action } => cli::daemon::handle(&root, action.as_ref()),
 
@@ -175,7 +189,7 @@ fn uninstall() -> Result<()> {
 }
 
 /// Load graph from cache or build if not exists
-fn load_or_build_graph(root: &Path, cache_path: &Path) -> Result<CodeGraph> {
+fn load_or_build_graph(roots: &[PathBuf], cache_path: &Path) -> Result<CodeGraph> {
     if cache_path.exists() {
         match CodeGraph::load(cache_path) {
             Ok(graph) => return Ok(graph),
@@ -186,7 +200,8 @@ fn load_or_build_graph(root: &Path, cache_path: &Path) -> Result<CodeGraph> {
     }
 
     // Build and cache
-    let graph = build_graph(root);
+    let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
+    let graph = build_graph(&root_refs);
     if let Some(parent) = cache_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

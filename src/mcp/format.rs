@@ -28,7 +28,8 @@ pub fn format_symbol(output: &mut String, sym: &serde_json::Value) {
 
     // Callers
     if let Some(callers) = sym.get("callers").and_then(|c| c.as_array()) {
-        let mut names: Vec<&str> = callers.iter()
+        let mut names: Vec<&str> = callers
+            .iter()
             .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
             .filter(|n| !is_file_name(n))
             .collect();
@@ -41,7 +42,8 @@ pub fn format_symbol(output: &mut String, sym: &serde_json::Value) {
 
     // Callees
     if let Some(callees) = sym.get("callees").and_then(|c| c.as_array()) {
-        let mut names: Vec<&str> = callees.iter()
+        let mut names: Vec<&str> = callees
+            .iter()
             .filter_map(|c| c.get("name").and_then(|n| n.as_str()))
             .filter(|n| !is_file_name(n))
             .collect();

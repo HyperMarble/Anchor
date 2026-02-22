@@ -51,7 +51,9 @@ pub struct WriteRequest {
     )]
     pub mode: String,
 
-    #[schemars(description = "Relative file path (e.g. \"src/main.rs\"). Required for range mode.")]
+    #[schemars(
+        description = "Relative file path (e.g. \"src/main.rs\"). Required for range mode."
+    )]
     pub path: Option<String>,
 
     #[schemars(description = "Start line (1-indexed, inclusive). Required for range mode.")]

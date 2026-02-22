@@ -5,11 +5,7 @@
 //  Created by hak (tharun)
 //
 
-use rmcp::{
-    handler::server::wrapper::Parameters,
-    model::*,
-    tool, tool_router,
-};
+use rmcp::{handler::server::wrapper::Parameters, model::*, tool, tool_router};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,12 +18,14 @@ use crate::lock::{LockManager, LockResult, SymbolKey};
 
 #[tool_router]
 impl AnchorMcp {
-    pub fn new(root: std::path::PathBuf) -> Self {
+    pub fn new(roots: Vec<std::path::PathBuf>) -> Self {
+        let root = roots[0].clone();
         let cache_path = root.join(".anchor/graph.bin");
+        let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
         let graph = if cache_path.exists() {
-            CodeGraph::load(&cache_path).unwrap_or_else(|_| build_graph(&root))
+            CodeGraph::load(&cache_path).unwrap_or_else(|_| build_graph(&root_refs))
         } else {
-            let graph = build_graph(&root);
+            let graph = build_graph(&root_refs);
             if let Some(parent) = cache_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
@@ -44,7 +42,10 @@ impl AnchorMcp {
     }
 
     fn load_graph(&self) -> Result<Arc<CodeGraph>, ErrorData> {
-        let guard = self.graph.read().map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
+        let guard = self
+            .graph
+            .read()
+            .map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
         Ok(Arc::new(guard.clone()))
     }
 
@@ -56,7 +57,9 @@ impl AnchorMcp {
         }
     }
 
-    #[tool(description = "Get full context for symbols: sliced code + callers + callees. Returns exact line numbers you can pass directly to 'write'. Supports multiple symbols in one call. Shows line coverage (e.g. [25/88 lines, 3 calls]) when sliced. Set full=true to disable slicing.")]
+    #[tool(
+        description = "Get full context for symbols: sliced code + callers + callees. Returns exact line numbers you can pass directly to 'write'. Supports multiple symbols in one call. Shows line coverage (e.g. [25/88 lines, 3 calls]) when sliced. Set full=true to disable slicing."
+    )]
     async fn context(
         &self,
         Parameters(req): Parameters<ContextRequest>,
@@ -103,7 +106,9 @@ impl AnchorMcp {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Search for symbols by name or regex pattern. Returns lightweight results: NAME KIND FILE:LINE. Use for finding symbols before calling context.")]
+    #[tool(
+        description = "Search for symbols by name or regex pattern. Returns lightweight results: NAME KIND FILE:LINE. Use for finding symbols before calling context."
+    )]
     async fn search(
         &self,
         Parameters(req): Parameters<SearchRequest>,
@@ -133,7 +138,11 @@ impl AnchorMcp {
 
         let mut output = String::new();
 
-        if let Some(symbols) = json.get("data").and_then(|d| d.get("search")).and_then(|s| s.as_array()) {
+        if let Some(symbols) = json
+            .get("data")
+            .and_then(|d| d.get("search"))
+            .and_then(|s| s.as_array())
+        {
             if symbols.is_empty() {
                 output.push_str(&format!("No symbols match '{}'\n", req.query));
             } else {
@@ -154,7 +163,9 @@ impl AnchorMcp {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Get codebase map: modules, entry points, top connected symbols. Use for understanding project structure. Optional scope to zoom into a module.")]
+    #[tool(
+        description = "Get codebase map: modules, entry points, top connected symbols. Use for understanding project structure. Optional scope to zoom into a module."
+    )]
     async fn map(
         &self,
         Parameters(req): Parameters<MapRequest>,
@@ -167,7 +178,8 @@ impl AnchorMcp {
         let mut all_symbols: Vec<(String, String, usize, usize, String)> = Vec::new();
 
         for file_path in graph.all_files() {
-            let dir = file_path.parent()
+            let dir = file_path
+                .parent()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| ".".to_string());
 
@@ -178,19 +190,31 @@ impl AnchorMcp {
             }
 
             for symbol in graph.symbols_in_file(&file_path) {
-                if matches!(symbol.kind, crate::graph::types::NodeKind::Import | crate::graph::types::NodeKind::File) {
+                if matches!(
+                    symbol.kind,
+                    crate::graph::types::NodeKind::Import | crate::graph::types::NodeKind::File
+                ) {
                     continue;
                 }
 
                 let callers = graph.dependents(&symbol.name).len();
                 let callees = graph.dependencies(&symbol.name).len();
-                let short_module = dir.split('/').last().unwrap_or(&dir).to_string();
+                let short_module = dir.split('/').next_back().unwrap_or(&dir).to_string();
 
-                modules.entry(dir.clone())
-                    .or_default()
-                    .push((symbol.name.clone(), symbol.kind.to_string(), callers, callees));
+                modules.entry(dir.clone()).or_default().push((
+                    symbol.name.clone(),
+                    symbol.kind.to_string(),
+                    callers,
+                    callees,
+                ));
 
-                all_symbols.push((symbol.name.clone(), symbol.kind.to_string(), callers, callees, short_module));
+                all_symbols.push((
+                    symbol.name.clone(),
+                    symbol.kind.to_string(),
+                    callers,
+                    callees,
+                    short_module,
+                ));
             }
         }
 
@@ -208,15 +232,23 @@ impl AnchorMcp {
                 for (name, kind, callers, callees) in symbols {
                     let mut parts = Vec::new();
                     if *callees > 0 {
-                        let deps: Vec<String> = graph.dependencies(name)
-                            .iter().take(5).map(|d| d.symbol.clone()).collect();
+                        let deps: Vec<String> = graph
+                            .dependencies(name)
+                            .iter()
+                            .take(5)
+                            .map(|d| d.symbol.clone())
+                            .collect();
                         if !deps.is_empty() {
                             parts.push(format!(">{}", deps.join(",")));
                         }
                     }
                     if *callers > 0 {
-                        let callers_list: Vec<String> = graph.dependents(name)
-                            .iter().take(5).map(|d| d.symbol.clone()).collect();
+                        let callers_list: Vec<String> = graph
+                            .dependents(name)
+                            .iter()
+                            .take(5)
+                            .map(|d| d.symbol.clone())
+                            .collect();
                         if !callers_list.is_empty() {
                             parts.push(format!("<{}", callers_list.join(",")));
                         }
@@ -233,9 +265,10 @@ impl AnchorMcp {
         }
 
         // Top-level view
-        let module_line: Vec<String> = modules.iter()
+        let module_line: Vec<String> = modules
+            .iter()
             .map(|(dir, symbols)| {
-                let short_dir = dir.split('/').last().unwrap_or(dir);
+                let short_dir = dir.split('/').next_back().unwrap_or(dir);
                 format!("{}({}s)", short_dir, symbols.len())
             })
             .collect();
@@ -243,11 +276,14 @@ impl AnchorMcp {
         output.push('\n');
 
         // Entry points
-        let entries: Vec<String> = all_symbols.iter()
+        let entries: Vec<String> = all_symbols
+            .iter()
             .filter(|(name, kind, callers, callees, _)| {
-                *callers == 0 && *callees > 0 &&
-                (kind == "function" || kind == "method") &&
-                !name.starts_with("test_") && name != "new"
+                *callers == 0
+                    && *callees > 0
+                    && (kind == "function" || kind == "method")
+                    && !name.starts_with("test_")
+                    && name != "new"
             })
             .map(|(name, _, _, _, module)| format!("{}:{}", module, name))
             .take(10)
@@ -265,10 +301,14 @@ impl AnchorMcp {
         let mut top: Vec<String> = Vec::new();
 
         for (name, kind, callers, callees, module) in by_connections.iter() {
-            if kind == "import" || name == "new" { continue; }
+            if kind == "import" || name == "new" {
+                continue;
+            }
             if seen.insert(name.clone()) {
                 top.push(format!("{}:{}({})", module, name, callers + callees));
-                if top.len() >= 10 { break; }
+                if top.len() >= 10 {
+                    break;
+                }
             }
         }
 
@@ -279,7 +319,9 @@ impl AnchorMcp {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Analyze impact of changing a symbol: what breaks, suggested fixes, affected tests. Use before modifying any function/method to understand blast radius.")]
+    #[tool(
+        description = "Analyze impact of changing a symbol: what breaks, suggested fixes, affected tests. Use before modifying any function/method to understand blast radius."
+    )]
     async fn impact(
         &self,
         Parameters(req): Parameters<ImpactRequest>,
@@ -300,7 +342,10 @@ impl AnchorMcp {
         }
 
         if let Some(sym) = response.symbols.first() {
-            output.push_str(&format!("{} {} {}:{}\n", sym.name, sym.kind, sym.file, sym.line));
+            output.push_str(&format!(
+                "{} {} {}:{}\n",
+                sym.name, sym.kind, sym.file, sym.line
+            ));
         }
 
         if !response.used_by.is_empty() {
@@ -315,9 +360,15 @@ impl AnchorMcp {
             output.push_str("\nBREAKS: nothing (no callers)\n");
         }
         if !response.edits.is_empty() {
-            output.push_str(&format!("\nEDITS ({} changes needed):\n", response.edits.len()));
+            output.push_str(&format!(
+                "\nEDITS ({} changes needed):\n",
+                response.edits.len()
+            ));
             for edit in &response.edits {
-                output.push_str(&format!("  {}:{} in {}\n", edit.file, edit.line, edit.in_symbol));
+                output.push_str(&format!(
+                    "  {}:{} in {}\n",
+                    edit.file, edit.line, edit.in_symbol
+                ));
                 output.push_str(&format!("    now: {}\n", edit.usage));
                 if let Some(ref suggested) = edit.suggested {
                     output.push_str(&format!("    fix: {}\n", suggested));
@@ -341,7 +392,9 @@ impl AnchorMcp {
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
-    #[tool(description = "Unified write tool. mode='range' replaces a line range with impact analysis. mode='ordered' writes multiple files in graph dependency order.")]
+    #[tool(
+        description = "Unified write tool. mode='range' replaces a line range with impact analysis. mode='ordered' writes multiple files in graph dependency order."
+    )]
     async fn write(
         &self,
         Parameters(req): Parameters<WriteRequest>,
@@ -360,9 +413,10 @@ impl AnchorMcp {
         };
 
         if mode == "ordered" {
-            let operations = req.operations.as_ref().ok_or_else(|| {
-                Self::err("write mode 'ordered' requires 'operations'")
-            })?;
+            let operations = req
+                .operations
+                .as_ref()
+                .ok_or_else(|| Self::err("write mode 'ordered' requires 'operations'"))?;
             if operations.is_empty() {
                 return Err(Self::err(
                     "write mode 'ordered' requires at least one operation",
@@ -443,7 +497,9 @@ impl AnchorMcp {
         // Lock affected symbols before writing
         let mut locked_symbols = Vec::new();
         {
-            let graph_ref = self.graph.read()
+            let graph_ref = self
+                .graph
+                .read()
                 .map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
             for name in &affected_names {
                 let key = SymbolKey::new(&full_path, name.as_str());
@@ -464,12 +520,8 @@ impl AnchorMcp {
             output.push_str(&format!("IMPACT: {}:{}-{}\n", path, start_line, end_line));
 
             for sym in &affected {
-                let response = crate::query::get_context_for_change(
-                    &graph,
-                    &sym.name,
-                    "change",
-                    None,
-                );
+                let response =
+                    crate::query::get_context_for_change(&graph, &sym.name, "change", None);
 
                 if !response.used_by.is_empty() {
                     output.push_str(&format!(
@@ -481,7 +533,10 @@ impl AnchorMcp {
                         output.push_str(&format!("    > {} in {}:{}\n", r.name, r.file, r.line));
                     }
                     if response.used_by.len() > 5 {
-                        output.push_str(&format!("    ... and {} more\n", response.used_by.len() - 5));
+                        output.push_str(&format!(
+                            "    ... and {} more\n",
+                            response.used_by.len() - 5
+                        ));
                     }
                 }
 

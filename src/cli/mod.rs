@@ -17,9 +17,9 @@ use std::path::PathBuf;
 #[command(about = "Infrastructure for Coding AI agents")]
 #[command(override_help = HELP_TEXT)]
 pub struct Cli {
-    /// Project root directory (default: current directory)
+    /// Project root directories (can specify multiple: -r ./backend -r ./frontend)
     #[arg(short, long, default_value = ".")]
-    pub root: PathBuf,
+    pub root: Vec<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
