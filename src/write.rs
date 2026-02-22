@@ -24,6 +24,11 @@ pub enum WriteError {
     InvalidInput(String),
 }
 
+/// Read a file, returning a FileNotFound error if missing.
+fn read_file(path: &Path) -> Result<String, WriteError> {
+    fs::read_to_string(path).map_err(|_| WriteError::FileNotFound(path.to_path_buf()))
+}
+
 /// Create a new file with the given content.
 pub fn create_file(path: &Path, content: &str) -> Result<WriteResult, WriteError> {
     let start = std::time::Instant::now();
@@ -47,10 +52,8 @@ pub fn create_file(path: &Path, content: &str) -> Result<WriteResult, WriteError
 pub fn insert_after(path: &Path, pattern: &str, content: &str) -> Result<WriteResult, WriteError> {
     let start = std::time::Instant::now();
 
-    let original =
-        fs::read_to_string(path).map_err(|_| WriteError::FileNotFound(path.to_path_buf()))?;
+    let original = read_file(path)?;
 
-    // Find pattern position
     let pos = original
         .find(pattern)
         .ok_or_else(|| WriteError::PatternNotFound(pattern.to_string()))?;
@@ -82,8 +85,7 @@ pub fn insert_after(path: &Path, pattern: &str, content: &str) -> Result<WriteRe
 pub fn insert_before(path: &Path, pattern: &str, content: &str) -> Result<WriteResult, WriteError> {
     let start = std::time::Instant::now();
 
-    let original =
-        fs::read_to_string(path).map_err(|_| WriteError::FileNotFound(path.to_path_buf()))?;
+    let original = read_file(path)?;
 
     let pos = original
         .find(pattern)
@@ -114,15 +116,13 @@ pub fn replace_all(
 ) -> Result<WriteResult, WriteError> {
     let start = std::time::Instant::now();
 
-    let original =
-        fs::read_to_string(path).map_err(|_| WriteError::FileNotFound(path.to_path_buf()))?;
+    let original = read_file(path)?;
 
     if !original.contains(old_pattern) {
         return Err(WriteError::PatternNotFound(old_pattern.to_string()));
     }
 
     let new_content = original.replace(old_pattern, new_content);
-
     let count = original.matches(old_pattern).count();
     fs::write(path, &new_content)?;
 
@@ -147,8 +147,7 @@ pub fn replace_first(
 ) -> Result<WriteResult, WriteError> {
     let start = std::time::Instant::now();
 
-    let original =
-        fs::read_to_string(path).map_err(|_| WriteError::FileNotFound(path.to_path_buf()))?;
+    let original = read_file(path)?;
 
     if !original.contains(old_pattern) {
         return Err(WriteError::PatternNotFound(old_pattern.to_string()));
@@ -189,8 +188,7 @@ pub fn replace_range(
         )));
     }
 
-    let original =
-        fs::read_to_string(path).map_err(|_| WriteError::FileNotFound(path.to_path_buf()))?;
+    let original = read_file(path)?;
 
     let lines: Vec<&str> = original.lines().collect();
     let total_lines = lines.len();
@@ -359,32 +357,21 @@ pub struct OrderedWriteResult {
     pub total_time_ms: u64,
 }
 
-/// Write multiple operations in dependency order using existing CodeGraph.
-///
-/// Uses the graph's dependency data to ensure dependencies are written before dependents.
-pub fn write_ordered(
-    graph: &CodeGraph,
-    operations: &[WriteOp],
-) -> Result<OrderedWriteResult, WriteError> {
-    let start = std::time::Instant::now();
-    let total_operations = operations.len();
-
-    // Build dependency edges using existing graph
+/// Topological sort of write operations using graph dependency data.
+/// Returns indices in dependency order (dependencies before dependents).
+fn topo_sort_ops(graph: &CodeGraph, operations: &[WriteOp]) -> Vec<usize> {
+    let mut symbol_to_op: HashMap<String, usize> = HashMap::new();
     let mut op_deps: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
     let mut op_dependents: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
-    let mut symbol_to_op: HashMap<String, usize> = HashMap::new();
 
-    // Map symbols to operation indices
     for (i, op) in operations.iter().enumerate() {
         if let Some(ref symbol) = op.symbol {
             symbol_to_op.insert(symbol.clone(), i);
         }
     }
 
-    // Use existing graph to find dependencies
     for (i, op) in operations.iter().enumerate() {
         if let Some(ref symbol) = op.symbol {
-            // Get what this symbol depends on from the graph
             for dep in graph.dependencies(symbol) {
                 if let Some(&dep_idx) = symbol_to_op.get(&dep.symbol) {
                     op_deps[i].push(dep_idx);
@@ -394,12 +381,11 @@ pub fn write_ordered(
         }
     }
 
-    // Topological sort using Kahn's algorithm
+    // Kahn's algorithm
     let mut in_degree: Vec<usize> = op_deps.iter().map(|d| d.len()).collect();
     let mut queue: VecDeque<usize> = VecDeque::new();
     let mut order: Vec<usize> = Vec::new();
 
-    // Start with operations that have no dependencies
     for (i, &degree) in in_degree.iter().enumerate() {
         if degree == 0 {
             queue.push_back(i);
@@ -408,7 +394,6 @@ pub fn write_ordered(
 
     while let Some(idx) = queue.pop_front() {
         order.push(idx);
-
         for &dependent in &op_dependents[idx] {
             in_degree[dependent] -= 1;
             if in_degree[dependent] == 0 {
@@ -417,7 +402,7 @@ pub fn write_ordered(
         }
     }
 
-    // Handle cycles - append remaining
+    // Handle cycles — append remaining
     if order.len() != operations.len() {
         let ordered_set: HashSet<usize> = order.iter().copied().collect();
         for i in 0..operations.len() {
@@ -427,7 +412,17 @@ pub fn write_ordered(
         }
     }
 
-    // Execute writes in order
+    order
+}
+
+/// Write multiple operations in dependency order using existing CodeGraph.
+pub fn write_ordered(
+    graph: &CodeGraph,
+    operations: &[WriteOp],
+) -> Result<OrderedWriteResult, WriteError> {
+    let start = std::time::Instant::now();
+    let order = topo_sort_ops(graph, operations);
+
     let mut results: Vec<WriteResult> = Vec::with_capacity(operations.len());
     let mut write_order: Vec<String> = Vec::with_capacity(operations.len());
 
@@ -452,7 +447,7 @@ pub fn write_ordered(
     let elapsed = start.elapsed();
 
     Ok(OrderedWriteResult {
-        total_operations,
+        total_operations: operations.len(),
         write_order,
         results,
         total_time_ms: elapsed.as_millis() as u64,
@@ -461,59 +456,7 @@ pub fn write_ordered(
 
 /// Analyze write operations and return ordered execution plan using existing graph.
 pub fn plan_write_order(graph: &CodeGraph, operations: &[WriteOp]) -> Vec<usize> {
-    let mut symbol_to_op: HashMap<String, usize> = HashMap::new();
-    let mut op_deps: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
-    let mut op_dependents: Vec<Vec<usize>> = vec![Vec::new(); operations.len()];
-
-    for (i, op) in operations.iter().enumerate() {
-        if let Some(ref symbol) = op.symbol {
-            symbol_to_op.insert(symbol.clone(), i);
-        }
-    }
-
-    for (i, op) in operations.iter().enumerate() {
-        if let Some(ref symbol) = op.symbol {
-            for dep in graph.dependencies(symbol) {
-                if let Some(&dep_idx) = symbol_to_op.get(&dep.symbol) {
-                    op_deps[i].push(dep_idx);
-                    op_dependents[dep_idx].push(i);
-                }
-            }
-        }
-    }
-
-    // Topological sort
-    let mut in_degree: Vec<usize> = op_deps.iter().map(|d| d.len()).collect();
-    let mut queue: VecDeque<usize> = VecDeque::new();
-    let mut order: Vec<usize> = Vec::new();
-
-    for (i, &degree) in in_degree.iter().enumerate() {
-        if degree == 0 {
-            queue.push_back(i);
-        }
-    }
-
-    while let Some(idx) = queue.pop_front() {
-        order.push(idx);
-
-        for &dependent in &op_dependents[idx] {
-            in_degree[dependent] -= 1;
-            if in_degree[dependent] == 0 {
-                queue.push_back(dependent);
-            }
-        }
-    }
-
-    if order.len() != operations.len() {
-        let ordered_set: HashSet<usize> = order.iter().copied().collect();
-        for i in 0..operations.len() {
-            if !ordered_set.contains(&i) {
-                order.push(i);
-            }
-        }
-    }
-
-    order
+    topo_sort_ops(graph, operations)
 }
 
 #[cfg(test)]
@@ -601,7 +544,7 @@ mod tests {
         .unwrap();
 
         // Build graph from files
-        let graph = build_graph(dir.path());
+        let graph = build_graph(&[dir.path()]);
 
         // Write operations
         let user_op = WriteOp {

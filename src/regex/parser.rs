@@ -31,8 +31,6 @@ impl std::error::Error for ParseError {}
 
 struct Parser<'a> {
     chars: std::iter::Peekable<std::str::CharIndices<'a>>,
-    #[allow(dead_code)]
-    input: &'a str,
     pos: usize,
 }
 
@@ -40,7 +38,6 @@ impl<'a> Parser<'a> {
     fn new(input: &'a str) -> Self {
         Self {
             chars: input.char_indices().peekable(),
-            input,
             pos: 0,
         }
     }

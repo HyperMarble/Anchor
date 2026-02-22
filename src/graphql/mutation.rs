@@ -16,6 +16,23 @@ use crate::write;
 /// Root mutation type
 pub struct Mutation;
 
+/// Look up a symbol and run a write operation against its file/code.
+fn with_symbol<F>(graph: &CodeGraph, symbol: &str, write_fn: F) -> WriteResult
+where
+    F: FnOnce(&Path, &str) -> Result<crate::write::WriteResult, crate::write::WriteError>,
+{
+    let results = graph.search(symbol, 1);
+    if results.is_empty() {
+        return WriteResult::err(&format!("Symbol '{}' not found", symbol));
+    }
+    let sym = &results[0];
+    let file = sym.file.to_string_lossy().to_string();
+    match write_fn(Path::new(&file), &sym.code) {
+        Ok(r) => WriteResult::ok(&file, r.lines_written),
+        Err(e) => WriteResult::err(&e.to_string()),
+    }
+}
+
 #[Object]
 impl Mutation {
     /// Create a new file with content
@@ -34,21 +51,9 @@ impl Mutation {
         code: String,
     ) -> Result<WriteResult> {
         let graph = ctx.data::<Arc<CodeGraph>>()?;
-
-        // Find the symbol
-        let results = graph.search(&symbol, 1);
-        if results.is_empty() {
-            return Ok(WriteResult::err(&format!("Symbol '{}' not found", symbol)));
-        }
-
-        let sym = &results[0];
-        let file = sym.file.to_string_lossy().to_string();
-
-        // Use the symbol's code as the pattern to insert after
-        match write::insert_after(Path::new(&file), &sym.code, &code) {
-            Ok(r) => Ok(WriteResult::ok(&file, r.lines_written)),
-            Err(e) => Ok(WriteResult::err(&e.to_string())),
-        }
+        Ok(with_symbol(graph, &symbol, |file, pattern| {
+            write::insert_after(file, pattern, &code)
+        }))
     }
 
     /// Insert code before a symbol (uses symbol's code as pattern)
@@ -59,19 +64,9 @@ impl Mutation {
         code: String,
     ) -> Result<WriteResult> {
         let graph = ctx.data::<Arc<CodeGraph>>()?;
-
-        let results = graph.search(&symbol, 1);
-        if results.is_empty() {
-            return Ok(WriteResult::err(&format!("Symbol '{}' not found", symbol)));
-        }
-
-        let sym = &results[0];
-        let file = sym.file.to_string_lossy().to_string();
-
-        match write::insert_before(Path::new(&file), &sym.code, &code) {
-            Ok(r) => Ok(WriteResult::ok(&file, r.lines_written)),
-            Err(e) => Ok(WriteResult::err(&e.to_string())),
-        }
+        Ok(with_symbol(graph, &symbol, |file, pattern| {
+            write::insert_before(file, pattern, &code)
+        }))
     }
 
     /// Replace a symbol's code entirely
@@ -82,20 +77,9 @@ impl Mutation {
         new_code: String,
     ) -> Result<WriteResult> {
         let graph = ctx.data::<Arc<CodeGraph>>()?;
-
-        let results = graph.search(&symbol, 1);
-        if results.is_empty() {
-            return Ok(WriteResult::err(&format!("Symbol '{}' not found", symbol)));
-        }
-
-        let sym = &results[0];
-        let file = sym.file.to_string_lossy().to_string();
-
-        // Replace the symbol's code with new code
-        match write::replace_first(Path::new(&file), &sym.code, &new_code) {
-            Ok(r) => Ok(WriteResult::ok(&file, r.lines_written)),
-            Err(e) => Ok(WriteResult::err(&e.to_string())),
-        }
+        Ok(with_symbol(graph, &symbol, |file, pattern| {
+            write::replace_first(file, pattern, &new_code)
+        }))
     }
 
     /// Replace all occurrences of a pattern in a file

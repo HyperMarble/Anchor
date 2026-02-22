@@ -33,6 +33,44 @@ pub enum LockedWriteResult {
     WriteError(WriteError),
 }
 
+/// Acquire a file lock, run a write operation, then release.
+fn with_file_lock<F>(
+    path: &Path,
+    manager: &LockManager,
+    graph: &CodeGraph,
+    write_fn: F,
+) -> LockedWriteResult
+where
+    F: FnOnce() -> Result<WriteResult, WriteError>,
+{
+    let (symbol, dependents, wait_time_ms) =
+        match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
+            LockResult::Acquired {
+                symbol, dependents, ..
+            } => (symbol, dependents, 0),
+            LockResult::AcquiredAfterWait {
+                symbol,
+                dependents,
+                wait_time_ms,
+            } => (symbol, dependents, wait_time_ms),
+            LockResult::Blocked {
+                blocked_by, reason, ..
+            } => return LockedWriteResult::Blocked { blocked_by, reason },
+        };
+
+    let result = write_fn();
+    manager.release(&symbol.file);
+
+    match result {
+        Ok(write_result) => LockedWriteResult::Success {
+            write_result,
+            locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
+            wait_time_ms,
+        },
+        Err(e) => LockedWriteResult::WriteError(e),
+    }
+}
+
 /// Create a file with automatic locking
 pub fn create_file_locked(
     path: &Path,
@@ -40,29 +78,7 @@ pub fn create_file_locked(
     manager: &LockManager,
     graph: &CodeGraph,
 ) -> LockedWriteResult {
-    match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-        LockResult::Acquired {
-            symbol, dependents, ..
-        }
-        | LockResult::AcquiredAfterWait {
-            symbol, dependents, ..
-        } => {
-            let result = write::create_file(path, content);
-            manager.release(&symbol.file);
-
-            match result {
-                Ok(write_result) => LockedWriteResult::Success {
-                    write_result,
-                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
-                    wait_time_ms: 0,
-                },
-                Err(e) => LockedWriteResult::WriteError(e),
-            }
-        }
-        LockResult::Blocked {
-            blocked_by, reason, ..
-        } => LockedWriteResult::Blocked { blocked_by, reason },
-    }
+    with_file_lock(path, manager, graph, || write::create_file(path, content))
 }
 
 /// Insert content after pattern with automatic locking
@@ -73,43 +89,9 @@ pub fn insert_after_locked(
     manager: &LockManager,
     graph: &CodeGraph,
 ) -> LockedWriteResult {
-    match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-        LockResult::Acquired {
-            symbol, dependents, ..
-        } => {
-            let result = write::insert_after(path, pattern, content);
-            manager.release(&symbol.file);
-
-            match result {
-                Ok(write_result) => LockedWriteResult::Success {
-                    write_result,
-                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
-                    wait_time_ms: 0,
-                },
-                Err(e) => LockedWriteResult::WriteError(e),
-            }
-        }
-        LockResult::AcquiredAfterWait {
-            symbol,
-            dependents,
-            wait_time_ms,
-        } => {
-            let result = write::insert_after(path, pattern, content);
-            manager.release(&symbol.file);
-
-            match result {
-                Ok(write_result) => LockedWriteResult::Success {
-                    write_result,
-                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
-                    wait_time_ms,
-                },
-                Err(e) => LockedWriteResult::WriteError(e),
-            }
-        }
-        LockResult::Blocked {
-            blocked_by, reason, ..
-        } => LockedWriteResult::Blocked { blocked_by, reason },
-    }
+    with_file_lock(path, manager, graph, || {
+        write::insert_after(path, pattern, content)
+    })
 }
 
 /// Replace content with automatic locking
@@ -120,29 +102,7 @@ pub fn replace_all_locked(
     manager: &LockManager,
     graph: &CodeGraph,
 ) -> LockedWriteResult {
-    match manager.acquire_with_wait(path, graph, DEFAULT_LOCK_TIMEOUT) {
-        LockResult::Acquired {
-            symbol, dependents, ..
-        }
-        | LockResult::AcquiredAfterWait {
-            symbol, dependents, ..
-        } => {
-            let result = write::replace_all(path, old, new);
-            manager.release(&symbol.file);
-
-            match result {
-                Ok(write_result) => LockedWriteResult::Success {
-                    write_result,
-                    locked_symbols: std::iter::once(symbol).chain(dependents).collect(),
-                    wait_time_ms: 0,
-                },
-                Err(e) => LockedWriteResult::WriteError(e),
-            }
-        }
-        LockResult::Blocked {
-            blocked_by, reason, ..
-        } => LockedWriteResult::Blocked { blocked_by, reason },
-    }
+    with_file_lock(path, manager, graph, || write::replace_all(path, old, new))
 }
 
 /// Batch replace with automatic locking - locks ALL files first, then writes
