@@ -1,0 +1,12 @@
+# Benchmark artifacts (cloned repos, venvs, caches)
+benchmark/runs/
+benchmark/.venv/
+benchmark/__pycache__/
+
+# Common non-source directories
+node_modules/
+.venv/
+venv/
+target/
+dist/
+build/
