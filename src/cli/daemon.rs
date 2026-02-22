@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::daemon::{is_daemon_running, send_request, start_daemon, Request, Response};
@@ -23,12 +23,13 @@ pub enum DaemonAction {
 }
 
 /// Handle daemon management commands
-pub fn handle(root: &Path, action: Option<&DaemonAction>) -> Result<()> {
+pub fn handle(roots: &[PathBuf], action: Option<&DaemonAction>) -> Result<()> {
+    let root = &roots[0];
     match action {
         None => {
             // Run daemon in foreground
             println!("Starting daemon in foreground (Ctrl+C to stop)...");
-            start_daemon(root)?;
+            start_daemon(roots)?;
             Ok(())
         }
         Some(DaemonAction::Start) => {
@@ -37,9 +38,11 @@ pub fn handle(root: &Path, action: Option<&DaemonAction>) -> Result<()> {
                 return Ok(());
             }
             let exe = std::env::current_exe()?;
-            let child = Command::new(exe)
-                .arg("--root")
-                .arg(root)
+            let mut cmd = Command::new(exe);
+            for r in roots {
+                cmd.arg("--root").arg(r);
+            }
+            let child = cmd
                 .arg("daemon")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -75,12 +78,13 @@ pub fn handle(root: &Path, action: Option<&DaemonAction>) -> Result<()> {
 }
 
 /// Start daemon in background (silent)
-pub fn start_background(root: &Path) -> Result<()> {
+pub fn start_background(roots: &[PathBuf]) -> Result<()> {
     let exe = std::env::current_exe()?;
-    Command::new(&exe)
-        .arg("--root")
-        .arg(root)
-        .arg("daemon")
+    let mut cmd = Command::new(&exe);
+    for r in roots {
+        cmd.arg("--root").arg(r);
+    }
+    cmd.arg("daemon")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

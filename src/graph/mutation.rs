@@ -325,6 +325,33 @@ impl CodeGraph {
             &new_extraction.symbols,
             Some(&nodes_needing_resolution),
         );
+
+        // Clean up stale ApiCall edges from/to changed symbols in this file.
+        // ApiCall edges require cross-file matching (all endpoints from all files),
+        // which isn't available during incremental update. Full rebuild re-creates them.
+        let api_edges_to_remove: Vec<petgraph::graph::EdgeIndex> = self
+            .graph
+            .edges_directed(file_idx, petgraph::Direction::Outgoing)
+            .filter(|e| e.weight().kind == EdgeKind::Defines && self.is_live(e.target()))
+            .flat_map(|e| {
+                let sym_idx = e.target();
+                self.graph
+                    .edges_directed(sym_idx, petgraph::Direction::Outgoing)
+                    .filter(|e| e.weight().kind == EdgeKind::ApiCall)
+                    .map(|e| e.id())
+                    .chain(
+                        self.graph
+                            .edges_directed(sym_idx, petgraph::Direction::Incoming)
+                            .filter(|e| e.weight().kind == EdgeKind::ApiCall)
+                            .map(|e| e.id()),
+                    )
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        for eid in api_edges_to_remove {
+            self.graph.remove_edge(eid);
+        }
     }
 
     /// Soft-delete all nodes originating from a specific file.

@@ -146,22 +146,6 @@ pub enum Commands {
     Version,
 }
 
-/// Print the ASCII banner (only for install/update)
-pub fn print_banner() {
-    println!(
-        r#"
- █████╗ ███╗   ██╗ ██████╗██╗  ██╗ ██████╗ ██████╗
-██╔══██╗████╗  ██║██╔════╝██║  ██║██╔═══██╗██╔══██╗
-███████║██╔██╗ ██║██║     ███████║██║   ██║██████╔╝
-██╔══██║██║╚██╗██║██║     ██╔══██║██║   ██║██╔══██╗
-██║  ██║██║ ╚████║╚██████╗██║  ██║╚██████╔╝██║  ██║
-╚═╝  ╚═╝╚═╝  ╚═══╝ ╚═════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝
-
-    Infrastructure for Coding AI agents
-"#
-    );
-}
-
 /// Print usage help
 pub fn print_usage() {
     print!("{}", HELP_TEXT);

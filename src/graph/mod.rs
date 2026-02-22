@@ -12,7 +12,7 @@ pub mod persistence;
 pub mod query;
 pub mod types;
 
-pub use builder::{build_graph, rebuild_file, scan_stats, ScanStats};
+pub use builder::{build_graph, rebuild_file};
 pub use engine::CodeGraph;
 pub use types::{
     ConnectionInfo, DependencyInfo, EdgeData, EdgeKind, ExtractedCall, ExtractedImport,

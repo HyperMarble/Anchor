@@ -2,6 +2,24 @@
 
 All notable changes to Anchor are documented here.
 
+## [Unreleased]
+
+### Added
+- **Cross-language API boundary detection**: Unified pattern-driven extractor matches route definitions with client calls across languages via `ApiCall` edges
+- **Multi-root support**: CLI, MCP server, and daemon all accept multiple `--root` paths to build one unified graph
+- **Built-in ignore defaults**: 22 common junk directories (node_modules, target, __pycache__, etc.) are always skipped even without .gitignore
+- **CI pipeline**: GitHub Actions workflow with `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`
+- **Tracing**: `RUST_LOG` env-based tracing via tracing-subscriber, outputs to stderr
+
+### Changed
+- Incremental updates now clean up stale `ApiCall` edges on file change
+- `SearchResult.calls`/`called_by` now include `ApiCall` edges (cross-language connections visible in context)
+- Extracted shared helpers in mutation.rs, write.rs, lock/write.rs to eliminate ~120 lines of duplication
+
+### Removed
+- Dead code: `scan_stats`/`ScanStats`, `print_banner`, unused `cli::read::read`
+- Per-language API extractors (replaced by unified `queries/api.rs`)
+
 ## [0.1.5] - 2025-05-xx
 
 ### Added

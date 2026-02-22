@@ -438,7 +438,10 @@ impl CodeGraph {
         let calls: Vec<SymbolRef> = self
             .graph
             .edges_directed(idx, Direction::Outgoing)
-            .filter(|e| e.weight().kind == EdgeKind::Calls && self.is_live(e.target()))
+            .filter(|e| {
+                matches!(e.weight().kind, EdgeKind::Calls | EdgeKind::ApiCall)
+                    && self.is_live(e.target())
+            })
             .map(|e| {
                 let target = &self.graph[e.target()];
                 SymbolRef {
@@ -452,7 +455,10 @@ impl CodeGraph {
         let called_by: Vec<SymbolRef> = self
             .graph
             .edges_directed(idx, Direction::Incoming)
-            .filter(|e| e.weight().kind == EdgeKind::Calls && self.is_live(e.source()))
+            .filter(|e| {
+                matches!(e.weight().kind, EdgeKind::Calls | EdgeKind::ApiCall)
+                    && self.is_live(e.source())
+            })
             .map(|e| {
                 let source = &self.graph[e.source()];
                 SymbolRef {

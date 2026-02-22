@@ -126,7 +126,7 @@ fn run(cli: Cli) -> Result<()> {
             cli_read::build(&roots, &cache_path)?;
             // Auto-start daemon for file watching
             if !anchor::daemon::is_daemon_running(&root) {
-                cli::daemon::start_background(&root)?;
+                cli::daemon::start_background(&roots)?;
             }
             Ok(())
         }
@@ -155,7 +155,7 @@ fn run(cli: Cli) -> Result<()> {
             .expect("Failed to create tokio runtime")
             .block_on(anchor::mcp::run(roots)),
 
-        Commands::Daemon { action } => cli::daemon::handle(&root, action.as_ref()),
+        Commands::Daemon { action } => cli::daemon::handle(&roots, action.as_ref()),
 
         Commands::Update => updater::update(),
 

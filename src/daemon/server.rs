@@ -33,10 +33,14 @@ pub fn pid_path(root: &Path) -> PathBuf {
 }
 
 /// Start the daemon server.
-pub fn start_daemon(root: &Path) -> Result<()> {
-    let root = root.canonicalize()?;
-    let sock_path = socket_path(&root);
-    let pid_file = pid_path(&root);
+pub fn start_daemon(roots: &[PathBuf]) -> Result<()> {
+    let roots: Vec<PathBuf> = roots
+        .iter()
+        .map(|r| r.canonicalize())
+        .collect::<Result<Vec<_>, _>>()?;
+    let primary_root = roots[0].clone();
+    let sock_path = socket_path(&primary_root);
+    let pid_file = pid_path(&primary_root);
 
     // Ensure .anchor directory exists
     std::fs::create_dir_all(sock_path.parent().unwrap())?;
@@ -50,25 +54,29 @@ pub fn start_daemon(root: &Path) -> Result<()> {
     std::fs::write(&pid_file, std::process::id().to_string())?;
 
     // Build initial graph
-    info!(root = %root.display(), "building initial graph");
-    let graph = build_graph(&[&root]);
+    info!(roots = ?roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>(), "building initial graph");
+    let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
+    let graph = build_graph(&root_refs);
     let graph = Arc::new(RwLock::new(graph));
 
     // Create lock manager
     let lock_manager = Arc::new(LockManager::new());
     info!("lock manager initialized");
 
-    // Start file watcher
-    let _watcher: Option<WatcherHandle> = match start_watching(&root, Arc::clone(&graph), 200) {
-        Ok(handle) => {
-            info!("file watcher started");
-            Some(handle)
-        }
-        Err(e) => {
-            warn!(error = %e, "file watcher failed to start");
-            None
-        }
-    };
+    // Start file watcher for each root
+    let _watchers: Vec<Option<WatcherHandle>> = roots
+        .iter()
+        .map(|root| match start_watching(root, Arc::clone(&graph), 200) {
+            Ok(handle) => {
+                info!(root = %root.display(), "file watcher started");
+                Some(handle)
+            }
+            Err(e) => {
+                warn!(root = %root.display(), error = %e, "file watcher failed to start");
+                None
+            }
+        })
+        .collect();
 
     // Bind socket
     let listener = UnixListener::bind(&sock_path)?;
@@ -88,10 +96,13 @@ pub fn start_daemon(root: &Path) -> Result<()> {
                 let graph = Arc::clone(&graph);
                 let shutdown = Arc::clone(&shutdown);
                 let lock_manager = Arc::clone(&lock_manager);
-                let root = root.clone();
+                let root = primary_root.clone();
+                let root_refs: Vec<PathBuf> = roots.clone();
 
                 thread::spawn(move || {
-                    if let Err(e) = handle_client(stream, &graph, &lock_manager, &shutdown, &root) {
+                    if let Err(e) =
+                        handle_client(stream, &graph, &lock_manager, &shutdown, &root, &root_refs)
+                    {
                         debug!(error = %e, "client handler error");
                     }
                 });
@@ -117,6 +128,7 @@ fn handle_client(
     lock_manager: &Arc<LockManager>,
     shutdown: &Arc<AtomicBool>,
     root: &Path,
+    roots: &[PathBuf],
 ) -> Result<()> {
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut writer = stream;
@@ -127,7 +139,7 @@ fn handle_client(
     let request: Request = serde_json::from_str(&line)?;
     debug!(?request, "received request");
 
-    let response = process_request(request, graph, lock_manager, shutdown, root);
+    let response = process_request(request, graph, lock_manager, shutdown, root, roots);
 
     let response_json = serde_json::to_string(&response)?;
     writeln!(writer, "{}", response_json)?;
@@ -142,6 +154,7 @@ fn process_request(
     lock_manager: &Arc<LockManager>,
     shutdown: &Arc<AtomicBool>,
     root: &Path,
+    roots: &[PathBuf],
 ) -> Response {
     match request {
         Request::Ping => Response::Pong,
@@ -319,7 +332,8 @@ fn process_request(
 
         // ─── System ────────────────────────────────────────────
         Request::Rebuild => {
-            let new_graph = build_graph(&[root]);
+            let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
+            let new_graph = build_graph(&root_refs);
             let mut g = match graph.write() {
                 Ok(g) => g,
                 Err(e) => return Response::error(format!("lock error: {}", e)),

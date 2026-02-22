@@ -155,35 +155,6 @@ pub fn search(
     Ok(())
 }
 
-/// Read full context for a single symbol.
-pub fn read(graph: &CodeGraph, symbol: &str) -> Result<()> {
-    let schema = build_schema(Arc::new(graph.clone()));
-    let gql_query = format!(
-        r#"{{ symbol(name: "{}", exact: true) {{ name kind file line code callers {{ name }} callees {{ name }} }} }}"#,
-        escape_graphql(symbol)
-    );
-
-    let result = tokio::runtime::Runtime::new()?.block_on(execute(&schema, &gql_query));
-    let json: serde_json::Value = serde_json::from_str(&result)?;
-
-    if let Some(err) = get_graphql_error(&json) {
-        println!("<error>{}</error>", err);
-        return Ok(());
-    }
-
-    let symbols = json
-        .get("data")
-        .and_then(|d| d.get("symbol"))
-        .and_then(|s| s.as_array());
-
-    match symbols {
-        Some(s) if !s.is_empty() => print_symbol_xml(&s[0], true),
-        _ => println!("<error>symbol '{}' not found</error>", symbol),
-    }
-
-    Ok(())
-}
-
 /// Context: Search + Read combined (supports multiple queries).
 pub fn context(graph: &CodeGraph, queries: &[String], limit: usize, full: bool) -> Result<()> {
     let schema = build_schema(Arc::new(graph.clone()));
