@@ -15,6 +15,43 @@ use super::engine::CodeGraph;
 use super::types::FileExtractions;
 use crate::parser::{extract_file, SupportedLanguage};
 
+/// Directories that should never be indexed, even without .gitignore.
+const BUILTIN_IGNORE: &[&str] = &[
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    ".git",
+    ".svn",
+    ".hg",
+    "__pycache__",
+    ".tox",
+    ".venv",
+    "venv",
+    "env",
+    ".env",
+    "target",
+    ".next",
+    ".nuxt",
+    "coverage",
+    ".cache",
+    ".turbo",
+    ".output",
+    "pkg",
+    "bin",
+];
+
+/// Check if a path contains any built-in ignored directory.
+fn is_builtin_ignored(path: &Path) -> bool {
+    path.components().any(|c| {
+        if let std::path::Component::Normal(name) = c {
+            BUILTIN_IGNORE.contains(&name.to_str().unwrap_or(""))
+        } else {
+            false
+        }
+    })
+}
+
 /// Build a code graph from all source files in a directory.
 ///
 /// Respects .gitignore, walks recursively, parses all supported
@@ -32,6 +69,7 @@ pub fn build_graph(roots: &[&Path]) -> CodeGraph {
                 .build()
                 .filter_map(|entry| entry.ok())
                 .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
+                .filter(|entry| !is_builtin_ignored(entry.path()))
                 .filter(|entry| SupportedLanguage::from_path(entry.path()).is_some())
                 .map(|entry| entry.into_path())
         })
@@ -75,9 +113,11 @@ pub fn scan_stats(root: &Path) -> ScanStats {
         .git_ignore(true)
         .git_global(true)
         .git_exclude(true)
+        .add_custom_ignore_filename(".anchorignore")
         .build()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_some_and(|ft| ft.is_file()))
+        .filter(|e| !is_builtin_ignored(e.path()))
     {
         if let Some(lang) = SupportedLanguage::from_path(entry.path()) {
             stats.total_files += 1;
