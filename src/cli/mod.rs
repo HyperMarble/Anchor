@@ -6,6 +6,7 @@
 //
 
 pub mod daemon;
+pub mod init;
 pub mod read;
 pub mod write;
 
@@ -35,6 +36,7 @@ const HELP_TEXT: &str = "
     Infrastructure for Coding AI agents
 
 Start here:
+  init                  Configure AI agent integrations
   build                 Index codebase
   map                   Codebase map (modules + top symbols)
   map <scope>           Zoom into module
@@ -112,6 +114,9 @@ pub enum Commands {
     Overview,
 
     // ─── System ───────────────────────────────────────────────────
+    /// Configure AI agent integrations (MCP server)
+    Init,
+
     /// Build/rebuild the code graph
     Build,
 

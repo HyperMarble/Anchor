@@ -122,6 +122,8 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         // ─── System Commands ──────────────────────────────────────
+        Commands::Init => cli::init::init(&root),
+
         Commands::Build => {
             cli_read::build(&roots, &cache_path)?;
             // Auto-start daemon for file watching
