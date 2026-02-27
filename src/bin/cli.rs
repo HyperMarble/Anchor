@@ -6,7 +6,7 @@
 //
 
 use anchor::cli::{self, read as cli_read, Cli, Commands};
-use anchor::graph::{build_graph, CodeGraph};
+use anchor::graph::{build_graph, rebuild_file, CodeGraph};
 use anchor::updater;
 use anyhow::Result;
 use clap::Parser;
@@ -72,6 +72,9 @@ fn run(cli: Cli) -> Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(&full_path, &content)?;
+            if let Err(e) = refresh_cached_graph_after_write(&roots, &cache_path, &full_path) {
+                eprintln!("Warning: wrote file but failed to refresh graph cache: {}", e);
+            }
             println!("<result>");
             println!("<path>{}</path>", path);
             println!("<status>created</status>");
@@ -117,6 +120,9 @@ fn run(cli: Cli) -> Result<()> {
                     println!("</result>");
                 }
                 _ => return Err(anyhow::anyhow!("Unknown action: {}", action)),
+            }
+            if let Err(e) = refresh_cached_graph_after_write(&roots, &cache_path, &full_path) {
+                eprintln!("Warning: edited file but failed to refresh graph cache: {}", e);
             }
             Ok(())
         }
@@ -209,4 +215,28 @@ fn load_or_build_graph(roots: &[PathBuf], cache_path: &Path) -> Result<CodeGraph
     }
     let _ = graph.save(cache_path);
     Ok(graph)
+}
+
+/// Refresh graph cache after a direct file mutation from CLI write/edit commands.
+fn refresh_cached_graph_after_write(
+    roots: &[PathBuf],
+    cache_path: &Path,
+    full_path: &Path,
+) -> Result<()> {
+    let mut graph = if cache_path.exists() {
+        CodeGraph::load(cache_path)?
+    } else {
+        let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
+        build_graph(&root_refs)
+    };
+
+    if full_path.exists() {
+        rebuild_file(&mut graph, full_path).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    }
+
+    if let Some(parent) = cache_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    graph.save(cache_path)?;
+    Ok(())
 }

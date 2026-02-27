@@ -61,7 +61,7 @@ pub fn insert_after(path: &Path, pattern: &str, content: &str) -> Result<WriteRe
     // Insert after pattern
     let new_content = format!(
         "{}{}{}",
-        &original[..=pos + pattern.len()],
+        &original[..pos + pattern.len()],
         content,
         &original[pos + pattern.len()..]
     );

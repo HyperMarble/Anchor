@@ -15,6 +15,7 @@ use std::thread;
 use tracing::{debug, error, info, warn};
 
 use crate::graph::engine::CodeGraph;
+use crate::graph::rebuild_file;
 use crate::lock::{LockManager, LockStatus};
 use crate::watcher::{start_watching, WatcherHandle};
 use crate::write;
@@ -161,6 +162,8 @@ fn process_request(
 
         Request::Shutdown => {
             shutdown.store(true, Ordering::Relaxed);
+            // Wake the blocking accept loop so it can observe shutdown and exit.
+            let _ = UnixStream::connect(socket_path(root));
             Response::Goodbye
         }
 
@@ -396,6 +399,10 @@ where
 
             match result {
                 Ok(mut data) => {
+                    // Keep daemon graph fresh immediately after successful writes.
+                    if let Ok(mut g) = graph.write() {
+                        let _ = rebuild_file(&mut g, file_path);
+                    }
                     if let Some(obj) = data.as_object_mut() {
                         obj.insert("locked_dependents".to_string(), dependents.len().into());
                     }
