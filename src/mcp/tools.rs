@@ -16,6 +16,21 @@ use crate::graph::{build_graph, rebuild_file, CodeGraph};
 use crate::graphql::{build_schema, execute};
 use crate::lock::{LockManager, LockResult, SymbolKey};
 
+fn escape_regex_literal(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$'
+            | '|' | '&' | '~' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
 #[tool_router]
 impl AnchorMcp {
     pub fn new(roots: Vec<std::path::PathBuf>) -> Self {
@@ -124,7 +139,8 @@ impl AnchorMcp {
                 limit
             )
         } else {
-            let regex_pat = format!(".*{}.*", req.query).to_lowercase();
+            let escaped = escape_regex_literal(&req.query.to_lowercase());
+            let regex_pat = format!(".*{}.*", escaped);
             format!(
                 r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line }} }}"#,
                 escape_graphql(&regex_pat),
