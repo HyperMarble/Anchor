@@ -93,6 +93,88 @@ echo "Update:    anchor update"
 echo "Uninstall: curl -fsSL https://tharun-10dragneel.github.io/Anchor/uninstall.sh | bash"
 echo ""
 
+# Setup global agent rules for ALL AI agents
+setup_global_agent_rules() {
+  local config_dir="$HOME/.config/opencode"
+  mkdir -p "$config_dir"
+  
+  local agents_md="$config_dir/AGENTS.md"
+  local begin_marker="<!-- anchor-global-rules:begin -->"
+  
+  if [ -f "$agents_md" ] && grep -q "$begin_marker" "$agents_md"; then
+    echo "Global agent rules already configured."
+  else
+    local block
+    block=$(cat << 'EOF'
+<!-- anchor-global-rules:begin -->
+# Global Rules
+
+## Anchor Commands for Code Intelligence
+
+When working in codebases with `anchor` installed (check for `.anchor/` directory):
+
+**ALWAYS use anchor commands instead of shell commands:**
+
+- `anchor context <query>` - Get symbol code + callers + callees (USE THIS FIRST)
+- `anchor search <query>` - Find symbols by name  
+- `anchor context <symbol> --full` - Single symbol full detail
+- `anchor map` - Codebase structure overview
+
+**NEVER use these shell commands for code exploration when anchor is available:**
+- `grep`, `rg` - use `anchor search` or `anchor context` instead
+- `cat`, `head`, `tail` - use `anchor context` instead
+- `find`, `fd` - use `anchor search` or `anchor map` instead
+- `sed`, `awk` - not needed for code exploration
+
+**Shell commands are still allowed for:**
+- Git operations (`git status`, `git diff`, etc.)
+- Package managers (`npm`, `cargo`, `pip`, etc.)
+- Docker, file system operations (`mkdir`, `rm`, `mv`, `cp`)
+- Running tests, builds, etc.
+
+## Anchor Output Format
+
+Anchor returns structured XML output:
+```
+<results query="Cli" count="1">
+<symbol>
+<name>Cli</name>
+<kind>struct</kind>
+<file>/path/to/file.rs</file>
+<line>19</line>
+<callers>caller1 caller2</callers>
+<callees>callee1 callee2</callees>
+<code>
+  19: pub struct Cli {
+  ...
+</code>
+</symbol>
+</results>
+```
+
+Use this structured data for understanding code, making edits, and tracking relationships.
+EOF
+)
+    # Compose full block with end marker without clobbering existing file
+    block="$block
+<!-- anchor-global-rules:end -->"
+
+    if [ -f "$agents_md" ]; then
+      if [ -s "$agents_md" ]; then
+        printf "\n\n%s\n" "$block" >> "$agents_md"
+      else
+        printf "%s\n" "$block" > "$agents_md"
+      fi
+    else
+      printf "%s\n" "$block" > "$agents_md"
+    fi
+
+    echo "Global agent rules installed to $agents_md (appended safely)"
+  fi
+}
+
+setup_global_agent_rules
+
 # PATH hint
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
   if ! echo ":$PATH:" | grep -q ":$INSTALL_DIR:"; then

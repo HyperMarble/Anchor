@@ -27,6 +27,10 @@ enum ConfigResult {
 /// Detect installed agents and configure MCP server for each.
 pub fn init(root: &Path) -> Result<()> {
     let home = dirs_home();
+
+    // Setup global agent rules (applies to ALL agents using this machine)
+    setup_global_agent_rules(&home)?;
+
     let agents = detect_agents(root, &home);
 
     if agents.is_empty() {
@@ -83,6 +87,99 @@ fn dirs_home() -> PathBuf {
     std::env::var("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("~"))
+}
+
+/// Setup global agent rules that apply to all AI agents on this machine.
+fn setup_global_agent_rules(home: &Path) -> Result<()> {
+    let config_dir = home.join(".config").join("opencode");
+    std::fs::create_dir_all(&config_dir)?;
+
+    let agents_md_path = config_dir.join("AGENTS.md");
+    const BEGIN_MARKER: &str = "<!-- anchor-global-rules:begin -->";
+    const END_MARKER: &str = "<!-- anchor-global-rules:end -->";
+
+    let mut rules_block = String::new();
+    rules_block.push_str(BEGIN_MARKER);
+    rules_block.push('\n');
+    rules_block.push_str(
+        r#"# Global Rules
+
+## Anchor Commands for Code Intelligence
+
+When working in codebases with `anchor` installed (check for `.anchor/` directory):
+
+**ALWAYS use anchor commands instead of shell commands:**
+
+- `anchor context <query>` - Get symbol code + callers + callees (USE THIS FIRST)
+- `anchor search <query>` - Find symbols by name  
+- `anchor context <symbol> --full` - Single symbol full detail
+- `anchor map` - Codebase structure overview
+
+**NEVER use these shell commands for code exploration when anchor is available:**
+- `grep`, `rg` - use `anchor search` or `anchor context` instead
+- `cat`, `head`, `tail` - use `anchor context` instead
+- `find`, `fd` - use `anchor search` or `anchor map` instead
+- `sed`, `awk` - not needed for code exploration
+
+**Shell commands are still allowed for:**
+- Git operations (`git status`, `git diff`, etc.)
+- Package managers (`npm`, `cargo`, `pip`, etc.)
+- Docker, file system operations (`mkdir`, `rm`, `mv`, `cp`)
+- Running tests, builds, etc.
+
+## Anchor Output Format
+
+Anchor returns structured XML output:
+```
+<results query="Cli" count="1">
+<symbol>
+<name>Cli</name>
+<kind>struct</kind>
+<file>/path/to/file.rs</file>
+<line>19</line>
+<callers>caller1 caller2</callers>
+<callees>callee1 callee2</callees>
+<code>
+  19: pub struct Cli {
+  ...
+</code>
+</symbol>
+</results>
+```
+
+Use this structured data for understanding code, making edits, and tracking relationships.
+"#,
+    );
+    rules_block.push('\n');
+    rules_block.push_str(END_MARKER);
+    rules_block.push('\n');
+
+    let updated = if !agents_md_path.exists() {
+        std::fs::write(&agents_md_path, &rules_block)?;
+        true
+    } else {
+        let existing = std::fs::read_to_string(&agents_md_path)?;
+        if existing.contains(BEGIN_MARKER) {
+            false
+        } else {
+            let mut merged = existing;
+            if !merged.is_empty() && !merged.ends_with('\n') {
+                merged.push('\n');
+            }
+            merged.push('\n');
+            merged.push_str(&rules_block);
+            std::fs::write(&agents_md_path, merged)?;
+            true
+        }
+    };
+
+    if updated {
+        println!("  <global_rules path=\"{}\"/>", agents_md_path.display());
+    } else {
+        println!("  <global_rules status=\"already_exists\"/>");
+    }
+
+    Ok(())
 }
 
 /// Check if a command exists in PATH.
