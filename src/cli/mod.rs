@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "anchor")]
-#[command(about = "Infrastructure for Coding AI agents")]
+#[command(about = "Coding infrastructure for AI agents — faster, cheaper, multi-agent safe")]
 #[command(override_help = HELP_TEXT)]
 pub struct Cli {
     /// Project root directories (can specify multiple: -r ./backend -r ./frontend)

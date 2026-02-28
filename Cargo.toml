@@ -2,10 +2,10 @@
 name = "anchor-sdk"
 version = "0.1.6"
 edition = "2021"
-description = "Infrastructure for AI agents. Pre-computed code graph with MCP server."
+description = "Coding infrastructure for AI agents — graph-powered context, writes, locks, and multi-agent coordination."
 license = "Apache-2.0"
 repository = "https://github.com/Tharun-10Dragneel/Anchor"
-keywords = ["ai", "code-intelligence", "mcp", "lsp", "graph"]
+keywords = ["ai", "infrastructure", "mcp", "agents", "graph"]
 categories = ["development-tools", "command-line-utilities"]
 readme = "README.md"
 authors = ["Anchor Team"]
