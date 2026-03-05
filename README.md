@@ -12,7 +12,7 @@
 > **Pre-alpha** — API may change. Install at your own discretion.
 
 ---
-###What is Anchor?
+## What is Anchor?
 
 Anchor is the infrastructure that turns AI coding agents into supercharged powerhouses. It builds a code graph that lets agents search, read, understand, and write code without the clunky file traversal, string reads, and writes that plague current tools. Today's agents treat code like plain text, dumping entire files into the context window and filling it up fast. This leads to bloated prompts, wasted tokens, and poor performance — like putting an auto rickshaw engine in a Ferrari. Anchor solves this by introducing graph slicing for relevant reads and writes, delivering only what's essential.
 The result? Agents become hyper-efficient, unlocking these 5 game-changing benefits:
