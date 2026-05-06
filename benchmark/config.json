@@ -1,0 +1,5 @@
+{
+  "timeout_sec": 1800,
+  "repeats": 1,
+  "run_artifacts_dir": "benchmark/runs"
+}
