@@ -127,3 +127,107 @@ module.exports.create = function createService() {
     assert!(calls.contains(&"nextId".to_string()));
     assert!(calls.contains(&"build".to_string()));
 }
+
+#[test]
+fn test_rust_trait_signatures_macros_and_scoped_calls() {
+    let src = r#"
+macro_rules! make_service {
+    () => {};
+}
+
+trait Service {
+    type Output;
+    const NAME: &'static str;
+    fn execute(&self) -> Self::Output;
+}
+
+impl Service for Runner {
+    type Output = ();
+    const NAME: &'static str = "runner";
+
+    fn execute(&self) -> Self::Output {
+        make_service!();
+        Runner::boot();
+    }
+}
+"#;
+    let names = symbol_names("service.rs", src);
+    assert!(names.contains(&"make_service".to_string()));
+    assert!(names.contains(&"Service".to_string()));
+    assert!(names.contains(&"Output".to_string()));
+    assert!(names.contains(&"NAME".to_string()));
+    assert!(names.contains(&"execute".to_string()));
+
+    let calls = call_names("service.rs", src);
+    assert!(calls.contains(&"make_service".to_string()));
+    assert!(calls.contains(&"boot".to_string()));
+}
+
+#[test]
+fn test_python_async_decorated_and_nested_functions() {
+    let src = r#"
+class Worker:
+    @classmethod
+    async def build(cls, config):
+        return await create_worker(config)
+
+def outer():
+    def inner():
+        return run()
+    return inner()
+"#;
+    let names = symbol_names("worker.py", src);
+    assert!(names.contains(&"Worker".to_string()));
+    assert!(names.contains(&"build".to_string()));
+    assert!(names.contains(&"outer".to_string()));
+    assert!(names.contains(&"inner".to_string()));
+
+    let calls = call_names("worker.py", src);
+    assert!(calls.contains(&"create_worker".to_string()));
+    assert!(calls.contains(&"run".to_string()));
+    assert!(calls.contains(&"inner".to_string()));
+}
+
+#[test]
+fn test_python_import_aliases_and_chained_calls() {
+    let src = r#"
+from .services import Worker as ServiceWorker
+import package.module as mod
+
+def run_all():
+    return mod.factory().execute(ServiceWorker())
+"#;
+    let extraction = extract_file(&PathBuf::from("runner.py"), src).unwrap();
+    let names: Vec<String> = extraction
+        .symbols
+        .into_iter()
+        .map(|symbol| symbol.name)
+        .collect();
+    assert!(names.contains(&"run_all".to_string()));
+    assert!(!extraction.imports.is_empty());
+
+    let calls: Vec<String> = extraction
+        .calls
+        .into_iter()
+        .map(|call| call.callee)
+        .collect();
+    assert!(calls.contains(&"factory".to_string()));
+    assert!(calls.contains(&"execute".to_string()));
+    assert!(calls.contains(&"ServiceWorker".to_string()));
+}
+
+#[test]
+fn test_go_interface_methods_are_symbols() {
+    let src = r#"
+package storage
+
+type Repository interface {
+    Save(item any) error
+    FindByID(id string) (any, error)
+}
+"#;
+    let names = symbol_names("storage.go", src);
+    assert!(names.contains(&"Repository".to_string()));
+    assert!(names.contains(&"Save".to_string()));
+    assert!(names.contains(&"FindByID".to_string()));
+}
