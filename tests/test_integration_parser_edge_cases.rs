@@ -231,3 +231,53 @@ type Repository interface {
     assert!(names.contains(&"Save".to_string()));
     assert!(names.contains(&"FindByID".to_string()));
 }
+
+#[test]
+fn test_java_records_annotations_and_constructors() {
+    let src = r#"
+public @interface Route {
+    String value();
+}
+
+public record UserRecord(String id, String name) {
+    public UserRecord {
+        validate(id);
+    }
+}
+"#;
+    let names = symbol_names("UserRecord.java", src);
+    assert!(names.contains(&"Route".to_string()));
+    assert!(names.contains(&"value".to_string()));
+    assert!(names.contains(&"UserRecord".to_string()));
+
+    let calls = call_names("UserRecord.java", src);
+    assert!(calls.contains(&"validate".to_string()));
+}
+
+#[test]
+fn test_csharp_records_delegates_properties_and_local_functions() {
+    let src = r#"
+public delegate Task Handler(string id);
+
+public record UserRecord(string Id)
+{
+    public string DisplayName { get; init; }
+
+    public void Run()
+    {
+        void LocalStep() => Dispatch(DisplayName);
+        LocalStep();
+    }
+}
+"#;
+    let names = symbol_names("UserRecord.cs", src);
+    assert!(names.contains(&"Handler".to_string()));
+    assert!(names.contains(&"UserRecord".to_string()));
+    assert!(names.contains(&"DisplayName".to_string()));
+    assert!(names.contains(&"Run".to_string()));
+    assert!(names.contains(&"LocalStep".to_string()));
+
+    let calls = call_names("UserRecord.cs", src);
+    assert!(calls.contains(&"Dispatch".to_string()));
+    assert!(calls.contains(&"LocalStep".to_string()));
+}
