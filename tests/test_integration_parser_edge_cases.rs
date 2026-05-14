@@ -281,3 +281,93 @@ public record UserRecord(string Id)
     assert!(calls.contains(&"Dispatch".to_string()));
     assert!(calls.contains(&"LocalStep".to_string()));
 }
+
+#[test]
+fn test_cpp_class_methods_constructors_and_qualified_calls() {
+    let src = r#"
+class Logger {
+public:
+    Logger();
+    ~Logger();
+    void log(const char* message);
+};
+
+Logger::Logger() {}
+Logger::~Logger() {}
+void Logger::log(const char* message) {
+    sink.write(message);
+}
+
+void setup() {
+    Logger logger;
+    logger.log("ready");
+}
+"#;
+    let names = symbol_names("logger.cpp", src);
+    assert!(names.contains(&"Logger".to_string()));
+    assert!(names.contains(&"log".to_string()));
+    assert!(names.contains(&"setup".to_string()));
+
+    let calls = call_names("logger.cpp", src);
+    assert!(calls.contains(&"write".to_string()));
+    assert!(calls.contains(&"log".to_string()));
+}
+
+#[test]
+fn test_cpp_namespaces_templates_and_operators() {
+    let src = r#"
+namespace workbench {
+template <typename T>
+class Box {
+public:
+    T value() const;
+};
+
+Box<int> operator+(const Box<int>& left, const Box<int>& right) {
+    combine(left, right);
+    return left;
+}
+}
+"#;
+    let names = symbol_names("box.cpp", src);
+    assert!(names.contains(&"workbench".to_string()));
+    assert!(names.contains(&"Box".to_string()));
+    assert!(names.contains(&"value".to_string()));
+
+    let calls = call_names("box.cpp", src);
+    assert!(calls.contains(&"combine".to_string()));
+}
+
+#[test]
+fn test_swift_protocol_subscript_deinit_and_operator() {
+    let src = r#"
+protocol Store {
+    subscript(key: String) -> String? { get }
+}
+
+class Cache: Store {
+    subscript(key: String) -> String? {
+        return lookup(key)
+    }
+
+    deinit {
+        cleanup()
+    }
+}
+
+func + (left: Cache, right: Cache) -> Cache {
+    return merge(left, right)
+}
+"#;
+    let names = symbol_names("Cache.swift", src);
+    assert!(names.contains(&"Store".to_string()));
+    assert!(names.contains(&"subscript".to_string()));
+    assert!(names.contains(&"Cache".to_string()));
+    assert!(names.contains(&"deinit".to_string()));
+    assert!(names.contains(&"+".to_string()));
+
+    let calls = call_names("Cache.swift", src);
+    assert!(calls.contains(&"lookup".to_string()));
+    assert!(calls.contains(&"cleanup".to_string()));
+    assert!(calls.contains(&"merge".to_string()));
+}
