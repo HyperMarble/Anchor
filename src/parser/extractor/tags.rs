@@ -5,311 +5,13 @@
 //  Created by hak (tharun)
 //
 
-use std::collections::HashSet;
+use tree_sitter::Node;
 
-use tracing::warn;
-use tree_sitter::{Language, Node, Query, QueryCursor, StreamingIterator, Tree};
-
-use super::helpers::{bounded_snippet, node_text};
+use super::helpers::node_text;
 use crate::graph::types::*;
 use crate::parser::language::SupportedLanguage;
 
-/// Map a tags capture name to NodeKind.
-fn capture_to_kind(name: &str) -> Option<NodeKind> {
-    match name {
-        "definition.function" => Some(NodeKind::Function),
-        "definition.method" => Some(NodeKind::Method),
-        "definition.class" => Some(NodeKind::Class),
-        "definition.interface" => Some(NodeKind::Interface),
-        "definition.module" => Some(NodeKind::Module),
-        "definition.macro" => Some(NodeKind::Function),
-        "definition.constant" => Some(NodeKind::Constant),
-        "definition.type" => Some(NodeKind::Type),
-        "definition.property" => Some(NodeKind::Variable),
-        "reference.implementation" => Some(NodeKind::Impl),
-        _ => None,
-    }
-}
-
-/// Refine NodeKind using the actual AST node type.
-/// Tags queries often map different constructs to the same capture
-/// (e.g. Rust struct/enum/union all → @definition.class). This restores precision.
-fn precise_kind(node_kind: &str, capture_kind: NodeKind) -> NodeKind {
-    match node_kind {
-        // Rust
-        "struct_item" | "struct_specifier" => NodeKind::Struct,
-        "enum_item" | "enum_specifier" => NodeKind::Enum,
-        "trait_item" => NodeKind::Trait,
-        "impl_item" => NodeKind::Impl,
-        "type_item" => NodeKind::Type,
-        "const_item" | "static_item" => NodeKind::Constant,
-
-        // TypeScript
-        "interface_declaration" => NodeKind::Interface,
-        "type_alias_declaration" => NodeKind::Type,
-        "enum_declaration" => NodeKind::Enum,
-
-        // General
-        "mod_item" | "module" => NodeKind::Module,
-
-        _ => capture_kind,
-    }
-}
-
-/// Extract symbols and calls from a parsed tree using a tags query.
-/// Split an identifier into tokens by snake_case and camelCase boundaries.
-/// E.g. "validate_authToken" → ["validate", "auth", "token"]
-fn split_identifier(name: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    // First split on underscores
-    for part in name.split('_') {
-        if part.is_empty() {
-            continue;
-        }
-        // Then split camelCase
-        let mut current = String::new();
-        for ch in part.chars() {
-            if ch.is_uppercase() && !current.is_empty() {
-                tokens.push(current.to_lowercase());
-                current = String::new();
-            }
-            current.push(ch);
-        }
-        if !current.is_empty() {
-            tokens.push(current.to_lowercase());
-        }
-    }
-    // Filter short tokens (≤2 chars)
-    tokens.retain(|t| t.len() > 2);
-    tokens
-}
-
-/// Generate static semantic features from symbol metadata.
-/// Combines name tokens, kind, parent scope, and file path segments.
-fn generate_features(
-    name: &str,
-    kind: NodeKind,
-    parent: Option<&str>,
-    file_path: &str,
-) -> Vec<String> {
-    let mut features = split_identifier(name);
-
-    // Kind token
-    let kind_str = format!("{:?}", kind).to_lowercase();
-    features.push(kind_str);
-
-    // Parent scope tokens
-    if let Some(p) = parent {
-        features.extend(split_identifier(p));
-    }
-
-    // File path segments (skip "src" and file extension)
-    for segment in file_path.split(&['/', '\\'][..]) {
-        let stem = segment
-            .strip_suffix(".rs")
-            .or_else(|| segment.strip_suffix(".py"))
-            .or_else(|| segment.strip_suffix(".ts"))
-            .or_else(|| segment.strip_suffix(".tsx"))
-            .or_else(|| segment.strip_suffix(".js"))
-            .or_else(|| segment.strip_suffix(".jsx"))
-            .or_else(|| segment.strip_suffix(".go"))
-            .or_else(|| segment.strip_suffix(".java"))
-            .or_else(|| segment.strip_suffix(".cs"))
-            .or_else(|| segment.strip_suffix(".cpp"))
-            .or_else(|| segment.strip_suffix(".swift"))
-            .unwrap_or(segment);
-        if stem.len() > 2 && stem != "src" && stem != "lib" && stem != "mod" {
-            features.extend(split_identifier(stem));
-        }
-    }
-
-    features.sort();
-    features.dedup();
-    features
-}
-
-pub fn extract_with_tags(
-    tree: &Tree,
-    source: &[u8],
-    query_src: &str,
-    ts_lang: &Language,
-    file_path: &str,
-) -> (Vec<ExtractedSymbol>, Vec<ExtractedCall>) {
-    let query = match Query::new(ts_lang, query_src) {
-        Ok(q) => q,
-        Err(e) => {
-            warn!("failed to compile tags query: {e}");
-            return (Vec::new(), Vec::new());
-        }
-    };
-
-    let capture_names: Vec<&str> = query.capture_names().to_vec();
-    let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source);
-
-    let mut symbols = Vec::new();
-    let mut calls = Vec::new();
-    let mut seen_defs: HashSet<usize> = HashSet::new();
-
-    while let Some(m) = matches.next() {
-        let mut name_text: Option<String> = None;
-        let mut name_node: Option<Node> = None;
-        let mut def_kind: Option<NodeKind> = None;
-        let mut def_node: Option<Node> = None;
-        let mut is_call = false;
-
-        for capture in m.captures {
-            let cap_name = capture_names[capture.index as usize];
-
-            if cap_name == "name" {
-                name_text = capture.node.utf8_text(source).ok().map(|s| s.to_string());
-                name_node = Some(capture.node);
-            } else if let Some(kind) = capture_to_kind(cap_name) {
-                def_kind = Some(kind);
-                def_node = Some(capture.node);
-            } else if cap_name.starts_with("reference.call") || cap_name == "reference.send" {
-                is_call = true;
-            }
-        }
-
-        // Handle definitions
-        if let (Some(ref name), Some(kind), Some(node)) = (&name_text, def_kind, def_node) {
-            let node_id = node.id();
-            if !seen_defs.contains(&node_id) {
-                seen_defs.insert(node_id);
-                let refined = precise_kind(node.kind(), kind);
-                symbols.push(ExtractedSymbol {
-                    name: name.clone(),
-                    kind: refined,
-                    line_start: node.start_position().row + 1,
-                    line_end: node.end_position().row + 1,
-                    code_snippet: bounded_snippet(&node, source),
-                    parent: None,
-                    features: generate_features(name, refined, None, file_path),
-                });
-            }
-        }
-
-        // Handle calls
-        if let (Some(ref name), true) = (&name_text, is_call) {
-            let walk_node = name_node.unwrap_or(tree.root_node());
-            if let Some(caller) = find_enclosing_scope(walk_node, source) {
-                let line = walk_node.start_position().row + 1;
-                let line_end = walk_node.end_position().row + 1;
-                calls.push(ExtractedCall {
-                    callee: name.clone(),
-                    caller,
-                    line,
-                    line_end,
-                });
-            }
-        }
-    }
-
-    resolve_parents(&mut symbols);
-
-    // Enrich features with parent scope tokens
-    for sym in &mut symbols {
-        if let Some(ref parent) = sym.parent {
-            let parent_tokens = split_identifier(parent);
-            sym.features.extend(parent_tokens);
-            sym.features.sort();
-            sym.features.dedup();
-        }
-    }
-
-    (symbols, calls)
-}
-
-/// Walk up from a node to find the enclosing scope's name.
-fn find_enclosing_scope(node: Node, source: &[u8]) -> Option<String> {
-    let mut current = node.parent();
-    while let Some(parent) = current {
-        if is_scope_kind(parent.kind()) {
-            // Try "name" field first (functions, classes, methods)
-            if let Some(name_node) = parent.child_by_field_name("name") {
-                if let Ok(name) = name_node.utf8_text(source) {
-                    return Some(name.to_string());
-                }
-            }
-            // Rust impl blocks: use "type" field
-            if let Some(type_node) = parent.child_by_field_name("type") {
-                if let Ok(name) = type_node.utf8_text(source) {
-                    return Some(name.to_string());
-                }
-            }
-        }
-        current = parent.parent();
-    }
-    None
-}
-
-/// AST node kinds that create a scope for child symbols.
-fn is_scope_kind(kind: &str) -> bool {
-    matches!(
-        kind,
-        "function_item"
-            | "function_definition"
-            | "function_declaration"
-            | "method_declaration"
-            | "method_definition"
-            | "method"
-            | "class_definition"
-            | "class_declaration"
-            | "class_specifier"
-            | "class"
-            | "impl_item"
-            | "trait_item"
-            | "mod_item"
-            | "module"
-    )
-}
-
-/// Set parent for each symbol based on line-range containment.
-/// If symbol B is fully inside container A, A is B's parent.
-fn resolve_parents(symbols: &mut [ExtractedSymbol]) {
-    let containers: Vec<(String, usize, usize)> = symbols
-        .iter()
-        .filter(|s| is_container(s.kind))
-        .map(|s| (s.name.clone(), s.line_start, s.line_end))
-        .collect();
-
-    for sym in symbols.iter_mut() {
-        if is_container(sym.kind) {
-            continue;
-        }
-        // Find the smallest container that fully contains this symbol.
-        let mut best: Option<&(String, usize, usize)> = None;
-        for c in &containers {
-            if c.1 <= sym.line_start && c.2 >= sym.line_end && c.0 != sym.name {
-                match best {
-                    Some(prev) if (c.2 - c.1) < (prev.2 - prev.1) => best = Some(c),
-                    None => best = Some(c),
-                    _ => {}
-                }
-            }
-        }
-        if let Some(parent) = best {
-            sym.parent = Some(parent.0.clone());
-        }
-    }
-}
-
-fn is_container(kind: NodeKind) -> bool {
-    matches!(
-        kind,
-        NodeKind::Class
-            | NodeKind::Struct
-            | NodeKind::Interface
-            | NodeKind::Trait
-            | NodeKind::Impl
-            | NodeKind::Module
-    )
-}
-
 /// Extract import statements by walking the AST.
-/// Tags queries don't capture imports, so we handle them separately
-/// with a simple per-language list of import node kinds.
 pub fn extract_imports(
     root: &Node,
     source: &[u8],
@@ -324,20 +26,26 @@ pub fn extract_imports(
         SupportedLanguage::Go => &["import_declaration"],
         SupportedLanguage::Java => &["import_declaration"],
         SupportedLanguage::CSharp => &["using_directive"],
-        SupportedLanguage::Ruby => &[],
+        SupportedLanguage::Ruby => &["call", "command"],
         SupportedLanguage::Cpp => &["preproc_include"],
         SupportedLanguage::Swift => &["import_declaration"],
     };
 
     let mut imports = Vec::new();
-    collect_imports(root, source, import_kinds, &mut imports);
+    collect_imports(root, source, lang, import_kinds, &mut imports);
     imports
 }
 
-fn collect_imports(node: &Node, source: &[u8], kinds: &[&str], imports: &mut Vec<ExtractedImport>) {
+fn collect_imports(
+    node: &Node,
+    source: &[u8],
+    lang: SupportedLanguage,
+    kinds: &[&str],
+    imports: &mut Vec<ExtractedImport>,
+) {
     if kinds.contains(&node.kind()) {
         let text = node_text(node, source);
-        let path = clean_import_path(&text);
+        let path = clean_import_path(&text, lang);
         if !path.is_empty() {
             imports.push(ExtractedImport {
                 path,
@@ -350,14 +58,14 @@ fn collect_imports(node: &Node, source: &[u8], kinds: &[&str], imports: &mut Vec
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
-            collect_imports(&child, source, kinds, imports);
+            collect_imports(&child, source, lang, kinds, imports);
         }
     }
 }
 
-/// Strip language-specific import syntax to get the import path.
-fn clean_import_path(text: &str) -> String {
+fn clean_import_path(text: &str, lang: SupportedLanguage) -> String {
     let stripped = text
+        .trim()
         .trim_start_matches("use ")
         .trim_start_matches("import ")
         .trim_start_matches("from ")
@@ -366,7 +74,12 @@ fn clean_import_path(text: &str) -> String {
         .trim_end_matches(';')
         .trim();
 
-    // JS/TS: "import { X } from 'path'" → extract path after "from"
+    if matches!(lang, SupportedLanguage::Ruby)
+        && !(stripped.starts_with("require ") || stripped.starts_with("require_relative "))
+    {
+        return String::new();
+    }
+
     if let Some(idx) = stripped.find(" from ") {
         return stripped[idx + 6..]
             .trim()
@@ -374,5 +87,9 @@ fn clean_import_path(text: &str) -> String {
             .to_string();
     }
 
-    stripped.to_string()
+    stripped
+        .trim_start_matches("require ")
+        .trim_start_matches("require_relative ")
+        .trim_matches(|c| c == '\'' || c == '"' || c == '<' || c == '>')
+        .to_string()
 }
