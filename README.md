@@ -1,114 +1,176 @@
-<p align="center">
-  <h1 align="center">Anchor</h1>
-  <p align="center">Infrastructure for Coding AI agents.</p>
-</p>
+# Anchor
 
-<p align="center">
-  <a href="https://crates.io/crates/anchor-sdk"><img src="https://img.shields.io/crates/v/anchor-sdk.svg" alt="crates.io"></a>
-  <a href="https://github.com/Tharun-10Dragneel/Anchor/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License"></a>
-  <a href="https://github.com/Tharun-10Dragneel/Anchor/actions"><img src="https://img.shields.io/github/actions/workflow/status/Tharun-10Dragneel/Anchor/ci.yml?branch=main" alt="CI"></a>
-</p>
+Infrastructure for coding AI agents.
 
-> **Pre-alpha** — API may change. Install at your own discretion.
+> Pre-alpha. Anchor is being rebuilt around a repo-local `.anchor` execution harness.
 
----
-## What is Anchor?
+## What Is Anchor?
 
-Anchor is the infrastructure that turns AI coding agents into supercharged powerhouses. It builds a code graph that lets agents search, read, understand, and write code without the clunky file traversal, string reads, and writes that plague current tools. Today's agents treat code like plain text, dumping entire files into the context window and filling it up fast. This leads to bloated prompts, wasted tokens, and poor performance — like putting an auto rickshaw engine in a Ferrari. Anchor solves this by introducing graph slicing for relevant reads and writes, delivering only what's essential.
-The result? Agents become hyper-efficient, unlocking these 5 game-changing benefits:
+Anchor is not a coding agent.
 
-1. Token usage becomes less — Sliced context means 5–10x fewer tokens per query, keeping  costs low and sessions long.
+Anchor is the harness layer for agents like Codex, Claude Code, Gemini CLI, Cursor, Continue, and custom MCP clients.
 
-2. Tool calls are less — One graph query gives everything needed, reducing back-and-forth and speeding up workflows.
+The goal is simple:
 
-3. Higher accuracy — The model focuses on reasoning the logic, not parsing noise, leading to fewer hallucinations and better code.
-
-4. Less time — Queries in <200ms, no full rebuilds, and smarter edits mean tasks finish faster.
-
-5. Model actually understands the code — The graph provides structured, relationship-aware context, making agents truly intelligent.
-
-Anchor isn't an agent — it's the backend brain that makes every agent (Claude Code, Cursor, Cline, Aider, custom ones) smarter, faster, and cheaper.
-
-```
-anchor context authenticate
-
-authenticate FUNCTION src/auth/login.rs:15
-[12/45 lines, 3 calls]
-> login_handler    caller
-> auth_middleware   caller
-< verify_token     callee
-< hash_password    callee
-< db_lookup        callee
----
-15: fn authenticate(user: &str, pass: &str) -> Result<Token> {
-20:     let valid = verify_token(&trimmed);
-21:     let hashed = hash_password(pass);
-22:     let record = db_lookup(&trimmed, &hashed);
-45: }
+```text
+same agent + Anchor
+  -> less context waste
+  -> safer edits
+  -> sharper working context
 ```
 
-## Install
+Anchor should not replace proven local tools. It should orchestrate them:
 
-```bash
-# macOS / Linux
-curl -fsSL https://tharun-10dragneel.github.io/Anchor/install.sh | bash
+```text
+rg          -> raw search
+tree-sitter -> symbols and ranges
+git         -> changed-file truth and diffs
+formatters  -> formatting checks
+test runners -> verification
 ```
 
-Or build from source:
+Anchor adds the deterministic layer those tools do not provide by themselves:
 
-```bash
-git clone https://github.com/Tharun-10Dragneel/Anchor.git
-cd Anchor
-cargo build --release
-bash ./local_install.sh
+```text
+.anchor object store
+path and symbol indexes
+context projections
+edit projections
+range locks
+write logs
+verification records
 ```
 
-## Quick Start
+## Current Direction
 
-```bash
-anchor build                  # Build the code graph (run once per project)
-anchor context "login"        # Symbol + callers + callees in one call
-anchor search "UserService"   # Find symbols by name
-anchor map                    # Codebase overview
+The old full-repo CodeGraph path is being demoted.
+
+The new MVP direction is a Git-style local store:
+
+```text
+.anchor/
+  objects/
+    parses/
+    slices/
+    patches/
+  index/
+    paths.json
+    symbols.json
+  locks/
+    ranges/
+  projections/
+  writes/
+```
+
+Every indexed file is keyed by content hash. If the file changes, Anchor should detect the hash change, reparse only that file, and update the path/symbol indexes.
+
+## MVP Commands
+
+The target command surface is intentionally small:
+
+| Command | Purpose |
+|---------|---------|
+| `anchor search <query>` | Find candidate files, symbols, and ranges |
+| `anchor context <query>` | Return minimal context projections |
+| `anchor write ...` | Create, edit, or delete with validation |
+| `anchor verify` | Run focused checks and report results |
+
+Current CLI behavior is still transitioning. Some legacy graph-backed commands may exist while the `.anchor` index path is built.
+
+## Why This Exists
+
+Normal agent workflow works, but it is informal:
+
+```text
+rg
+read files
+patch text
+run tests
+repeat
+```
+
+Anchor is useful only if it makes that loop measurably better.
+
+Metrics we care about:
+
+- context bytes read
+- files opened
+- tool calls
+- edit attempts
+- patch apply failures
+- stale edit rejections
+- lock conflicts prevented
+- tests passed
+- wrong-file edits avoided
+
+The product claim is not "better AI." The product claim is:
+
+```text
+Keep your existing agent.
+Make its repo interaction cheaper, safer, and sharper.
+```
+
+## Current Proof
+
+The validator proof lives in:
+
+```text
+tests/validata.rs
+tests/validata/git_style_projection.rs
+```
+
+Real VS Code corpus probe:
+
+```text
+files seen:                 96
+symbols tested:             50
+avg context reduction:      96.88%
+median context reduction:   98.44%
+lock conflicts rejected:    50 / 50
+verified after edit:        50 / 50
+index hash refreshed:       50 / 50
+failures:                   0
+```
+
+That proves the mechanism, not full agent outcome. The next benchmark is:
+
+```text
+Codex alone vs Codex + Anchor
+Claude Code alone vs Claude Code + Anchor
+Gemini CLI alone vs Gemini CLI + Anchor
 ```
 
 ## Supported Languages
 
-| Language | Extensions | Status |
-|----------|-----------|--------|
-| Rust | `.rs` | Full |
-| Python | `.py` `.pyw` | Full |
-| JavaScript | `.js` `.mjs` `.cjs` | Full |
-| TypeScript | `.ts` `.mts` `.cts` | Full |
-| TSX/JSX | `.tsx` `.jsx` | Full |
-| Go | `.go` | Full |
-| Java | `.java` | Full |
-| C# | `.cs` | Full |
-| Ruby | `.rb` | Full |
-| C++ | `.cpp` `.cc` `.cxx` `.hpp` `.h` | Full |
-| Swift | `.swift` | Full |
+Tree-sitter extraction currently covers:
 
-## CLI Commands
+| Language | Extensions |
+|----------|------------|
+| Rust | `.rs` |
+| Python | `.py`, `.pyw` |
+| JavaScript | `.js`, `.mjs`, `.cjs` |
+| TypeScript | `.ts`, `.mts`, `.cts` |
+| TSX/JSX | `.tsx`, `.jsx` |
+| Go | `.go` |
+| Java | `.java` |
+| C# | `.cs` |
+| Ruby | `.rb` |
+| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.h` |
+| Swift | `.swift` |
 
-| Command | Description |
-|---------|-------------|
-| `anchor build` | Build/rebuild the code graph |
-| `anchor context <query>` | Symbol code + callers + callees (primary command) |
-| `anchor context --full <query>` | Full unsliced code with line numbers |
-| `anchor search <query>` | Find symbols by name (lightweight) |
-| `anchor search -p '<regex>'` | Regex pattern search |
-| `anchor read <symbol>` | Single symbol with full detail |
-| `anchor deps <symbol>` | Dependency relationships |
-| `anchor map` | Codebase overview: modules, entry points |
-| `anchor stats` | Graph statistics |
-| `anchor overview` | Codebase structure summary |
-| `anchor mcp` | Start MCP server for AI agent integration |
+## Build From Source
 
-## MCP Server
+```bash
+git clone https://github.com/HyperMarble/Anchor.git
+cd Anchor
+cargo build --release
+```
 
-Anchor runs as an [MCP](https://modelcontextprotocol.io/) server for AI agents like Claude Code, Cursor, etc.
+## MCP
 
-**Claude Code** — add to your project's `.mcp.json`:
+Anchor is intended to expose the harness to agents through MCP.
+
+Example:
 
 ```json
 {
@@ -121,52 +183,10 @@ Anchor runs as an [MCP](https://modelcontextprotocol.io/) server for AI agents l
 }
 ```
 
-MCP tools provided:
+## Development
 
-| Tool | Description |
-|------|-------------|
-| `context` | Get symbol code + callers + callees |
-| `search` | Find symbols by name or regex |
-| `map` | Codebase overview |
-| `impact` | What breaks if you change a symbol |
-| `write` | Line-range replacement with impact analysis |
-
-## Architecture
-
-```
-src/
-├── graph/       Code graph engine (petgraph-based)
-├── parser/      Tree-sitter AST extraction (per-language)
-├── query/       Context building, search, graph slicing
-├── mcp/         MCP server for AI agents
-├── lock/        Symbol-level locking for parallel writes
-├── daemon/      Background daemon with file watching
-├── graphql/     Internal GraphQL API
-├── regex/       Brzozowski derivative regex engine (ReDoS-safe)
-├── cli/         CLI command implementations
-└── write/       File write operations
-```
-
-## Graph Slicing
-
-Anchor doesn't dump entire files. It **slices** symbol code to show only lines where graph dependencies are called:
-
-- Function signature
-- Lines calling other symbols in the graph (with ±1 line context)
-- Return statements
-
-A 200-line function becomes ~15 lines showing just the call flow. Use `--full` when you need every line.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for the current MVP plan.
 
 ## License
 
 [Apache-2.0](LICENSE)
-
-## Star History
-
-<a href="https://www.star-history.com/#Tharun-10Dragneel/Anchor&Date&legend=bottom-right">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Tharun-10Dragneel/Anchor&Date&theme=dark&legend=bottom-right" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Tharun-10Dragneel/Anchor&Date&legend=bottom-right" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Tharun-10Dragneel/Anchor&Date&legend=bottom-right" />
-  </picture>
-</a>
