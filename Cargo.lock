@@ -43,6 +43,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
  "tar",
  "tempfile",
  "thiserror 1.0.69",
