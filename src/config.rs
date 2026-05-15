@@ -13,8 +13,6 @@ use std::path::{Path, PathBuf};
 pub struct AnchorConfig {
     #[serde(default)]
     pub project: ProjectConfig,
-    #[serde(default)]
-    pub graph: GraphConfig,
 }
 
 /// Project-level settings.
@@ -26,17 +24,6 @@ pub struct ProjectConfig {
     /// Languages to parse.
     #[serde(default = "default_languages")]
     pub languages: Vec<String>,
-}
-
-/// Graph engine settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GraphConfig {
-    /// Path for the persisted graph cache.
-    #[serde(default = "default_cache_path")]
-    pub cache_path: String,
-    /// Maximum lines in a code snippet.
-    #[serde(default = "default_max_snippet_lines")]
-    pub max_snippet_lines: usize,
 }
 
 fn default_root() -> String {
@@ -52,28 +39,11 @@ fn default_languages() -> Vec<String> {
     ]
 }
 
-fn default_cache_path() -> String {
-    ".anchor/graph.bin".to_string()
-}
-
-fn default_max_snippet_lines() -> usize {
-    10
-}
-
 impl Default for ProjectConfig {
     fn default() -> Self {
         Self {
             root: default_root(),
             languages: default_languages(),
-        }
-    }
-}
-
-impl Default for GraphConfig {
-    fn default() -> Self {
-        Self {
-            cache_path: default_cache_path(),
-            max_snippet_lines: default_max_snippet_lines(),
         }
     }
 }
@@ -91,11 +61,5 @@ impl AnchorConfig {
     pub fn resolve_root(&self, anchor_dir: &Path) -> PathBuf {
         let parent = anchor_dir.parent().unwrap_or(anchor_dir);
         parent.join(&self.project.root)
-    }
-
-    /// Resolve the graph cache path relative to the anchor directory's parent.
-    pub fn resolve_cache_path(&self, anchor_dir: &Path) -> PathBuf {
-        let parent = anchor_dir.parent().unwrap_or(anchor_dir);
-        parent.join(&self.graph.cache_path)
     }
 }
