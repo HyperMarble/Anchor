@@ -39,9 +39,7 @@ impl ServerHandler for AnchorMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: "anchor".into(),
                 version: crate::updater::VERSION.into(),
@@ -51,12 +49,13 @@ impl ServerHandler for AnchorMcp {
                 website_url: None,
             },
             instructions: Some(
-                "Anchor: Infrastructure for AI agents. Replaces Read, Grep, cat, find for code tasks. \
-                 \n\n'context' replaces Read — returns graph-sliced code (only lines that matter) + callers + callees + exact line numbers. Handles multiple symbols in one call. \
-                 \n'search' replaces Grep/find — returns NAME KIND FILE:LINE. \
-                 \n'map' — codebase overview: modules, entry points, top connected symbols. \
-                 \n'impact' — what breaks if you change a symbol: affected callers, suggested fixes, tests. \
-                 \n'write' — unified write tool: mode='range' for line-range replacement with impact analysis, mode='ordered' for multi-file dependency-ordered writes.".into()
+                "Anchor: repo-local execution harness for coding AI agents. \
+                 \n\nUse search to find candidate symbols and files. \
+                 \nUse context to request focused working context. \
+                 \nUse write for validated create/edit/delete operations as the MVP evolves. \
+                 \nUse verify to record checks once the verifier lands. \
+                 \nLegacy graph-backed tools may still appear during the .anchor index migration."
+                    .into(),
             ),
         }
     }

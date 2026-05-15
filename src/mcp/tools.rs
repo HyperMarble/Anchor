@@ -20,8 +20,8 @@ fn escape_regex_literal(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         match ch {
-            '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$'
-            | '|' | '&' | '~' => {
+            '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|'
+            | '&' | '~' => {
                 out.push('\\');
                 out.push(ch);
             }
@@ -35,18 +35,10 @@ fn escape_regex_literal(input: &str) -> String {
 impl AnchorMcp {
     pub fn new(roots: Vec<std::path::PathBuf>) -> Self {
         let root = roots[0].clone();
-        let cache_path = root.join(".anchor/graph.bin");
         let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
-        let graph = if cache_path.exists() {
-            CodeGraph::load(&cache_path).unwrap_or_else(|_| build_graph(&root_refs))
-        } else {
-            let graph = build_graph(&root_refs);
-            if let Some(parent) = cache_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = graph.save(&cache_path);
-            graph
-        };
+        // Temporary bridge while MCP moves from CodeGraph to `.anchor` indexes.
+        // Do not persist `.anchor/graph.bin`; persisted graph state goes stale.
+        let graph = build_graph(&root_refs);
 
         Self {
             root,
