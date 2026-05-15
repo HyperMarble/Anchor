@@ -36,22 +36,12 @@ const HELP_TEXT: &str = "
     Infrastructure for Coding AI agents
 
 Start here:
-  init                  Configure AI agent integrations
-  build                 Index codebase
-  map                   Codebase map (modules + top symbols)
-  map <scope>           Zoom into module
-
-Query:
   context <sym> [sym2…]  Code + callers + callees
   search <q> [q2…]      Find symbols
-
-Write:
-  write <path> <content>      Create/overwrite file
-  edit <path> -a <action> -p <pattern> [-c <content>]
-
-Other:
-  overview              Files + symbol counts
-  stats                 Graph statistics
+  map [scope]           Codebase map / zoom into module
+  write <path> <content> Create/overwrite file
+  edit <path> ...        Insert/replace/delete text
+  mcp                   Start MCP server for agents
 
 Options:
   -r, --root <PATH>     Project root (default: .)
@@ -59,7 +49,6 @@ Options:
 
 #[derive(Subcommand)]
 pub enum Commands {
-    // ─── Query Commands ─────────────────────────────────────────────
     /// Get symbol context (code + callers + callees)
     Context {
         /// Symbol names to query (supports multiple)
@@ -88,67 +77,41 @@ pub enum Commands {
         limit: usize,
     },
 
-    // ─── Write Commands ──────────────────────────────────────────
-    /// Create or overwrite a file
-    Write { path: String, content: String },
-
-    /// Edit a file (insert, replace, delete)
-    Edit {
-        path: String,
-        #[arg(short, long)]
-        action: String,
-        #[arg(short, long)]
-        pattern: String,
-        #[arg(short, long)]
-        content: Option<String>,
-    },
-
-    // ─── Overview ─────────────────────────────────────────────────
     /// Compact codebase map for AI agents
     Map {
         /// Optional scope: zoom into specific module/directory
         scope: Option<String>,
     },
 
-    /// Show codebase overview (files, structure, key symbols)
-    Overview,
+    /// Create or overwrite a file
+    Write {
+        /// File path
+        path: String,
 
-    // ─── System ───────────────────────────────────────────────────
-    /// Configure AI agent integrations (MCP server)
-    Init,
+        /// File content
+        content: String,
+    },
 
-    /// Build/rebuild the code graph
-    Build,
+    /// Edit a file by pattern
+    Edit {
+        /// File path
+        path: String,
 
-    /// Show graph statistics
-    Stats,
+        /// Action: insert, replace, delete
+        #[arg(short, long)]
+        action: String,
 
-    // ─── Hidden Commands ─────────────────────────────────────────
-    /// List all indexed files
-    #[command(hide = true)]
-    Files,
+        /// Pattern to match
+        #[arg(short, long)]
+        pattern: String,
+
+        /// Content for insert/replace
+        #[arg(short, long)]
+        content: Option<String>,
+    },
 
     /// Start MCP server (Model Context Protocol) on stdio
     Mcp,
-
-    /// Manage the anchor daemon
-    #[command(hide = true)]
-    Daemon {
-        #[command(subcommand)]
-        action: Option<daemon::DaemonAction>,
-    },
-
-    /// Update anchor to latest version
-    #[command(hide = true)]
-    Update,
-
-    /// Uninstall anchor (runs shell script)
-    #[command(hide = true)]
-    Uninstall,
-
-    /// Show version
-    #[command(hide = true)]
-    Version,
 }
 
 /// Print usage help
