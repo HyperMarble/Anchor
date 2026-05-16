@@ -43,6 +43,22 @@ pub struct PathIndex {
     pub files: Vec<PathEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolEntry {
+    pub path: String,
+    pub source_hash: String,
+    pub name: String,
+    pub kind: String,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub slice_hash: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolIndex {
+    pub symbols: Vec<SymbolEntry>,
+}
+
 impl AnchorStore {
     pub fn init(repo_root: &Path) -> Result<Self> {
         let repo_root = repo_root.to_path_buf();
@@ -135,6 +151,10 @@ impl AnchorStore {
         self.anchor_root.join("index").join("paths.json")
     }
 
+    pub fn symbol_index_path(&self) -> PathBuf {
+        self.anchor_root.join("index").join("symbols.json")
+    }
+
     pub fn load_path_index(&self) -> Result<PathIndex> {
         let path = self.path_index_path();
         if !path.exists() {
@@ -181,6 +201,78 @@ impl AnchorStore {
         }
 
         Ok((entry, changed))
+    }
+
+    pub fn load_symbol_index(&self) -> Result<SymbolIndex> {
+        let path = self.symbol_index_path();
+        if !path.exists() {
+            return Ok(SymbolIndex::default());
+        }
+
+        let bytes = fs::read(path)?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    pub fn save_symbol_index(&self, index: &SymbolIndex) -> Result<()> {
+        let path = self.symbol_index_path();
+        fs::create_dir_all(path.parent().ok_or_else(|| {
+            AnchorError::InvalidStructure(format!("symbol index has no parent: {}", path.display()))
+        })?)?;
+        fs::write(path, serde_json::to_vec_pretty(index)?)?;
+        Ok(())
+    }
+
+    pub fn upsert_symbols_for_path(
+        &self,
+        source_path: &Path,
+    ) -> Result<(PathEntry, Vec<SymbolEntry>, bool)> {
+        let source = fs::read_to_string(source_path)?;
+        let extraction = crate::parser::extract_file(source_path, &source)?;
+        let (path_entry, path_changed) = self.upsert_path(source_path)?;
+
+        let mut symbols: Vec<SymbolEntry> = extraction
+            .symbols
+            .iter()
+            .map(|symbol| SymbolEntry {
+                path: path_entry.path.clone(),
+                source_hash: path_entry.source_hash.clone(),
+                name: symbol.name.clone(),
+                kind: format!("{:?}", symbol.kind),
+                line_start: symbol.line_start,
+                line_end: symbol.line_end,
+                slice_hash: content_hash(symbol.code_snippet.as_bytes()),
+            })
+            .collect();
+        symbols.sort_by(|a, b| {
+            a.line_start
+                .cmp(&b.line_start)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+
+        let mut index = self.load_symbol_index()?;
+        let existing: Vec<SymbolEntry> = index
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.path == path_entry.path)
+            .cloned()
+            .collect();
+        let changed = path_changed || existing != symbols;
+
+        if changed {
+            index
+                .symbols
+                .retain(|symbol| symbol.path != path_entry.path);
+            index.symbols.extend(symbols.clone());
+            index.symbols.sort_by(|a, b| {
+                a.path
+                    .cmp(&b.path)
+                    .then_with(|| a.line_start.cmp(&b.line_start))
+                    .then_with(|| a.name.cmp(&b.name))
+            });
+            self.save_symbol_index(&index)?;
+        }
+
+        Ok((path_entry, symbols, changed))
     }
 
     fn repo_relative_path(&self, path: &Path) -> Result<String> {
@@ -358,5 +450,84 @@ mod tests {
         let result = store.upsert_path(&outside);
 
         assert!(matches!(result, Err(AnchorError::InvalidStructure(_))));
+    }
+
+    #[test]
+    fn missing_symbol_index_loads_as_empty() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+
+        let index = store.load_symbol_index().unwrap();
+
+        assert!(index.symbols.is_empty());
+    }
+
+    #[test]
+    fn upsert_symbols_for_path_indexes_parser_symbols() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            &source,
+            "pub struct Service;\n\npub fn run() {\n    helper();\n}\n\nfn helper() {}\n",
+        )
+        .unwrap();
+
+        let (path_entry, symbols, changed) = store.upsert_symbols_for_path(&source).unwrap();
+
+        assert!(changed);
+        assert_eq!(path_entry.path, "src/lib.rs");
+        assert_eq!(symbols.len(), 3);
+        assert!(symbols.iter().any(|symbol| symbol.name == "Service"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "run"));
+        assert!(symbols.iter().any(|symbol| symbol.name == "helper"));
+        assert!(symbols
+            .iter()
+            .all(|symbol| symbol.source_hash == path_entry.source_hash));
+
+        let index = store.load_symbol_index().unwrap();
+        assert_eq!(index.symbols, symbols);
+    }
+
+    #[test]
+    fn unchanged_symbols_do_not_rewrite_symbol_index() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "pub fn run() {}\n").unwrap();
+
+        let (_, first, first_changed) = store.upsert_symbols_for_path(&source).unwrap();
+        let (_, second, second_changed) = store.upsert_symbols_for_path(&source).unwrap();
+
+        assert!(first_changed);
+        assert!(!second_changed);
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn changed_file_replaces_only_that_files_symbols() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let first = dir.path().join("src/first.rs");
+        let second = dir.path().join("src/second.rs");
+        fs::create_dir_all(first.parent().unwrap()).unwrap();
+        fs::write(&first, "pub fn old_name() {}\n").unwrap();
+        fs::write(&second, "pub fn stable() {}\n").unwrap();
+        store.upsert_symbols_for_path(&first).unwrap();
+        store.upsert_symbols_for_path(&second).unwrap();
+
+        fs::write(&first, "pub fn new_name() {}\n").unwrap();
+        let (_, symbols, changed) = store.upsert_symbols_for_path(&first).unwrap();
+
+        assert!(changed);
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "new_name");
+
+        let index = store.load_symbol_index().unwrap();
+        assert!(index.symbols.iter().any(|symbol| symbol.name == "new_name"));
+        assert!(index.symbols.iter().any(|symbol| symbol.name == "stable"));
+        assert!(!index.symbols.iter().any(|symbol| symbol.name == "old_name"));
     }
 }
