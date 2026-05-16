@@ -275,6 +275,34 @@ impl AnchorStore {
         Ok((path_entry, symbols, changed))
     }
 
+    pub fn search_symbols(&self, query: &str, limit: usize) -> Result<Vec<SymbolEntry>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let query_lower = query.to_lowercase();
+        let mut matches: Vec<SymbolEntry> = self
+            .load_symbol_index()?
+            .symbols
+            .into_iter()
+            .filter(|symbol| {
+                symbol.name.to_lowercase().contains(&query_lower)
+                    || symbol.path.to_lowercase().contains(&query_lower)
+            })
+            .collect();
+
+        matches.sort_by(|a, b| {
+            score_symbol_match(a, &query_lower)
+                .cmp(&score_symbol_match(b, &query_lower))
+                .then_with(|| a.path.cmp(&b.path))
+                .then_with(|| a.line_start.cmp(&b.line_start))
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        matches.truncate(limit);
+
+        Ok(matches)
+    }
+
     fn repo_relative_path(&self, path: &Path) -> Result<String> {
         let relative = path.strip_prefix(&self.repo_root).map_err(|_| {
             AnchorError::InvalidStructure(format!(
@@ -285,6 +313,20 @@ impl AnchorStore {
 
         Ok(relative.to_string_lossy().replace('\\', "/"))
     }
+}
+
+fn score_symbol_match(symbol: &SymbolEntry, query_lower: &str) -> usize {
+    let name_lower = symbol.name.to_lowercase();
+    if name_lower == query_lower {
+        return 0;
+    }
+    if name_lower.starts_with(query_lower) {
+        return 1;
+    }
+    if name_lower.contains(query_lower) {
+        return 2;
+    }
+    3
 }
 
 pub fn content_hash(bytes: &[u8]) -> String {
@@ -529,5 +571,60 @@ mod tests {
         assert!(index.symbols.iter().any(|symbol| symbol.name == "new_name"));
         assert!(index.symbols.iter().any(|symbol| symbol.name == "stable"));
         assert!(!index.symbols.iter().any(|symbol| symbol.name == "old_name"));
+    }
+
+    #[test]
+    fn search_symbols_returns_compact_index_hits() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            &source,
+            "pub fn authenticate() {}\npub fn authenticate_user() {}\npub fn logout() {}\n",
+        )
+        .unwrap();
+        store.upsert_symbols_for_path(&source).unwrap();
+
+        let hits = store.search_symbols("authenticate", 10).unwrap();
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].name, "authenticate");
+        assert_eq!(hits[1].name, "authenticate_user");
+        assert!(hits.iter().all(|hit| hit.path == "src/lib.rs"));
+    }
+
+    #[test]
+    fn search_symbols_honors_limit() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            &source,
+            "pub fn handle_one() {}\npub fn handle_two() {}\npub fn handle_three() {}\n",
+        )
+        .unwrap();
+        store.upsert_symbols_for_path(&source).unwrap();
+
+        let hits = store.search_symbols("handle", 2).unwrap();
+
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn search_symbols_can_match_path() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/auth/session.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "pub fn load() {}\n").unwrap();
+        store.upsert_symbols_for_path(&source).unwrap();
+
+        let hits = store.search_symbols("auth/session", 10).unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].name, "load");
+        assert_eq!(hits[0].path, "src/auth/session.rs");
     }
 }
