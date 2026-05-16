@@ -403,6 +403,60 @@ mod tests {
 
     use super::*;
 
+    #[derive(Debug)]
+    struct StoreProjectionBenchmark {
+        files_seen: usize,
+        symbols_tested: usize,
+        avg_context_reduction_percent: f64,
+        median_context_reduction_percent: f64,
+        p90_context_reduction_percent: f64,
+        min_context_reduction_percent: f64,
+        max_context_reduction_percent: f64,
+        avg_full_context_bytes: f64,
+        avg_projection_bytes: f64,
+        stale_rejections: usize,
+        failures: usize,
+    }
+
+    fn collect_python_files(root: &Path, out: &mut Vec<PathBuf>, max_files: usize) {
+        if out.len() >= max_files {
+            return;
+        }
+
+        let Ok(entries) = fs::read_dir(root) else {
+            return;
+        };
+
+        for entry in entries.flatten() {
+            if out.len() >= max_files {
+                return;
+            }
+
+            let path = entry.path();
+            if path.is_dir() {
+                collect_python_files(&path, out, max_files);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("py") {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if (5_000..=90_000).contains(&meta.len()) {
+                    out.push(path);
+                }
+            }
+        }
+    }
+
+    fn percentile(values: &[f64], percentile: f64) -> f64 {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let index = ((sorted.len() - 1) as f64 * percentile).round() as usize;
+        sorted[index]
+    }
+
+    fn context_reduction_percent(full_bytes: usize, projection_bytes: usize) -> f64 {
+        100.0 - ((projection_bytes as f64 / full_bytes as f64) * 100.0)
+    }
+
     #[test]
     fn content_hash_is_stable_sha256_hex() {
         let hash = content_hash(b"anchor");
@@ -748,5 +802,115 @@ mod tests {
             projection.suffix_hash,
             content_hash("\npub fn after() {}".as_bytes())
         );
+    }
+
+    #[test]
+    #[ignore = "real MLflow corpus benchmark; run explicitly when /Volumes/Hak_SSD/mlflow is available"]
+    fn real_mlflow_anchor_store_projection_benchmark() {
+        let mlflow_repo = std::env::var("ANCHOR_REAL_REPO")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/Volumes/Hak_SSD/mlflow"));
+        let root = mlflow_repo.join("mlflow");
+        assert!(
+            root.exists(),
+            "missing MLflow checkout at {}",
+            root.display()
+        );
+
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let mut real_files = Vec::new();
+        collect_python_files(&root, &mut real_files, 160);
+
+        let mut reductions = Vec::new();
+        let mut full_bytes_total = 0usize;
+        let mut projection_bytes_total = 0usize;
+        let mut stale_rejections = 0usize;
+        let mut failures = 0usize;
+        let target_symbols = 50usize;
+
+        'files: for real_file in &real_files {
+            let source = match fs::read_to_string(real_file) {
+                Ok(source) => source,
+                Err(_) => continue,
+            };
+            let extraction = match crate::parser::extract_file(real_file, &source) {
+                Ok(extraction) => extraction,
+                Err(_) => continue,
+            };
+            let relative = real_file.strip_prefix(&root).unwrap();
+            let temp_file = dir.path().join(relative);
+            fs::create_dir_all(temp_file.parent().unwrap()).unwrap();
+            fs::write(&temp_file, &source).unwrap();
+            store.upsert_symbols_for_path(&temp_file).unwrap();
+
+            for symbol in extraction.symbols {
+                if reductions.len() >= target_symbols {
+                    break 'files;
+                }
+                if symbol.line_end <= symbol.line_start || symbol.code_snippet.len() < 40 {
+                    continue;
+                }
+
+                let relative_text = relative.to_string_lossy().to_string();
+                let hits = store.search_symbols(&symbol.name, 100).unwrap();
+                let Some(hit) = hits.iter().find(|hit| {
+                    hit.path.ends_with(&relative_text)
+                        && hit.line_start == symbol.line_start
+                        && hit.line_end == symbol.line_end
+                }) else {
+                    failures += 1;
+                    continue;
+                };
+
+                let projection = match store.create_projection(hit) {
+                    Ok(projection) => projection,
+                    Err(_) => {
+                        failures += 1;
+                        continue;
+                    }
+                };
+
+                reductions.push(context_reduction_percent(
+                    source.len(),
+                    projection.text.len(),
+                ));
+                full_bytes_total += source.len();
+                projection_bytes_total += projection.text.len();
+
+                fs::write(&temp_file, format!("{source}\n# anchor stale probe\n")).unwrap();
+                if store.create_projection(hit).is_err() {
+                    stale_rejections += 1;
+                } else {
+                    failures += 1;
+                }
+                fs::write(&temp_file, &source).unwrap();
+            }
+        }
+
+        let metrics = StoreProjectionBenchmark {
+            files_seen: real_files.len(),
+            symbols_tested: reductions.len(),
+            avg_context_reduction_percent: reductions.iter().sum::<f64>() / reductions.len() as f64,
+            median_context_reduction_percent: percentile(&reductions, 0.50),
+            p90_context_reduction_percent: percentile(&reductions, 0.90),
+            min_context_reduction_percent: percentile(&reductions, 0.00),
+            max_context_reduction_percent: percentile(&reductions, 1.00),
+            avg_full_context_bytes: full_bytes_total as f64 / reductions.len() as f64,
+            avg_projection_bytes: projection_bytes_total as f64 / reductions.len() as f64,
+            stale_rejections,
+            failures,
+        };
+
+        eprintln!("anchor store real mlflow projection metrics: {metrics:?}");
+        assert!(metrics.files_seen >= 20);
+        assert_eq!(metrics.symbols_tested, target_symbols);
+        assert!(metrics.avg_context_reduction_percent >= 80.0);
+        assert!(metrics.median_context_reduction_percent >= 80.0);
+        assert!(metrics.p90_context_reduction_percent >= metrics.median_context_reduction_percent);
+        assert!(metrics.min_context_reduction_percent <= metrics.max_context_reduction_percent);
+        assert!(metrics.avg_full_context_bytes > metrics.avg_projection_bytes);
+        assert_eq!(metrics.stale_rejections, metrics.symbols_tested);
+        assert_eq!(metrics.failures, 0);
     }
 }
