@@ -59,6 +59,19 @@ pub struct SymbolIndex {
     pub symbols: Vec<SymbolEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Projection {
+    pub path: String,
+    pub source_hash: String,
+    pub symbol: String,
+    pub line_start: usize,
+    pub line_end: usize,
+    pub slice_hash: String,
+    pub prefix_hash: String,
+    pub suffix_hash: String,
+    pub text: String,
+}
+
 impl AnchorStore {
     pub fn init(repo_root: &Path) -> Result<Self> {
         let repo_root = repo_root.to_path_buf();
@@ -301,6 +314,45 @@ impl AnchorStore {
         matches.truncate(limit);
 
         Ok(matches)
+    }
+
+    pub fn create_projection(&self, symbol: &SymbolEntry) -> Result<Projection> {
+        let source_path = self.repo_root.join(&symbol.path);
+        let source = fs::read_to_string(&source_path)?;
+        let current_hash = content_hash(source.as_bytes());
+        if current_hash != symbol.source_hash {
+            return Err(AnchorError::InvalidStructure(format!(
+                "stale symbol index for {}: expected {}, got {}",
+                symbol.path, symbol.source_hash, current_hash
+            )));
+        }
+
+        let lines: Vec<&str> = source.lines().collect();
+        if symbol.line_start < 1
+            || symbol.line_end < symbol.line_start
+            || symbol.line_end > lines.len()
+        {
+            return Err(AnchorError::InvalidStructure(format!(
+                "invalid projection range {}:{}-{}",
+                symbol.path, symbol.line_start, symbol.line_end
+            )));
+        }
+
+        let slice = lines[symbol.line_start - 1..symbol.line_end].join("\n");
+        let prefix = lines[..symbol.line_start - 1].join("\n");
+        let suffix = lines[symbol.line_end..].join("\n");
+
+        Ok(Projection {
+            path: symbol.path.clone(),
+            source_hash: symbol.source_hash.clone(),
+            symbol: symbol.name.clone(),
+            line_start: symbol.line_start,
+            line_end: symbol.line_end,
+            slice_hash: content_hash(slice.as_bytes()),
+            prefix_hash: content_hash(prefix.as_bytes()),
+            suffix_hash: content_hash(suffix.as_bytes()),
+            text: slice,
+        })
     }
 
     fn repo_relative_path(&self, path: &Path) -> Result<String> {
@@ -626,5 +678,75 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].name, "load");
         assert_eq!(hits[0].path, "src/auth/session.rs");
+    }
+
+    #[test]
+    fn create_projection_returns_only_indexed_symbol_slice() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            &source,
+            "pub fn before() {}\n\npub fn target() {\n    before();\n}\n\npub fn after() {}\n",
+        )
+        .unwrap();
+        store.upsert_symbols_for_path(&source).unwrap();
+        let target = store.search_symbols("target", 1).unwrap().remove(0);
+
+        let projection = store.create_projection(&target).unwrap();
+
+        assert_eq!(projection.path, "src/lib.rs");
+        assert_eq!(projection.symbol, "target");
+        assert!(projection.text.contains("pub fn target()"));
+        assert!(projection.text.contains("before();"));
+        assert!(!projection.text.contains("pub fn before()"));
+        assert!(!projection.text.contains("pub fn after()"));
+        assert_eq!(
+            projection.slice_hash,
+            content_hash(projection.text.as_bytes())
+        );
+    }
+
+    #[test]
+    fn create_projection_rejects_stale_symbol_hash() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "pub fn target() {}\n").unwrap();
+        store.upsert_symbols_for_path(&source).unwrap();
+        let target = store.search_symbols("target", 1).unwrap().remove(0);
+
+        fs::write(&source, "pub fn target() {\n    changed();\n}\n").unwrap();
+
+        let result = store.create_projection(&target);
+        assert!(matches!(result, Err(AnchorError::InvalidStructure(_))));
+    }
+
+    #[test]
+    fn create_projection_hashes_prefix_and_suffix_boundaries() {
+        let dir = tempdir().unwrap();
+        let store = AnchorStore::init(dir.path()).unwrap();
+        let source = dir.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(
+            &source,
+            "pub fn before() {}\n\npub fn target() {}\n\npub fn after() {}\n",
+        )
+        .unwrap();
+        store.upsert_symbols_for_path(&source).unwrap();
+        let target = store.search_symbols("target", 1).unwrap().remove(0);
+
+        let projection = store.create_projection(&target).unwrap();
+
+        assert_eq!(
+            projection.prefix_hash,
+            content_hash("pub fn before() {}\n".as_bytes())
+        );
+        assert_eq!(
+            projection.suffix_hash,
+            content_hash("\npub fn after() {}".as_bytes())
+        );
     }
 }
