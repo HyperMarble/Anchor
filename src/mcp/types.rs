@@ -22,6 +22,11 @@ pub struct ContextRequest {
         description = "Show full unsliced code (default: false). Use when you need every line, not just dependency-relevant ones."
     )]
     pub full: Option<bool>,
+
+    #[schemars(
+        description = "Bundle call-graph neighbors (default: false). Returns callee symbols not yet seen this session — gives full understanding in one call."
+    )]
+    pub bundle: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
