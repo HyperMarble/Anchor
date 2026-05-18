@@ -6,54 +6,30 @@
 //
 
 use rmcp::{handler::server::wrapper::Parameters, model::*, tool, tool_router};
-use std::path::Path;
 use std::sync::Arc;
 
-use super::format::{escape_graphql, format_symbol, short_kind};
+use super::format::short_kind;
 use super::types::*;
 use super::AnchorMcp;
-use crate::graph::{build_graph, rebuild_file, CodeGraph};
-use crate::graphql::{build_schema, execute};
-use crate::lock::{LockManager, LockResult, SymbolKey};
-
-fn escape_regex_literal(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|'
-            | '&' | '~' => {
-                out.push('\\');
-                out.push(ch);
-            }
-            _ => out.push(ch),
-        }
-    }
-    out
-}
+use crate::lock::{LockResult, SymbolKey};
+use crate::query::slice::slice_code;
+use crate::storage::AnchorStore;
 
 #[tool_router]
 impl AnchorMcp {
     pub fn new(roots: Vec<std::path::PathBuf>) -> Self {
         let root = roots[0].clone();
-        let root_refs: Vec<&Path> = roots.iter().map(|r| r.as_path()).collect();
-        // Temporary bridge while MCP moves from CodeGraph to `.anchor` indexes.
-        // Do not persist `.anchor/graph.bin`; persisted graph state goes stale.
-        let graph = build_graph(&root_refs);
+        let store = AnchorStore::discover(&root)
+            .or_else(|_| AnchorStore::init(&root))
+            .expect("failed to open/init anchor store");
 
         Self {
             root,
             tool_router: Self::tool_router(),
-            graph: Arc::new(std::sync::RwLock::new(graph)),
-            lock_manager: Arc::new(LockManager::new()),
+            store: Arc::new(store),
+            lock_manager: Arc::new(crate::lock::LockManager::new()),
+            session_seen: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         }
-    }
-
-    fn load_graph(&self) -> Result<Arc<CodeGraph>, ErrorData> {
-        let guard = self
-            .graph
-            .read()
-            .map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
-        Ok(Arc::new(guard.clone()))
     }
 
     fn err(msg: impl Into<String>) -> ErrorData {
@@ -65,48 +41,136 @@ impl AnchorMcp {
     }
 
     #[tool(
-        description = "Get full context for symbols: sliced code + callers + callees. Returns exact line numbers you can pass directly to 'write'. Supports multiple symbols in one call. Shows line coverage (e.g. [25/88 lines, 3 calls]) when sliced. Set full=true to disable slicing."
+        description = "Get full context for symbols: sliced code + callers + callees. Returns exact line numbers you can pass directly to 'write'. Supports multiple symbols in one call. Set bundle:true to automatically include call-graph neighbors not yet seen this session."
     )]
     async fn context(
         &self,
         Parameters(req): Parameters<ContextRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let graph = self.load_graph()?;
-        let schema = build_schema(graph);
+        let store = &self.store;
         let limit = req.limit.unwrap_or(5);
-        let full = req.full.unwrap_or(false);
-
+        let bundle = req.bundle.unwrap_or(false);
+        let call_index = store.load_call_index();
         let mut output = String::new();
+        let mut bundled_names: Vec<String> = Vec::new();
 
         for (i, query) in req.symbols.iter().enumerate() {
             if i > 0 {
                 output.push_str("\n===\n");
             }
 
-            let gql_query = format!(
-                r#"{{ symbol(name: "{}") {{ name kind file line code(full: {}) callers {{ name }} callees {{ name }} }} }}"#,
-                escape_graphql(query),
-                full,
-            );
+            let candidates = store
+                .search_symbols_hybrid(query, limit)
+                .map_err(|e| Self::err(e.to_string()))?;
 
-            let result = execute(&schema, &gql_query).await;
-            let json: serde_json::Value = serde_json::from_str(&result)
-                .map_err(|e| Self::err(format!("JSON parse error: {}", e)))?;
+            if candidates.is_empty() {
+                output.push_str(&format!("No results for '{}'\n", query));
+                continue;
+            }
 
-            let symbols = json
-                .get("data")
-                .and_then(|d| d.get("symbol"))
-                .and_then(|s| s.as_array());
+            for sym in &candidates {
+                let dedup_key = (sym.name.clone(), sym.slice_hash.clone());
+                {
+                    let mut seen = self.session_seen.lock().unwrap();
+                    if seen.contains(&dedup_key) {
+                        // cache hint — agent knows it already has this, unchanged
+                        output.push_str(&format!(
+                            "CACHED {} {} {}:{}\n",
+                            sym.name, sym.kind, sym.path, sym.line_start
+                        ));
+                        continue;
+                    }
+                    seen.insert(dedup_key);
+                }
 
-            match symbols {
-                Some(syms) if !syms.is_empty() => {
-                    for sym in syms.iter().take(limit) {
-                        format_symbol(&mut output, sym);
+                let proj = match store.create_projection(sym) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let sliced = slice_code(&proj.text, &[], sym.line_start);
+                let callers = call_index.callers_of(&sym.name);
+                let callees = call_index.callees_of(&sym.name);
+
+                output.push_str(&format!(
+                    "{} {} {}:{}\n",
+                    sym.name, sym.kind, sym.path, sym.line_start
+                ));
+                if !callers.is_empty() {
+                    output.push_str(&format!(
+                        "  CALLED_BY: {}\n",
+                        callers.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                if !callees.is_empty() {
+                    output.push_str(&format!(
+                        "  CALLS: {}\n",
+                        callees.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                if sliced.was_sliced {
+                    output.push_str(&format!(
+                        "  [{}/{} lines]\n",
+                        sliced.shown_lines, sliced.total_lines
+                    ));
+                }
+                for (j, line) in sliced.code.lines().enumerate() {
+                    output.push_str(&format!(" {:>4}: {}\n", sym.line_start + j, line));
+                }
+                output.push('\n');
+
+                // collect callees for bundling
+                if bundle {
+                    for callee in callees.iter().take(8) {
+                        bundled_names.push(callee.to_string());
                     }
                 }
-                _ => {
-                    output.push_str(&format!("No results for '{}'\n", query));
+            }
+        }
+
+        // bundle: fetch unseen callee symbols and append
+        if bundle && !bundled_names.is_empty() {
+            let mut bundle_output = String::new();
+            let mut already_bundled: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+            for callee in &bundled_names {
+                if !already_bundled.insert(callee.clone()) {
+                    continue;
                 }
+                let neighbors = match store.search_symbols_hybrid(callee, 2) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                for sym in &neighbors {
+                    if sym.name != *callee {
+                        continue; // exact match only for bundle
+                    }
+                    let dedup_key = (sym.name.clone(), sym.slice_hash.clone());
+                    {
+                        let mut seen = self.session_seen.lock().unwrap();
+                        if seen.contains(&dedup_key) {
+                            continue; // already returned this session
+                        }
+                        seen.insert(dedup_key);
+                    }
+                    let proj = match store.create_projection(sym) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    let sliced = slice_code(&proj.text, &[], sym.line_start);
+                    bundle_output.push_str(&format!(
+                        "{} {} {}:{}\n",
+                        sym.name, sym.kind, sym.path, sym.line_start
+                    ));
+                    for (j, line) in sliced.code.lines().enumerate() {
+                        bundle_output.push_str(&format!(" {:>4}: {}\n", sym.line_start + j, line));
+                    }
+                    bundle_output.push('\n');
+                }
+            }
+
+            if !bundle_output.is_empty() {
+                output.push_str("--- BUNDLED ---\n");
+                output.push_str(&bundle_output);
             }
         }
 
@@ -114,57 +178,31 @@ impl AnchorMcp {
     }
 
     #[tool(
-        description = "Search for symbols by name or regex pattern. Returns lightweight results: NAME KIND FILE:LINE. Use for finding symbols before calling context."
+        description = "Search for symbols by name or concept. Returns NAME KIND FILE:LINE. Use before calling context."
     )]
     async fn search(
         &self,
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let graph = self.load_graph()?;
-        let schema = build_schema(graph);
+        let store = &self.store;
         let limit = req.limit.unwrap_or(20);
-
-        let gql_query = if let Some(pat) = &req.pattern {
-            format!(
-                r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line }} }}"#,
-                escape_graphql(pat),
-                limit
-            )
-        } else {
-            let escaped = escape_regex_literal(&req.query.to_lowercase());
-            let regex_pat = format!(".*{}.*", escaped);
-            format!(
-                r#"{{ search(pattern: "{}", limit: {}) {{ name kind file line }} }}"#,
-                escape_graphql(&regex_pat),
-                limit
-            )
-        };
-
-        let result = execute(&schema, &gql_query).await;
-        let json: serde_json::Value = serde_json::from_str(&result)
-            .map_err(|e| Self::err(format!("JSON parse error: {}", e)))?;
+        let results = store
+            .search_symbols_hybrid(&req.query, limit)
+            .map_err(|e| Self::err(e.to_string()))?;
 
         let mut output = String::new();
-
-        if let Some(symbols) = json
-            .get("data")
-            .and_then(|d| d.get("search"))
-            .and_then(|s| s.as_array())
-        {
-            if symbols.is_empty() {
-                output.push_str(&format!("No symbols match '{}'\n", req.query));
-            } else {
-                for sym in symbols.iter().take(limit) {
-                    let name = sym.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    let kind = sym.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-                    let file = sym.get("file").and_then(|v| v.as_str()).unwrap_or("");
-                    let line = sym.get("line").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let file_name = Path::new(file)
-                        .file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_else(|| file.to_string());
-                    output.push_str(&format!("{} {} {}:{}\n", name, kind, file_name, line));
-                }
+        if results.is_empty() {
+            output.push_str(&format!("No symbols match '{}'\n", req.query));
+        } else {
+            for sym in &results {
+                let fname = std::path::Path::new(&sym.path)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| sym.path.clone());
+                output.push_str(&format!(
+                    "{} {} {}:{}\n",
+                    sym.name, sym.kind, fname, sym.line_start
+                ));
             }
         }
 
@@ -178,52 +216,45 @@ impl AnchorMcp {
         &self,
         Parameters(req): Parameters<MapRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let graph = self.load_graph()?;
+        let store = &self.store;
+        let index = store.load_symbol_index().map_err(|e| Self::err(e.to_string()))?;
+        let call_index = store.load_call_index();
 
-        use std::collections::{BTreeMap, HashSet};
+        use std::collections::{BTreeMap, HashMap, HashSet};
+
+        // Precompute caller counts for all symbols
+        let mut caller_count: HashMap<String, usize> = HashMap::new();
+        for callees in call_index.calls.values() {
+            for callee in callees {
+                *caller_count.entry(callee.clone()).or_insert(0) += 1;
+            }
+        }
 
         let mut modules: BTreeMap<String, Vec<(String, String, usize, usize)>> = BTreeMap::new();
         let mut all_symbols: Vec<(String, String, usize, usize, String)> = Vec::new();
 
-        for file_path in graph.all_files() {
-            let dir = file_path
+        for sym in &index.symbols {
+            let dir = std::path::Path::new(&sym.path)
                 .parent()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| ".".to_string());
 
             if let Some(ref s) = req.scope {
-                if !dir.contains(s) && !file_path.to_string_lossy().contains(s) {
+                if !dir.contains(s) && !sym.path.contains(s) {
                     continue;
                 }
             }
 
-            for symbol in graph.symbols_in_file(&file_path) {
-                if matches!(
-                    symbol.kind,
-                    crate::graph::types::NodeKind::Import | crate::graph::types::NodeKind::File
-                ) {
-                    continue;
-                }
+            let callers = *caller_count.get(&sym.name).unwrap_or(&0);
+            let callees = call_index.calls.get(&sym.name).map(|v| v.len()).unwrap_or(0);
+            let short_module = dir.split('/').next_back().unwrap_or(&dir).to_string();
 
-                let callers = graph.dependents(&symbol.name).len();
-                let callees = graph.dependencies(&symbol.name).len();
-                let short_module = dir.split('/').next_back().unwrap_or(&dir).to_string();
-
-                modules.entry(dir.clone()).or_default().push((
-                    symbol.name.clone(),
-                    symbol.kind.to_string(),
-                    callers,
-                    callees,
-                ));
-
-                all_symbols.push((
-                    symbol.name.clone(),
-                    symbol.kind.to_string(),
-                    callers,
-                    callees,
-                    short_module,
-                ));
-            }
+            modules.entry(dir.clone()).or_default().push((
+                sym.name.clone(), sym.kind.clone(), callers, callees,
+            ));
+            all_symbols.push((
+                sym.name.clone(), sym.kind.clone(), callers, callees, short_module,
+            ));
         }
 
         let mut output = String::new();
@@ -233,32 +264,30 @@ impl AnchorMcp {
             return Ok(CallToolResult::success(vec![Content::text(output)]));
         }
 
-        // Scoped view
+        // Scoped view: show each symbol with its callers/callees
         if req.scope.is_some() {
             for (dir, symbols) in &modules {
                 output.push_str(&format!("@{}\n", dir));
                 for (name, kind, callers, callees) in symbols {
                     let mut parts = Vec::new();
                     if *callees > 0 {
-                        let deps: Vec<String> = graph
-                            .dependencies(name)
-                            .iter()
+                        let deps: Vec<&str> = call_index
+                            .callees_of(name)
+                            .into_iter()
                             .take(5)
-                            .map(|d| d.symbol.clone())
                             .collect();
                         if !deps.is_empty() {
                             parts.push(format!(">{}", deps.join(",")));
                         }
                     }
                     if *callers > 0 {
-                        let callers_list: Vec<String> = graph
-                            .dependents(name)
-                            .iter()
+                        let crs: Vec<&str> = call_index
+                            .callers_of(name)
+                            .into_iter()
                             .take(5)
-                            .map(|d| d.symbol.clone())
                             .collect();
-                        if !callers_list.is_empty() {
-                            parts.push(format!("<{}", callers_list.join(",")));
+                        if !crs.is_empty() {
+                            parts.push(format!("<{}", crs.join(",")));
                         }
                     }
                     let short = short_kind(kind);
@@ -283,13 +312,13 @@ impl AnchorMcp {
         output.push_str(&module_line.join(" "));
         output.push('\n');
 
-        // Entry points
+        // Entry points: called by nobody, calls something, not a test
         let entries: Vec<String> = all_symbols
             .iter()
             .filter(|(name, kind, callers, callees, _)| {
                 *callers == 0
                     && *callees > 0
-                    && (kind == "function" || kind == "method")
+                    && (kind == "Function" || kind == "Method")
                     && !name.starts_with("test_")
                     && name != "new"
             })
@@ -301,7 +330,7 @@ impl AnchorMcp {
             output.push_str(&format!("ENTRY: {}\n", entries.join(" ")));
         }
 
-        // Top connected
+        // Top connected symbols
         let mut by_connections = all_symbols.clone();
         by_connections.sort_by(|a, b| (b.2 + b.3).cmp(&(a.2 + a.3)));
 
@@ -309,7 +338,7 @@ impl AnchorMcp {
         let mut top: Vec<String> = Vec::new();
 
         for (name, kind, callers, callees, module) in by_connections.iter() {
-            if kind == "import" || name == "new" {
+            if kind == "Import" || name == "new" {
                 continue;
             }
             if seen.insert(name.clone()) {
@@ -328,86 +357,69 @@ impl AnchorMcp {
     }
 
     #[tool(
-        description = "Analyze impact of changing a symbol: what breaks, suggested fixes, affected tests. Use before modifying any function/method to understand blast radius."
+        description = "Analyze impact of changing a symbol: callers that break, call chain depth. Use before modifying any function/method to understand blast radius."
     )]
     async fn impact(
         &self,
         Parameters(req): Parameters<ImpactRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let graph = self.load_graph()?;
-        let response = crate::query::get_context_for_change(
-            &graph,
-            &req.symbol,
-            "change",
-            req.new_signature.as_deref(),
-        );
+        let store = &self.store;
+        let candidates = store
+            .search_symbols_hybrid(&req.symbol, 1)
+            .map_err(|e| Self::err(e.to_string()))?;
 
         let mut output = String::new();
 
-        if !response.found {
+        if candidates.is_empty() {
             output.push_str(&format!("Symbol '{}' not found\n", req.symbol));
             return Ok(CallToolResult::success(vec![Content::text(output)]));
         }
 
-        if let Some(sym) = response.symbols.first() {
-            output.push_str(&format!(
-                "{} {} {}:{}\n",
-                sym.name, sym.kind, sym.file, sym.line
-            ));
-        }
+        let sym = &candidates[0];
+        output.push_str(&format!(
+            "{} {} {}:{}\n",
+            sym.name, sym.kind, sym.path, sym.line_start
+        ));
 
-        if !response.used_by.is_empty() {
-            output.push_str(&format!("\nBREAKS ({} callers):\n", response.used_by.len()));
-            for r in response.used_by.iter().take(5) {
-                output.push_str(&format!("  {} in {}:{}\n", r.name, r.file, r.line));
-            }
-            if response.used_by.len() > 5 {
-                output.push_str(&format!("  ... and {} more\n", response.used_by.len() - 5));
-            }
-        } else {
+        let call_index = store.load_call_index();
+        let callers = call_index.callers_of(&sym.name);
+
+        if callers.is_empty() {
             output.push_str("\nBREAKS: nothing (no callers)\n");
-        }
-        if !response.edits.is_empty() {
-            output.push_str(&format!(
-                "\nEDITS ({} changes needed):\n",
-                response.edits.len()
-            ));
-            for edit in &response.edits {
-                output.push_str(&format!(
-                    "  {}:{} in {}\n",
-                    edit.file, edit.line, edit.in_symbol
-                ));
-                output.push_str(&format!("    now: {}\n", edit.usage));
-                if let Some(ref suggested) = edit.suggested {
-                    output.push_str(&format!("    fix: {}\n", suggested));
+        } else {
+            let index = store.load_symbol_index().map_err(|e| Self::err(e.to_string()))?;
+            output.push_str(&format!("\nBREAKS ({} direct callers):\n", callers.len()));
+            for caller_name in callers.iter().take(10) {
+                if let Some(s) = index.symbols.iter().find(|s| &s.name == caller_name) {
+                    output.push_str(&format!("  {} {}:{}\n", s.name, s.path, s.line_start));
+                } else {
+                    output.push_str(&format!("  {}\n", caller_name));
                 }
-                if !edit.new_args.is_empty() {
-                    output.push_str(&format!("    +args: {}\n", edit.new_args.join(", ")));
-                }
-                if !edit.removed_args.is_empty() {
-                    output.push_str(&format!("    -args: {}\n", edit.removed_args.join(", ")));
-                }
+            }
+            if callers.len() > 10 {
+                output.push_str(&format!("  ... and {} more\n", callers.len() - 10));
             }
         }
 
-        if !response.tests.is_empty() {
-            output.push_str(&format!("\nTESTS ({} to update):\n", response.tests.len()));
-            for test in &response.tests {
-                output.push_str(&format!("  {} {}:{}\n", test.name, test.file, test.line));
-            }
+        let callees = call_index.callees_of(&sym.name);
+        if !callees.is_empty() {
+            output.push_str(&format!(
+                "\nCALLS: {}\n",
+                callees.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
+            ));
         }
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     #[tool(
-        description = "Unified write tool. mode='range' replaces a line range with impact analysis. mode='ordered' writes multiple files in graph dependency order."
+        description = "Unified write tool. mode='range' replaces a line range with symbol-lock safety. mode='ordered' writes multiple files."
     )]
     async fn write(
         &self,
         Parameters(req): Parameters<WriteRequest>,
     ) -> Result<CallToolResult, ErrorData> {
-        let graph = self.load_graph()?;
+        let store = &self.store;
         let mode_lower = req.mode.trim().to_ascii_lowercase();
         let mode = match mode_lower.as_str() {
             "range" => "range",
@@ -426,58 +438,37 @@ impl AnchorMcp {
                 .as_ref()
                 .ok_or_else(|| Self::err("write mode 'ordered' requires 'operations'"))?;
             if operations.is_empty() {
-                return Err(Self::err(
-                    "write mode 'ordered' requires at least one operation",
-                ));
-            }
-
-            let ops: Vec<crate::write::WriteOp> = operations
-                .iter()
-                .map(|op| crate::write::WriteOp {
-                    path: self.root.join(&op.path),
-                    content: op.content.clone(),
-                    symbol: op.symbol.clone(),
-                })
-                .collect();
-
-            let result =
-                crate::write::write_ordered(&graph, &ops).map_err(|e| Self::err(e.to_string()))?;
-
-            // Re-index each written file so the graph stays in sync
-            if let Ok(mut graph_mut) = self.graph.write() {
-                for op in &ops {
-                    let _ = rebuild_file(&mut graph_mut, &op.path);
-                }
+                return Err(Self::err("write mode 'ordered' requires at least one operation"));
             }
 
             let mut output = String::new();
             output.push_str("<ordered_write>\n");
-            output.push_str(&format!(
-                "<total_operations>{}</total_operations>\n",
-                result.total_operations
-            ));
-            output.push_str("<write_order>\n");
-            for (i, path) in result.write_order.iter().enumerate() {
-                output.push_str(&format!("  {}. {}\n", i + 1, path));
-            }
-            output.push_str("</write_order>\n");
-            output.push_str(&format!(
-                "<total_time_ms>{}</total_time_ms>\n",
-                result.total_time_ms
-            ));
-            output.push_str("<results>\n");
-            for r in &result.results {
+            let start = std::time::Instant::now();
+
+            for (i, op) in operations.iter().enumerate() {
+                let full_path = self.root.join(&op.path);
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let result = crate::write::create_file(&full_path, &op.content)
+                    .map_err(|e| Self::err(e.to_string()))?;
+                // Re-index after write
+                let _ = store.upsert_symbols_for_path(&full_path);
                 output.push_str(&format!(
-                    "  <file path=\"{}\" lines=\"{}\" bytes=\"{}\"/>\n",
-                    r.path, r.lines_written, r.bytes_written
+                    "  {}. {} ({} lines)\n",
+                    i + 1, op.path, result.lines_written
                 ));
             }
-            output.push_str("</results>\n");
-            output.push_str("</ordered_write>\n");
 
+            output.push_str(&format!(
+                "<total_time_ms>{}</total_time_ms>\n",
+                start.elapsed().as_millis()
+            ));
+            output.push_str("</ordered_write>\n");
             return Ok(CallToolResult::success(vec![Content::text(output)]));
         }
 
+        // mode == "range"
         let path = req
             .path
             .as_deref()
@@ -498,87 +489,65 @@ impl AnchorMcp {
             return Err(Self::err(format!("File not found: {}", path)));
         }
 
-        let mut output = String::new();
-        let affected = graph.symbols_in_range(&full_path, start_line, end_line);
+        // Find which symbols overlap the edit range using the index
+        let index = store.load_symbol_index().map_err(|e| Self::err(e.to_string()))?;
+        let repo_rel = full_path
+            .strip_prefix(&self.root)
+            .map(|p| p.to_string_lossy().replace('\\', "/"))
+            .unwrap_or_else(|_| path.to_string());
+        let affected = store.symbols_in_range(&index, &repo_rel, start_line, end_line);
         let affected_names: Vec<String> = affected.iter().map(|s| s.name.clone()).collect();
 
-        // Lock affected symbols before writing
+        // Acquire symbol-level locks before writing
         let mut locked_symbols = Vec::new();
-        {
-            let graph_ref = self
-                .graph
-                .read()
-                .map_err(|e| Self::err(format!("Graph lock poisoned: {}", e)))?;
-            for name in &affected_names {
-                let key = SymbolKey::new(&full_path, name.as_str());
-                match self.lock_manager.try_acquire_symbol(&key, &graph_ref) {
-                    LockResult::Acquired { symbol, .. }
-                    | LockResult::AcquiredAfterWait { symbol, .. } => locked_symbols.push(symbol),
-                    LockResult::Blocked { reason, .. } => {
-                        for s in &locked_symbols {
-                            self.lock_manager.release_symbol(s);
-                        }
-                        return Err(Self::err(format!("BLOCKED: {}", reason)));
+        for name in &affected_names {
+            let key = SymbolKey::new(&full_path, name.as_str());
+            match self.lock_manager.try_acquire_symbol_simple(&key) {
+                LockResult::Acquired { symbol, .. }
+                | LockResult::AcquiredAfterWait { symbol, .. } => locked_symbols.push(symbol),
+                LockResult::Blocked { reason, .. } => {
+                    for s in &locked_symbols {
+                        self.lock_manager.release_symbol(s);
                     }
+                    return Err(Self::err(format!("BLOCKED: {}", reason)));
                 }
             }
         }
 
+        let mut output = String::new();
+
+        // Show caller impact before writing
         if !affected.is_empty() {
+            let call_index = store.load_call_index();
             output.push_str(&format!("IMPACT: {}:{}-{}\n", path, start_line, end_line));
-
             for sym in &affected {
-                let response =
-                    crate::query::get_context_for_change(&graph, &sym.name, "change", None);
-
-                if !response.used_by.is_empty() {
+                let callers = call_index.callers_of(&sym.name);
+                if !callers.is_empty() {
                     output.push_str(&format!(
                         "  {} — {} callers affected\n",
                         sym.name,
-                        response.used_by.len()
+                        callers.len()
                     ));
-                    for r in response.used_by.iter().take(5) {
-                        output.push_str(&format!("    > {} in {}:{}\n", r.name, r.file, r.line));
+                    for c in callers.iter().take(5) {
+                        output.push_str(&format!("    > {}\n", c));
                     }
-                    if response.used_by.len() > 5 {
-                        output.push_str(&format!(
-                            "    ... and {} more\n",
-                            response.used_by.len() - 5
-                        ));
-                    }
-                }
-
-                if !response.tests.is_empty() {
-                    output.push_str(&format!(
-                        "  tests: {}\n",
-                        response
-                            .tests
-                            .iter()
-                            .map(|t| t.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
                 }
             }
-
             output.push('\n');
         }
 
         let result = crate::write::replace_range(&full_path, start_line, end_line, new_content)
             .map_err(|e| {
-                // Release locks on write failure
                 for s in &locked_symbols {
                     self.lock_manager.release_symbol(s);
                 }
                 Self::err(e.to_string())
             })?;
 
-        // Re-index the changed file so the graph stays in sync
-        if let Ok(mut graph_mut) = self.graph.write() {
-            let _ = rebuild_file(&mut graph_mut, &full_path);
-        }
+        // Re-index the changed file
+        let _ = store.upsert_symbols_for_path(&full_path);
 
-        // Release all locks after write + rebuild
+        // Release all locks
         for s in &locked_symbols {
             self.lock_manager.release_symbol(s);
         }
