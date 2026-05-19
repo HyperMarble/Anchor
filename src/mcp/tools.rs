@@ -414,7 +414,7 @@ impl AnchorMcp {
 
         // Top connected symbols
         let mut by_connections = all_symbols.clone();
-        by_connections.sort_by(|a, b| (b.2 + b.3).cmp(&(a.2 + a.3)));
+        by_connections.sort_by_key(|b| std::cmp::Reverse(b.2 + b.3));
 
         let mut seen: HashSet<String> = HashSet::new();
         let mut top: Vec<String> = Vec::new();
