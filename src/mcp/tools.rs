@@ -127,13 +127,23 @@ impl AnchorMcp {
                 if show_callers && !callers.is_empty() {
                     output.push_str(&format!(
                         "  CALLED_BY: {}\n",
-                        callers.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
+                        callers
+                            .iter()
+                            .take(8)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
                 if show_callees && !callees.is_empty() {
                     output.push_str(&format!(
                         "  CALLS: {}\n",
-                        callees.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
+                        callees
+                            .iter()
+                            .take(8)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
 
@@ -161,7 +171,8 @@ impl AnchorMcp {
         // bundle: fetch unseen callee symbols and append
         if bundle && !bundled_names.is_empty() {
             let mut bundle_output = String::new();
-            let mut already_bundled: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut already_bundled: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
 
             for callee in &bundled_names {
                 if !already_bundled.insert(callee.clone()) {
@@ -173,9 +184,23 @@ impl AnchorMcp {
                     continue;
                 }
                 // skip universal names that match unrelated code across the whole repo
-                const SKIP: &[&str] = &["new", "from", "into", "clone", "default",
-                    "collect", "iter", "map", "filter", "unwrap", "expect",
-                    "to_string", "as_str", "as_ref", "drop"];
+                const SKIP: &[&str] = &[
+                    "new",
+                    "from",
+                    "into",
+                    "clone",
+                    "default",
+                    "collect",
+                    "iter",
+                    "map",
+                    "filter",
+                    "unwrap",
+                    "expect",
+                    "to_string",
+                    "as_str",
+                    "as_ref",
+                    "drop",
+                ];
                 if SKIP.contains(&callee.as_str()) {
                     continue;
                 }
@@ -267,7 +292,9 @@ impl AnchorMcp {
         Parameters(req): Parameters<MapRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let store = &self.store;
-        let index = store.load_symbol_index().map_err(|e| Self::err(e.to_string()))?;
+        let index = store
+            .load_symbol_index()
+            .map_err(|e| Self::err(e.to_string()))?;
         let call_index = store.load_call_index();
 
         use std::collections::{BTreeMap, HashMap, HashSet};
@@ -296,14 +323,25 @@ impl AnchorMcp {
             }
 
             let callers = *caller_count.get(&sym.name).unwrap_or(&0);
-            let callees = call_index.calls.get(&sym.name).map(|v| v.len()).unwrap_or(0);
+            let callees = call_index
+                .calls
+                .get(&sym.name)
+                .map(|v| v.len())
+                .unwrap_or(0);
             let short_module = dir.split('/').next_back().unwrap_or(&dir).to_string();
 
             modules.entry(dir.clone()).or_default().push((
-                sym.name.clone(), sym.kind.clone(), callers, callees,
+                sym.name.clone(),
+                sym.kind.clone(),
+                callers,
+                callees,
             ));
             all_symbols.push((
-                sym.name.clone(), sym.kind.clone(), callers, callees, short_module,
+                sym.name.clone(),
+                sym.kind.clone(),
+                callers,
+                callees,
+                short_module,
             ));
         }
 
@@ -321,21 +359,15 @@ impl AnchorMcp {
                 for (name, kind, callers, callees) in symbols {
                     let mut parts = Vec::new();
                     if *callees > 0 {
-                        let deps: Vec<&str> = call_index
-                            .callees_of(name)
-                            .into_iter()
-                            .take(5)
-                            .collect();
+                        let deps: Vec<&str> =
+                            call_index.callees_of(name).into_iter().take(5).collect();
                         if !deps.is_empty() {
                             parts.push(format!(">{}", deps.join(",")));
                         }
                     }
                     if *callers > 0 {
-                        let crs: Vec<&str> = call_index
-                            .callers_of(name)
-                            .into_iter()
-                            .take(5)
-                            .collect();
+                        let crs: Vec<&str> =
+                            call_index.callers_of(name).into_iter().take(5).collect();
                         if !crs.is_empty() {
                             parts.push(format!("<{}", crs.join(",")));
                         }
@@ -437,7 +469,9 @@ impl AnchorMcp {
         if callers.is_empty() {
             output.push_str("\nBREAKS: nothing (no callers)\n");
         } else {
-            let index = store.load_symbol_index().map_err(|e| Self::err(e.to_string()))?;
+            let index = store
+                .load_symbol_index()
+                .map_err(|e| Self::err(e.to_string()))?;
             output.push_str(&format!("\nBREAKS ({} direct callers):\n", callers.len()));
             for caller_name in callers.iter().take(10) {
                 if let Some(s) = index.symbols.iter().find(|s| &s.name == caller_name) {
@@ -455,7 +489,12 @@ impl AnchorMcp {
         if !callees.is_empty() {
             output.push_str(&format!(
                 "\nCALLS: {}\n",
-                callees.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
+                callees
+                    .iter()
+                    .take(8)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
 
@@ -488,7 +527,9 @@ impl AnchorMcp {
                 .as_ref()
                 .ok_or_else(|| Self::err("write mode 'ordered' requires 'operations'"))?;
             if operations.is_empty() {
-                return Err(Self::err("write mode 'ordered' requires at least one operation"));
+                return Err(Self::err(
+                    "write mode 'ordered' requires at least one operation",
+                ));
             }
 
             let mut output = String::new();
@@ -506,7 +547,9 @@ impl AnchorMcp {
                 let _ = store.upsert_symbols_for_path(&full_path);
                 output.push_str(&format!(
                     "  {}. {} ({} lines)\n",
-                    i + 1, op.path, result.lines_written
+                    i + 1,
+                    op.path,
+                    result.lines_written
                 ));
             }
 
@@ -540,7 +583,9 @@ impl AnchorMcp {
         }
 
         // Find which symbols overlap the edit range using the index
-        let index = store.load_symbol_index().map_err(|e| Self::err(e.to_string()))?;
+        let index = store
+            .load_symbol_index()
+            .map_err(|e| Self::err(e.to_string()))?;
         let repo_rel = full_path
             .strip_prefix(&self.root)
             .map(|p| p.to_string_lossy().replace('\\', "/"))

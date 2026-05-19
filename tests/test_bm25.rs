@@ -1,5 +1,5 @@
-use std::fs;
 use anchor::storage::AnchorStore;
+use std::fs;
 use tempfile::tempdir;
 
 fn make_store_with_symbols() -> (tempfile::TempDir, AnchorStore) {
@@ -7,7 +7,9 @@ fn make_store_with_symbols() -> (tempfile::TempDir, AnchorStore) {
     let src = dir.path().join("src");
     fs::create_dir_all(&src).unwrap();
 
-    fs::write(src.join("lock.rs"), r#"
+    fs::write(
+        src.join("lock.rs"),
+        r#"
 pub struct LockManager {
     locks: std::collections::HashMap<String, String>,
 }
@@ -18,7 +20,9 @@ impl LockManager {
 
 pub fn get_user_by_id(id: u64) -> Option<String> { None }
 pub fn fetch_account(id: u64) -> Option<String> { None }
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let store = AnchorStore::init(dir.path()).unwrap();
     store.upsert_symbols_for_path(&src.join("lock.rs")).unwrap();
@@ -49,7 +53,10 @@ fn definition_ranks_above_context_match() {
     let acq_pos = results.iter().position(|s| s.name == "acquire");
 
     if let (Some(lp), Some(ap)) = (lock_pos, acq_pos) {
-        assert!(lp < ap, "LockManager must rank above acquire for 'lock manager'");
+        assert!(
+            lp < ap,
+            "LockManager must rank above acquire for 'lock manager'"
+        );
     }
 }
 
@@ -59,7 +66,9 @@ fn short_query_falls_back_to_substring() {
     // "id" is 2 chars — tokenizes to nothing, falls back to substring
     let results = store.search_symbols_hybrid("id", 10).unwrap();
     // should still find get_user_by_id and fetch_account via substring
-    assert!(results.iter().any(|s| s.name.contains("id") || s.name.to_lowercase().contains("id")));
+    assert!(results
+        .iter()
+        .any(|s| s.name.contains("id") || s.name.to_lowercase().contains("id")));
 }
 
 #[test]

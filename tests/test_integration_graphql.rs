@@ -39,7 +39,10 @@ async fn test_stats_query_with_symbols() {
 
 #[tokio::test]
 async fn test_search_query_finds_symbol() {
-    let schema = make_schema("src/auth.rs", "pub fn authenticate(user: &str) -> bool { true }");
+    let schema = make_schema(
+        "src/auth.rs",
+        "pub fn authenticate(user: &str) -> bool { true }",
+    );
     // search takes `pattern` (regex), not `query`
     let result = execute(
         &schema,

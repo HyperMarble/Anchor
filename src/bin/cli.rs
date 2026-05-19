@@ -48,21 +48,33 @@ fn run(cli: Cli) -> Result<()> {
     match command {
         Commands::Build => cmd_build(&root),
 
-        Commands::Context { queries, limit, full, bundle } => {
-            cmd_context(&root, &queries, limit, full, bundle)
-        }
+        Commands::Context {
+            queries,
+            limit,
+            full,
+            bundle,
+        } => cmd_context(&root, &queries, limit, full, bundle),
 
-        Commands::Search { queries, pattern, limit } => {
-            cmd_search(&root, &queries, pattern.as_deref(), limit)
-        }
+        Commands::Search {
+            queries,
+            pattern,
+            limit,
+        } => cmd_search(&root, &queries, pattern.as_deref(), limit),
 
         Commands::Map { scope } => cmd_map(&root, scope.as_deref()),
 
         Commands::Write { path, content } => cli_write::create(&path, &content),
 
-        Commands::Edit { path, action, pattern, content } => match action.as_str() {
+        Commands::Edit {
+            path,
+            action,
+            pattern,
+            content,
+        } => match action.as_str() {
             "insert" => cli_write::insert(&path, &pattern, content.as_deref().unwrap_or("")),
-            "replace" => cli_write::replace(&root, &path, &pattern, content.as_deref().unwrap_or("")),
+            "replace" => {
+                cli_write::replace(&root, &path, &pattern, content.as_deref().unwrap_or(""))
+            }
             "delete" => cli_write::replace(&root, &path, &pattern, ""),
             other => bail!("unknown edit action: {}", other),
         },
@@ -76,8 +88,8 @@ fn run(cli: Cli) -> Result<()> {
 // ── AnchorStore commands ─────────────────────────────────────────────────────
 
 fn cmd_build(root: &Path) -> Result<()> {
-    use anchor::storage::{CallIndex, PathEntry, PathIndex, SymbolEntry, SymbolIndex};
     use anchor::storage::content_hash;
+    use anchor::storage::{CallIndex, PathEntry, PathIndex, SymbolEntry, SymbolIndex};
     use std::collections::HashMap;
     use std::fs;
 
@@ -94,15 +106,27 @@ fn cmd_build(root: &Path) -> Result<()> {
         .filter_map(|path| {
             let source = match fs::read_to_string(path) {
                 Ok(s) => s,
-                Err(e) => { eprintln!("read fail: {}: {e}", path.display()); return None; }
+                Err(e) => {
+                    eprintln!("read fail: {}: {e}", path.display());
+                    return None;
+                }
             };
             let hash = content_hash(source.as_bytes());
-            let relative = path.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
+            let relative = path
+                .strip_prefix(root)
+                .ok()?
+                .to_string_lossy()
+                .replace('\\', "/");
 
             // Try extracting symbols; skip unsupported files silently
             let extraction = match anchor::parser::extract_file(path, &source) {
                 Ok(e) => e,
-                Err(e) => { if path.extension().map(|x| x == "rs").unwrap_or(false) { eprintln!("extract fail: {}: {e}", path.display()); } return None; }
+                Err(e) => {
+                    if path.extension().map(|x| x == "rs").unwrap_or(false) {
+                        eprintln!("extract fail: {}: {e}", path.display());
+                    }
+                    return None;
+                }
             };
             if extraction.symbols.is_empty() {
                 return None;
@@ -139,9 +163,9 @@ fn cmd_build(root: &Path) -> Result<()> {
                 .iter()
                 .filter(|s| name_count[&s.name] == 1)
                 .filter_map(|s| {
-                    s.parent.as_ref().map(|p| {
-                        (s.name.clone(), format!("{}::{}", p, s.name))
-                    })
+                    s.parent
+                        .as_ref()
+                        .map(|p| (s.name.clone(), format!("{}::{}", p, s.name)))
                 })
                 .collect();
 
@@ -150,7 +174,10 @@ fn cmd_build(root: &Path) -> Result<()> {
                 .calls
                 .iter()
                 .map(|c| {
-                    let caller = qualified.get(&c.caller).cloned().unwrap_or_else(|| c.caller.clone());
+                    let caller = qualified
+                        .get(&c.caller)
+                        .cloned()
+                        .unwrap_or_else(|| c.caller.clone());
                     (caller, c.callee.clone())
                 })
                 .collect();
@@ -168,18 +195,25 @@ fn cmd_build(root: &Path) -> Result<()> {
         path_index.files.push(path_entry.clone());
         symbol_index.symbols.extend_from_slice(syms);
         for (caller, callee) in calls {
-            call_map.entry(caller.clone()).or_default().insert(callee.clone());
+            call_map
+                .entry(caller.clone())
+                .or_default()
+                .insert(callee.clone());
         }
     }
 
     path_index.files.sort_by(|a, b| a.path.cmp(&b.path));
     symbol_index.symbols.sort_by(|a, b| {
-        a.path.cmp(&b.path)
+        a.path
+            .cmp(&b.path)
             .then_with(|| a.line_start.cmp(&b.line_start))
     });
 
     let call_index = CallIndex {
-        calls: call_map.into_iter().map(|(k, v)| (k, v.into_iter().collect())).collect(),
+        calls: call_map
+            .into_iter()
+            .map(|(k, v)| (k, v.into_iter().collect()))
+            .collect(),
     };
 
     store.save_path_index(&path_index)?;
@@ -219,7 +253,13 @@ fn cmd_search(root: &Path, queries: &[String], _pattern: Option<&str>, limit: us
     Ok(())
 }
 
-fn cmd_context(root: &Path, queries: &[String], limit: usize, _full: bool, bundle: bool) -> Result<()> {
+fn cmd_context(
+    root: &Path,
+    queries: &[String],
+    limit: usize,
+    _full: bool,
+    bundle: bool,
+) -> Result<()> {
     use std::collections::HashSet;
 
     let store = open_store(root)?;
@@ -234,7 +274,11 @@ fn cmd_context(root: &Path, queries: &[String], limit: usize, _full: bool, bundl
             println!("===");
         }
         let candidates = store.search_symbols_hybrid(query, limit)?;
-        println!("<results query=\"{}\" count=\"{}\">", query, candidates.len());
+        println!(
+            "<results query=\"{}\" count=\"{}\">",
+            query,
+            candidates.len()
+        );
 
         for sym in &candidates {
             shown.insert(sym.name.clone());
@@ -253,14 +297,33 @@ fn cmd_context(root: &Path, queries: &[String], limit: usize, _full: bool, bundl
             println!("<file>{}</file>", sym.path);
             println!("<line>{}</line>", sym.line_start);
             if !callers.is_empty() {
-                println!("<called_by>{}</called_by>", callers.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+                println!(
+                    "<called_by>{}</called_by>",
+                    callers
+                        .iter()
+                        .take(8)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
             if !callees.is_empty() {
-                println!("<calls>{}</calls>", callees.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+                println!(
+                    "<calls>{}</calls>",
+                    callees
+                        .iter()
+                        .take(8)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
             println!("<code>");
             if sliced.was_sliced {
-                println!("[{}/{} lines, {} calls]", sliced.shown_lines, sliced.total_lines, sliced.call_count);
+                println!(
+                    "[{}/{} lines, {} calls]",
+                    sliced.shown_lines, sliced.total_lines, sliced.call_count
+                );
             }
             print_code_with_lines(&sliced.code, sym.line_start);
             println!("</code>");
@@ -288,9 +351,23 @@ fn cmd_context(root: &Path, queries: &[String], limit: usize, _full: bool, bundl
             if call_index.callees_of(callee).is_empty() {
                 continue;
             }
-            const SKIP: &[&str] = &["new", "from", "into", "clone", "default",
-                "collect", "iter", "map", "filter", "unwrap", "expect",
-                "to_string", "as_str", "as_ref", "drop"];
+            const SKIP: &[&str] = &[
+                "new",
+                "from",
+                "into",
+                "clone",
+                "default",
+                "collect",
+                "iter",
+                "map",
+                "filter",
+                "unwrap",
+                "expect",
+                "to_string",
+                "as_str",
+                "as_ref",
+                "drop",
+            ];
             if SKIP.contains(&callee.as_str()) {
                 continue;
             }
@@ -332,12 +409,7 @@ fn cmd_map(root: &Path, scope: Option<&str>) -> Result<()> {
     let mut modules: BTreeMap<String, Vec<&anchor::storage::SymbolEntry>> = BTreeMap::new();
 
     for sym in &index.symbols {
-        let module = sym
-            .path
-            .split('/')
-            .next()
-            .unwrap_or("root")
-            .to_string();
+        let module = sym.path.split('/').next().unwrap_or("root").to_string();
         let entry = modules.entry(module).or_default();
         if scope.map(|s| sym.path.contains(s)).unwrap_or(true) {
             entry.push(sym);
@@ -349,13 +421,23 @@ fn cmd_map(root: &Path, scope: Option<&str>) -> Result<()> {
         if syms.is_empty() {
             continue;
         }
-        let file_count = syms.iter().map(|s| &s.path).collect::<std::collections::HashSet<_>>().len();
-        println!("  <module name=\"{module}\" files=\"{file_count}\" symbols=\"{}\">", syms.len());
+        let file_count = syms
+            .iter()
+            .map(|s| &s.path)
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        println!(
+            "  <module name=\"{module}\" files=\"{file_count}\" symbols=\"{}\">",
+            syms.len()
+        );
         // Top 5 symbols by name length (proxy for importance/complexity)
         let mut top: Vec<_> = syms.iter().take(5).collect();
         top.sort_by_key(|s| s.name.len());
         for sym in top.iter().rev() {
-            println!("    <symbol name=\"{}\" kind=\"{}\" file=\"{}\"/>", sym.name, sym.kind, sym.path);
+            println!(
+                "    <symbol name=\"{}\" kind=\"{}\" file=\"{}\"/>",
+                sym.name, sym.kind, sym.path
+            );
         }
         println!("  </module>");
     }
@@ -368,4 +450,3 @@ fn print_code_with_lines(code: &str, start_line: usize) {
         println!(" {:>3}: {}", start_line + i, line);
     }
 }
-

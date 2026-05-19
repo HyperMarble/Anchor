@@ -112,16 +112,8 @@ fn test_get_context_response_has_query_field() {
 
 #[test]
 fn test_get_context_multi_file_graph() {
-    let e1 = extract_file(
-        &PathBuf::from("src/a.rs"),
-        "pub fn helper() {}",
-    )
-    .unwrap();
-    let e2 = extract_file(
-        &PathBuf::from("src/b.rs"),
-        "fn user() { helper(); }",
-    )
-    .unwrap();
+    let e1 = extract_file(&PathBuf::from("src/a.rs"), "pub fn helper() {}").unwrap();
+    let e2 = extract_file(&PathBuf::from("src/b.rs"), "fn user() { helper(); }").unwrap();
     let mut g = CodeGraph::new();
     g.build_from_extractions(vec![e1, e2]);
     let resp = get_context(&g, "helper", "explore");

@@ -1,8 +1,8 @@
 use anchor::graph::{build_graph, rebuild_file, CodeGraph};
 use anchor::parser::extract_file;
+use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
-use std::fs;
 
 #[test]
 fn test_rebuild_file_updates_graph() {

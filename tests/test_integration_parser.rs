@@ -1,5 +1,5 @@
-use anchor::graph::CodeGraph;
 use anchor::graph::types::NodeKind;
+use anchor::graph::CodeGraph;
 use anchor::parser::extract_file;
 use anchor::AnchorError;
 use std::path::PathBuf;

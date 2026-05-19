@@ -10,7 +10,10 @@ fn blob_indexes_markdown_headings() {
     let store = AnchorStore::init(dir.path()).unwrap();
     store.upsert_symbols_for_path(&path).unwrap();
     let results = store.search_symbols_hybrid("Introduction", 5).unwrap();
-    assert!(results.iter().any(|s| s.name == "Introduction"), "markdown heading must be indexed");
+    assert!(
+        results.iter().any(|s| s.name == "Introduction"),
+        "markdown heading must be indexed"
+    );
 }
 
 #[test]
@@ -21,7 +24,10 @@ fn blob_indexes_csv_rows() {
     let store = AnchorStore::init(dir.path()).unwrap();
     store.upsert_symbols_for_path(&path).unwrap();
     let results = store.search_symbols_hybrid("alice", 5).unwrap();
-    assert!(results.iter().any(|s| s.name == "alice"), "csv row must be indexed");
+    assert!(
+        results.iter().any(|s| s.name == "alice"),
+        "csv row must be indexed"
+    );
 }
 
 #[test]

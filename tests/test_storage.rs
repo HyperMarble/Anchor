@@ -24,7 +24,9 @@ fn collect_python_files(root: &Path, out: &mut Vec<PathBuf>, max_files: usize) {
     if out.len() >= max_files {
         return;
     }
-    let Ok(entries) = fs::read_dir(root) else { return };
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
     for entry in entries.flatten() {
         if out.len() >= max_files {
             return;
@@ -91,7 +93,11 @@ fn object_path_uses_hash_prefix_directory() {
     let path = store.object_path(ObjectKind::Parse, &hash).unwrap();
     assert_eq!(
         path,
-        store.anchor_root().join("objects/parses").join(&hash[..2]).join(format!("{hash}.json"))
+        store
+            .anchor_root()
+            .join("objects/parses")
+            .join(&hash[..2])
+            .join(format!("{hash}.json"))
     );
 }
 
@@ -172,7 +178,10 @@ fn path_index_rejects_files_outside_repo_root() {
     let store = AnchorStore::init(dir.path()).unwrap();
     let outside = other.path().join("lib.rs");
     fs::write(&outside, "pub fn outside() {}\n").unwrap();
-    assert!(matches!(store.upsert_path(&outside), Err(AnchorError::InvalidStructure(_))));
+    assert!(matches!(
+        store.upsert_path(&outside),
+        Err(AnchorError::InvalidStructure(_))
+    ));
 }
 
 #[test]
@@ -188,7 +197,11 @@ fn upsert_symbols_for_path_indexes_parser_symbols() {
     let store = AnchorStore::init(dir.path()).unwrap();
     let source = dir.path().join("src/lib.rs");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, "pub struct Service;\n\npub fn run() {\n    helper();\n}\n\nfn helper() {}\n").unwrap();
+    fs::write(
+        &source,
+        "pub struct Service;\n\npub fn run() {\n    helper();\n}\n\nfn helper() {}\n",
+    )
+    .unwrap();
 
     let (path_entry, symbols, changed) = store.upsert_symbols_for_path(&source).unwrap();
 
@@ -198,7 +211,9 @@ fn upsert_symbols_for_path_indexes_parser_symbols() {
     assert!(symbols.iter().any(|s| s.name == "Service"));
     assert!(symbols.iter().any(|s| s.name == "run"));
     assert!(symbols.iter().any(|s| s.name == "helper"));
-    assert!(symbols.iter().all(|s| s.source_hash == path_entry.source_hash));
+    assert!(symbols
+        .iter()
+        .all(|s| s.source_hash == path_entry.source_hash));
     assert_eq!(store.load_symbol_index().unwrap().symbols, symbols);
 }
 
@@ -248,7 +263,11 @@ fn search_symbols_returns_compact_index_hits() {
     let store = AnchorStore::init(dir.path()).unwrap();
     let source = dir.path().join("src/lib.rs");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, "pub fn authenticate() {}\npub fn authenticate_user() {}\npub fn logout() {}\n").unwrap();
+    fs::write(
+        &source,
+        "pub fn authenticate() {}\npub fn authenticate_user() {}\npub fn logout() {}\n",
+    )
+    .unwrap();
     store.upsert_symbols_for_path(&source).unwrap();
 
     let hits = store.search_symbols("authenticate", 10).unwrap();
@@ -265,7 +284,11 @@ fn search_symbols_honors_limit() {
     let store = AnchorStore::init(dir.path()).unwrap();
     let source = dir.path().join("src/lib.rs");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, "pub fn handle_one() {}\npub fn handle_two() {}\npub fn handle_three() {}\n").unwrap();
+    fs::write(
+        &source,
+        "pub fn handle_one() {}\npub fn handle_two() {}\npub fn handle_three() {}\n",
+    )
+    .unwrap();
     store.upsert_symbols_for_path(&source).unwrap();
 
     assert_eq!(store.search_symbols("handle", 2).unwrap().len(), 2);
@@ -293,7 +316,11 @@ fn create_projection_returns_only_indexed_symbol_slice() {
     let store = AnchorStore::init(dir.path()).unwrap();
     let source = dir.path().join("src/lib.rs");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, "pub fn before() {}\n\npub fn target() {\n    before();\n}\n\npub fn after() {}\n").unwrap();
+    fs::write(
+        &source,
+        "pub fn before() {}\n\npub fn target() {\n    before();\n}\n\npub fn after() {}\n",
+    )
+    .unwrap();
     store.upsert_symbols_for_path(&source).unwrap();
     let target = store.search_symbols("target", 1).unwrap().remove(0);
 
@@ -305,7 +332,10 @@ fn create_projection_returns_only_indexed_symbol_slice() {
     assert!(projection.text.contains("before();"));
     assert!(!projection.text.contains("pub fn before()"));
     assert!(!projection.text.contains("pub fn after()"));
-    assert_eq!(projection.slice_hash, content_hash(projection.text.as_bytes()));
+    assert_eq!(
+        projection.slice_hash,
+        content_hash(projection.text.as_bytes())
+    );
 }
 
 #[test]
@@ -320,7 +350,10 @@ fn create_projection_rejects_stale_symbol_hash() {
 
     fs::write(&source, "pub fn target() {\n    changed();\n}\n").unwrap();
 
-    assert!(matches!(store.create_projection(&target), Err(AnchorError::InvalidStructure(_))));
+    assert!(matches!(
+        store.create_projection(&target),
+        Err(AnchorError::InvalidStructure(_))
+    ));
 }
 
 #[test]
@@ -329,14 +362,24 @@ fn create_projection_hashes_prefix_and_suffix_boundaries() {
     let store = AnchorStore::init(dir.path()).unwrap();
     let source = dir.path().join("src/lib.rs");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
-    fs::write(&source, "pub fn before() {}\n\npub fn target() {}\n\npub fn after() {}\n").unwrap();
+    fs::write(
+        &source,
+        "pub fn before() {}\n\npub fn target() {}\n\npub fn after() {}\n",
+    )
+    .unwrap();
     store.upsert_symbols_for_path(&source).unwrap();
     let target = store.search_symbols("target", 1).unwrap().remove(0);
 
     let projection = store.create_projection(&target).unwrap();
 
-    assert_eq!(projection.prefix_hash, content_hash("pub fn before() {}\n".as_bytes()));
-    assert_eq!(projection.suffix_hash, content_hash("\npub fn after() {}".as_bytes()));
+    assert_eq!(
+        projection.prefix_hash,
+        content_hash("pub fn before() {}\n".as_bytes())
+    );
+    assert_eq!(
+        projection.suffix_hash,
+        content_hash("\npub fn after() {}".as_bytes())
+    );
 }
 
 #[test]
@@ -346,7 +389,11 @@ fn real_mlflow_anchor_store_projection_benchmark() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/Volumes/Hak_SSD/mlflow"));
     let root = mlflow_repo.join("mlflow");
-    assert!(root.exists(), "missing MLflow checkout at {}", root.display());
+    assert!(
+        root.exists(),
+        "missing MLflow checkout at {}",
+        root.display()
+    );
 
     let dir = tempdir().unwrap();
     let store = AnchorStore::init(dir.path()).unwrap();
@@ -361,8 +408,14 @@ fn real_mlflow_anchor_store_projection_benchmark() {
     let target_symbols = 50usize;
 
     'files: for real_file in &real_files {
-        let source = match fs::read_to_string(real_file) { Ok(s) => s, Err(_) => continue };
-        let extraction = match anchor::parser::extract_file(real_file, &source) { Ok(e) => e, Err(_) => continue };
+        let source = match fs::read_to_string(real_file) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let extraction = match anchor::parser::extract_file(real_file, &source) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
         let relative = real_file.strip_prefix(&root).unwrap();
         let temp_file = dir.path().join(relative);
         fs::create_dir_all(temp_file.parent().unwrap()).unwrap();
@@ -370,23 +423,44 @@ fn real_mlflow_anchor_store_projection_benchmark() {
         store.upsert_symbols_for_path(&temp_file).unwrap();
 
         for symbol in extraction.symbols {
-            if reductions.len() >= target_symbols { break 'files; }
-            if symbol.line_end <= symbol.line_start || symbol.code_snippet.len() < 40 { continue; }
+            if reductions.len() >= target_symbols {
+                break 'files;
+            }
+            if symbol.line_end <= symbol.line_start || symbol.code_snippet.len() < 40 {
+                continue;
+            }
 
             let relative_text = relative.to_string_lossy().to_string();
             let hits = store.search_symbols(&symbol.name, 100).unwrap();
-            let Some(hit) = hits.iter().find(|h| h.path.ends_with(&relative_text) && h.line_start == symbol.line_start && h.line_end == symbol.line_end) else {
+            let Some(hit) = hits.iter().find(|h| {
+                h.path.ends_with(&relative_text)
+                    && h.line_start == symbol.line_start
+                    && h.line_end == symbol.line_end
+            }) else {
                 failures += 1;
                 continue;
             };
 
-            let projection = match store.create_projection(hit) { Ok(p) => p, Err(_) => { failures += 1; continue; } };
-            reductions.push(context_reduction_percent(source.len(), projection.text.len()));
+            let projection = match store.create_projection(hit) {
+                Ok(p) => p,
+                Err(_) => {
+                    failures += 1;
+                    continue;
+                }
+            };
+            reductions.push(context_reduction_percent(
+                source.len(),
+                projection.text.len(),
+            ));
             full_bytes_total += source.len();
             projection_bytes_total += projection.text.len();
 
             fs::write(&temp_file, format!("{source}\n# anchor stale probe\n")).unwrap();
-            if store.create_projection(hit).is_err() { stale_rejections += 1; } else { failures += 1; }
+            if store.create_projection(hit).is_err() {
+                stale_rejections += 1;
+            } else {
+                failures += 1;
+            }
             fs::write(&temp_file, &source).unwrap();
         }
     }

@@ -441,7 +441,11 @@ impl AnchorStore {
             .into_iter()
             .filter_map(|sym| {
                 let score = bm25.score(&sym, &query_tokens);
-                if score > 0.0 { Some((sym, score)) } else { None }
+                if score > 0.0 {
+                    Some((sym, score))
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -477,7 +481,6 @@ fn score_symbol_match(symbol: &SymbolEntry, query_lower: &str) -> usize {
     3
 }
 
-
 pub fn content_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -493,4 +496,3 @@ fn validate_hash(hash: &str) -> Result<()> {
         "invalid object hash: {hash}"
     )))
 }
-

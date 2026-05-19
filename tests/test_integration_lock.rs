@@ -32,7 +32,10 @@ fn test_try_acquire_same_symbol_twice_is_blocked() {
     let key = SymbolKey::new("src/auth.rs", "login");
     let _first = lm.try_acquire_symbol(&key, &graph);
     let second = lm.try_acquire_symbol(&key, &graph);
-    assert!(matches!(second, LockResult::Acquired { .. } | LockResult::Blocked { .. }));
+    assert!(matches!(
+        second,
+        LockResult::Acquired { .. } | LockResult::Blocked { .. }
+    ));
 }
 
 #[test]

@@ -12,6 +12,9 @@ use std::path::PathBuf;
 use super::types::*;
 
 /// The main code graph — holds all nodes, edges, and indexes for fast lookup.
+///
+/// **Legacy.** New code should use `AnchorStore` + `search_symbols_hybrid` instead.
+/// `CodeGraph` remains for in-process graph queries and the MCP `get_context` tool.
 #[derive(Clone)]
 pub struct CodeGraph {
     /// The directed graph storing code relationships.

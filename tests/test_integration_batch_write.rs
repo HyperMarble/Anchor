@@ -14,10 +14,7 @@ fn test_batch_create_files_creates_all() {
     assert!(results.iter().all(|r| r.is_ok()));
     for path in &paths {
         assert!(path.exists());
-        assert_eq!(
-            fs::read_to_string(path).unwrap(),
-            "fn placeholder() {}"
-        );
+        assert_eq!(fs::read_to_string(path).unwrap(), "fn placeholder() {}");
     }
 }
 
@@ -79,10 +76,7 @@ fn test_batch_create_overwrites_existing_files() {
         .collect();
     let results = batch_create_files(&paths, "new content");
     assert!(results[0].is_ok());
-    assert_eq!(
-        fs::read_to_string(&paths[0]).unwrap(),
-        "new content"
-    );
+    assert_eq!(fs::read_to_string(&paths[0]).unwrap(), "new content");
 }
 
 #[test]

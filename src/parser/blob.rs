@@ -6,8 +6,8 @@
 //  Handles markdown, CSV, config files, and any unknown text file.
 //
 
-use std::path::Path;
 use crate::graph::types::*;
+use std::path::Path;
 
 /// Extract symbols from any file tree-sitter can't parse.
 /// Returns None only if the file is binary (non-UTF-8).
@@ -19,9 +19,9 @@ pub fn extract_blob(path: &Path, source: &str) -> Option<FileExtractions> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let symbols = match ext {
-        "md" | "mdx"                        => extract_md(source),
-        "csv"                               => extract_csv(source),
-        "toml" | "yaml" | "yml" | "json"   => extract_config(source, path),
+        "md" | "mdx" => extract_md(source),
+        "csv" => extract_csv(source),
+        "toml" | "yaml" | "yml" | "json" => extract_config(source, path),
         // Unknown text file — try brace-based, fall back to whole-file chunk
         _ => {
             let chunks = extract_brace(source);
@@ -56,7 +56,10 @@ fn extract_md(source: &str) -> Vec<ExtractedSymbol> {
     while i < lines.len() {
         if lines[i].starts_with('#') {
             let name = lines[i].trim_start_matches('#').trim().to_string();
-            if name.is_empty() { i += 1; continue; }
+            if name.is_empty() {
+                i += 1;
+                continue;
+            }
 
             let start = i;
             let end = lines[i + 1..]
@@ -85,29 +88,37 @@ fn extract_md(source: &str) -> Vec<ExtractedSymbol> {
 // ── CSV ───────────────────────────────────────────────────────────────────────
 
 fn extract_csv(source: &str) -> Vec<ExtractedSymbol> {
-    source.lines().enumerate().skip(1).filter_map(|(i, line)| {
-        let name = if line.starts_with('"') {
-            line.trim_start_matches('"').split('"').next()?.to_string()
-        } else {
-            line.split(',').next()?.trim().to_string()
-        };
-        if name.is_empty() { return None; }
-        Some(ExtractedSymbol {
-            name,
-            kind: NodeKind::Variable,
-            line_start: i + 1,
-            line_end: i + 1,
-            code_snippet: line.to_string(),
-            parent: None,
-            features: vec!["data".into(), "csv".into()],
+    source
+        .lines()
+        .enumerate()
+        .skip(1)
+        .filter_map(|(i, line)| {
+            let name = if line.starts_with('"') {
+                line.trim_start_matches('"').split('"').next()?.to_string()
+            } else {
+                line.split(',').next()?.trim().to_string()
+            };
+            if name.is_empty() {
+                return None;
+            }
+            Some(ExtractedSymbol {
+                name,
+                kind: NodeKind::Variable,
+                line_start: i + 1,
+                line_end: i + 1,
+                code_snippet: line.to_string(),
+                parent: None,
+                features: vec!["data".into(), "csv".into()],
+            })
         })
-    }).collect()
+        .collect()
 }
 
 // ── Config files ──────────────────────────────────────────────────────────────
 
 fn extract_config(source: &str, path: &Path) -> Vec<ExtractedSymbol> {
-    let name = path.file_name()
+    let name = path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("config")
         .to_string();
@@ -126,10 +137,21 @@ fn extract_config(source: &str, path: &Path) -> Vec<ExtractedSymbol> {
 // ── Brace-based (unknown code-like files) ────────────────────────────────────
 
 const DECL_KEYWORDS: &[&str] = &[
-    "pub async fn ", "pub fn ", "async fn ", "fn ",
-    "pub struct ", "struct ", "pub enum ", "enum ",
-    "pub impl ", "impl ", "pub trait ", "trait ",
-    "def ", "async def ", "class ",
+    "pub async fn ",
+    "pub fn ",
+    "async fn ",
+    "fn ",
+    "pub struct ",
+    "struct ",
+    "pub enum ",
+    "enum ",
+    "pub impl ",
+    "impl ",
+    "pub trait ",
+    "trait ",
+    "def ",
+    "async def ",
+    "class ",
     "function ",
 ];
 
@@ -140,11 +162,19 @@ fn sanitize(line: &str) -> String {
     let mut chars = line.chars().peekable();
     while let Some(ch) = chars.next() {
         if in_str {
-            if ch == '\\' { chars.next(); continue; }
-            if ch == str_ch { in_str = false; }
+            if ch == '\\' {
+                chars.next();
+                continue;
+            }
+            if ch == str_ch {
+                in_str = false;
+            }
         } else {
             match ch {
-                '"' => { in_str = true; str_ch = '"'; }
+                '"' => {
+                    in_str = true;
+                    str_ch = '"';
+                }
                 '/' if chars.peek() == Some(&'/') => break,
                 '#' => break,
                 _ => out.push(ch),
@@ -170,7 +200,10 @@ fn extract_brace(source: &str) -> Vec<ExtractedSymbol> {
                 .unwrap_or("")
                 .to_string();
 
-            if name.is_empty() { i += 1; continue; }
+            if name.is_empty() {
+                i += 1;
+                continue;
+            }
 
             let start = i;
             let mut depth = 0i32;
@@ -180,11 +213,18 @@ fn extract_brace(source: &str) -> Vec<ExtractedSymbol> {
             for (j, line) in lines[i..].iter().enumerate() {
                 let clean = sanitize(line);
                 for ch in clean.chars() {
-                    if ch == '{' { depth += 1; found_open = true; }
-                    if ch == '}' { depth -= 1; }
+                    if ch == '{' {
+                        depth += 1;
+                        found_open = true;
+                    }
+                    if ch == '}' {
+                        depth -= 1;
+                    }
                 }
                 end = i + j;
-                if found_open && depth <= 0 { break; }
+                if found_open && depth <= 0 {
+                    break;
+                }
             }
 
             let snippet = lines[start..=end].join("\n");
@@ -206,7 +246,8 @@ fn extract_brace(source: &str) -> Vec<ExtractedSymbol> {
 }
 
 fn whole_file_chunk(source: &str, path: &Path) -> Vec<ExtractedSymbol> {
-    let name = path.file_name()
+    let name = path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("__file__")
         .to_string();

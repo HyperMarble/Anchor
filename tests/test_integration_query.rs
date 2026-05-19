@@ -74,7 +74,10 @@ fn test_anchor_search_structured_with_file_filter() {
     assert!(resp.found);
     // Only results from a.rs should be returned
     for r in &resp.results {
-        assert!(r.file.to_string_lossy().contains("a.rs"), "Expected only a.rs results");
+        assert!(
+            r.file.to_string_lossy().contains("a.rs"),
+            "Expected only a.rs results"
+        );
     }
 }
 
@@ -158,7 +161,11 @@ fn process_data() {}
     let graph = make_graph("src/server.rs", src);
     let result = graph_search(&graph, "handle_request", 1);
     // match_type should be non-empty when something is found
-    assert!(!result.symbols.is_empty() || !result.matched_files.is_empty() || result.match_type == "none");
+    assert!(
+        !result.symbols.is_empty()
+            || !result.matched_files.is_empty()
+            || result.match_type == "none"
+    );
 }
 
 #[test]

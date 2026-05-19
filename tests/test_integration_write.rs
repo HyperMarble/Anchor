@@ -1,4 +1,6 @@
-use anchor::write::{create_file, insert_after, insert_before, replace_all, replace_first, replace_range};
+use anchor::write::{
+    create_file, insert_after, insert_before, replace_all, replace_first, replace_range,
+};
 use std::fs;
 use tempfile::tempdir;
 

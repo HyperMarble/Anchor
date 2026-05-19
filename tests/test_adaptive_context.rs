@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::fs;
 use anchor::parser::extract_file;
 use anchor::storage::{AnchorStore, CallIndex};
+use std::collections::HashMap;
+use std::fs;
 use tempfile::tempdir;
 
 const AUTH_SRC: &str = r#"
@@ -33,7 +33,10 @@ fn make_store() -> (tempfile::TempDir, AnchorStore) {
     let extraction = extract_file(&path, AUTH_SRC).unwrap();
     let mut call_map: HashMap<String, Vec<String>> = HashMap::new();
     for call in &extraction.calls {
-        call_map.entry(call.caller.clone()).or_default().push(call.callee.clone());
+        call_map
+            .entry(call.caller.clone())
+            .or_default()
+            .push(call.callee.clone());
     }
     let call_index = CallIndex { calls: call_map };
     store.save_call_index(&call_index).unwrap();
@@ -50,7 +53,10 @@ fn signature_mode_symbol_found() {
     // signature = first line of the projection
     let proj = store.create_projection(sym).unwrap();
     let sig = proj.text.lines().next().unwrap().trim_end();
-    assert!(sig.contains("fn login"), "signature line must contain fn login");
+    assert!(
+        sig.contains("fn login"),
+        "signature line must contain fn login"
+    );
     assert!(!sig.contains("validate"), "signature must not contain body");
 }
 
@@ -61,15 +67,24 @@ fn full_body_contains_all_lines() {
     let sym = results.iter().find(|s| s.name == "login").unwrap();
     let proj = store.create_projection(sym).unwrap();
 
-    assert!(proj.text.contains("validate"), "full body must contain inner calls");
-    assert!(proj.text.contains("check_password"), "full body must contain all calls");
+    assert!(
+        proj.text.contains("validate"),
+        "full body must contain inner calls"
+    );
+    assert!(
+        proj.text.contains("check_password"),
+        "full body must contain all calls"
+    );
 }
 
 #[test]
 fn search_returns_all_symbols() {
     let (_dir, store) = make_store();
     let results = store.search_symbols_hybrid("validate", 5).unwrap();
-    assert!(results.iter().any(|s| s.name == "validate"), "validate must be findable");
+    assert!(
+        results.iter().any(|s| s.name == "validate"),
+        "validate must be findable"
+    );
 }
 
 #[test]
@@ -79,8 +94,10 @@ fn callers_callees_in_call_index() {
 
     // login calls validate and check_password
     let callees = call_index.callees_of("login");
-    assert!(callees.contains(&"validate") || callees.contains(&"check_password"),
-        "login must have callees in call index");
+    assert!(
+        callees.contains(&"validate") || callees.contains(&"check_password"),
+        "login must have callees in call index"
+    );
 }
 
 #[test]

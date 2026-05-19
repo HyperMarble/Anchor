@@ -60,7 +60,11 @@ impl Bm25Index {
             1.0
         };
 
-        Self { df, doc_count, avg_doc_len }
+        Self {
+            df,
+            doc_count,
+            avg_doc_len,
+        }
     }
 
     /// BM25 score for one symbol against a pre-tokenized query.
@@ -154,7 +158,10 @@ mod tests {
         let score_ref = idx.score(&reference, &query);
 
         // LockManager has both "lock" and "manager" in its own name → 3x boost per token
-        assert!(score_defn > score_ref, "definition should outscore reference");
+        assert!(
+            score_defn > score_ref,
+            "definition should outscore reference"
+        );
     }
 
     #[test]

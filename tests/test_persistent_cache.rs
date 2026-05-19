@@ -1,5 +1,5 @@
-use std::fs;
 use anchor::cache::PersistentCache;
+use std::fs;
 use tempfile::tempdir;
 
 #[test]
