@@ -235,10 +235,3 @@ Dockerfile
 .dockerignore
 2602.02084v2.pdf
 CLAUDE.md
-anchor-explained.md
-DEVELOPMENT.md
-product-idea.md
-benchmark.md
-MEMORY.md
-success_metrics.md
-AGENTS.md
