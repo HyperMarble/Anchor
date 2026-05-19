@@ -18,6 +18,10 @@ path = "src/lib.rs"
 name = "anchor"
 path = "src/bin/cli.rs"
 
+[[example]]
+name = "cross_lang_pseudo"
+path = "examples/cross_lang_pseudo.rs"
+
 [dependencies]
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
