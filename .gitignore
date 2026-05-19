@@ -231,3 +231,13 @@ jobs/
 # Compiled hypothesis binaries
 hypothesis/token_count
 hypothesis/zero_to_python
+Dockerfile
+.dockerignore
+2602.02084v2.pdf
+CLAUDE.md
+anchor-explained.md
+DEVELOPMENT.md
+product-idea.md
+benchmark.md
+MEMORY.md
+success_metrics.md
