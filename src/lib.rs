@@ -5,6 +5,7 @@
 //  Created by hak (tharun)
 //
 
+pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod daemon;

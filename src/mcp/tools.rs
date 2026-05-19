@@ -11,9 +11,10 @@ use std::sync::Arc;
 use super::format::short_kind;
 use super::types::*;
 use super::AnchorMcp;
+use crate::cache::PersistentCache;
 use crate::lock::{LockResult, SymbolKey};
 use crate::query::slice::slice_code;
-use crate::storage::AnchorStore;
+use crate::storage::{AnchorStore, ANCHOR_DIR};
 
 #[tool_router]
 impl AnchorMcp {
@@ -23,12 +24,16 @@ impl AnchorMcp {
             .or_else(|_| AnchorStore::init(&root))
             .expect("failed to open/init anchor store");
 
+        let anchor_root = root.join(ANCHOR_DIR);
+        let persistent_cache = PersistentCache::load(&anchor_root);
+
         Self {
             root,
             tool_router: Self::tool_router(),
             store: Arc::new(store),
             lock_manager: Arc::new(crate::lock::LockManager::new()),
             session_seen: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            persistent_cache: Arc::new(std::sync::Mutex::new(persistent_cache)),
         }
     }
 
@@ -69,11 +74,24 @@ impl AnchorMcp {
             }
 
             for sym in &candidates {
+                // Cross-session cache: symbol unchanged since last session
+                {
+                    let mut cache = self.persistent_cache.lock().unwrap();
+                    if cache.is_hit(&sym.name, &sym.path, &sym.slice_hash) {
+                        output.push_str(&format!(
+                            "CACHED {} {} {}:{}\n",
+                            sym.name, sym.kind, sym.path, sym.line_start
+                        ));
+                        continue;
+                    }
+                    cache.update(&sym.name, &sym.path, &sym.slice_hash);
+                }
+
+                // Within-session dedup: already sent this symbol this session
                 let dedup_key = (sym.name.clone(), sym.slice_hash.clone());
                 {
                     let mut seen = self.session_seen.lock().unwrap();
                     if seen.contains(&dedup_key) {
-                        // cache hint — agent knows it already has this, unchanged
                         output.push_str(&format!(
                             "CACHED {} {} {}:{}\n",
                             sym.name, sym.kind, sym.path, sym.line_start
@@ -184,6 +202,13 @@ impl AnchorMcp {
                 output.push_str("--- BUNDLED ---\n");
                 output.push_str(&bundle_output);
             }
+        }
+
+        // Persist cache to disk (no-op if nothing changed)
+        {
+            let anchor_root = self.root.join(ANCHOR_DIR);
+            let mut cache = self.persistent_cache.lock().unwrap();
+            cache.save(&anchor_root);
         }
 
         Ok(CallToolResult::success(vec![Content::text(output)]))

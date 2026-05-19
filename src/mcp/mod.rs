@@ -12,18 +12,22 @@ pub mod types;
 use rmcp::{
     handler::server::router::tool::ToolRouter, model::*, tool_handler, ServerHandler, ServiceExt,
 };
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
-use crate::graph::CodeGraph;
+use crate::cache::PersistentCache;
 use crate::lock::LockManager;
+use crate::storage::AnchorStore;
 
 #[derive(Clone)]
 pub struct AnchorMcp {
     pub(crate) root: PathBuf,
     pub(crate) tool_router: ToolRouter<AnchorMcp>,
-    pub(crate) graph: Arc<RwLock<CodeGraph>>,
+    pub(crate) store: Arc<AnchorStore>,
     pub(crate) lock_manager: Arc<LockManager>,
+    pub(crate) session_seen: Arc<Mutex<HashSet<(String, String)>>>,
+    pub(crate) persistent_cache: Arc<Mutex<PersistentCache>>,
 }
 
 impl std::fmt::Debug for AnchorMcp {
