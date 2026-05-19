@@ -9,7 +9,6 @@ pub mod guard;
 pub mod lockd;
 pub mod manager;
 pub mod types;
-pub mod write;
 
 pub use guard::LockGuard;
 pub use manager::LockManager;

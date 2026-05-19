@@ -1,14 +1,5 @@
-use anchor::graph::CodeGraph;
 use anchor::lock::{LockManager, LockResult, LockStatus, SymbolKey};
-use anchor::parser::extract_file;
-use std::path::{Path, PathBuf};
-
-fn make_graph(file: &str, src: &str) -> CodeGraph {
-    let extraction = extract_file(&PathBuf::from(file), src).unwrap();
-    let mut g = CodeGraph::new();
-    g.build_from_extractions(vec![extraction]);
-    g
-}
+use std::path::Path;
 
 #[test]
 fn test_lock_manager_new_has_no_active_locks() {
@@ -18,44 +9,36 @@ fn test_lock_manager_new_has_no_active_locks() {
 
 #[test]
 fn test_try_acquire_symbol_succeeds_when_free() {
-    let graph = CodeGraph::new();
     let lm = LockManager::new();
     let key = SymbolKey::new("src/auth.rs", "login");
-    let result = lm.try_acquire_symbol(&key, &graph);
+    let result = lm.try_acquire_symbol_simple(&key);
     assert!(matches!(result, LockResult::Acquired { .. }));
 }
 
 #[test]
 fn test_try_acquire_same_symbol_twice_is_blocked() {
-    let graph = CodeGraph::new();
     let lm = LockManager::new();
     let key = SymbolKey::new("src/auth.rs", "login");
-    let _first = lm.try_acquire_symbol(&key, &graph);
-    let second = lm.try_acquire_symbol(&key, &graph);
-    assert!(matches!(
-        second,
-        LockResult::Acquired { .. } | LockResult::Blocked { .. }
-    ));
+    let _first = lm.try_acquire_symbol_simple(&key);
+    let second = lm.try_acquire_symbol_simple(&key);
+    assert!(matches!(second, LockResult::Blocked { .. }));
 }
 
 #[test]
 fn test_release_symbol_frees_lock() {
-    let graph = CodeGraph::new();
     let lm = LockManager::new();
     let key = SymbolKey::new("src/auth.rs", "login");
-    lm.try_acquire_symbol(&key, &graph);
+    lm.try_acquire_symbol_simple(&key);
     lm.release_symbol(&key);
-    // After release, active_locks should not contain this symbol
     let active = lm.active_locks();
     assert!(!active.iter().any(|l| l.primary_symbol == key));
 }
 
 #[test]
 fn test_active_locks_shows_held_lock() {
-    let graph = CodeGraph::new();
     let lm = LockManager::new();
     let key = SymbolKey::new("src/db.rs", "query");
-    lm.try_acquire_symbol(&key, &graph);
+    lm.try_acquire_symbol_simple(&key);
     let active = lm.active_locks();
     assert!(!active.is_empty());
 }
@@ -83,12 +66,11 @@ fn test_symbol_key_display_short() {
 
 #[test]
 fn test_multiple_independent_locks() {
-    let graph = CodeGraph::new();
     let lm = LockManager::new();
     let key1 = SymbolKey::new("src/a.rs", "func_a");
     let key2 = SymbolKey::new("src/b.rs", "func_b");
-    let r1 = lm.try_acquire_symbol(&key1, &graph);
-    let r2 = lm.try_acquire_symbol(&key2, &graph);
+    let r1 = lm.try_acquire_symbol_simple(&key1);
+    let r2 = lm.try_acquire_symbol_simple(&key2);
     assert!(matches!(r1, LockResult::Acquired { .. }));
     assert!(matches!(r2, LockResult::Acquired { .. }));
     assert_eq!(lm.active_locks().len(), 2);
@@ -96,12 +78,11 @@ fn test_multiple_independent_locks() {
 
 #[test]
 fn test_release_all_clears_active_locks() {
-    let graph = CodeGraph::new();
     let lm = LockManager::new();
     let key1 = SymbolKey::new("src/a.rs", "fn_a");
     let key2 = SymbolKey::new("src/b.rs", "fn_b");
-    lm.try_acquire_symbol(&key1, &graph);
-    lm.try_acquire_symbol(&key2, &graph);
+    lm.try_acquire_symbol_simple(&key1);
+    lm.try_acquire_symbol_simple(&key2);
     lm.release_symbol(&key1);
     lm.release_symbol(&key2);
     assert!(lm.active_locks().is_empty());

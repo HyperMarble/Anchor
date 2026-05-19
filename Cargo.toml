@@ -41,9 +41,6 @@ clap = { version = "4.0", features = ["derive"] }
 # Config parsing
 toml = "0.5"
 
-# Graph engine
-petgraph = "0.6"
-bincode = "1.3"
 
 # AST parsing (tree-sitter + language grammars)
 tree-sitter = "0.25"

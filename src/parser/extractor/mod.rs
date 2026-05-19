@@ -15,7 +15,7 @@ use tree_sitter::Parser;
 
 use super::language::SupportedLanguage;
 use crate::error::AnchorError;
-use crate::graph::types::*;
+use crate::parser::types::*;
 
 /// Extract all symbols, imports, and calls from a source file.
 /// Falls back to blob extraction for files tree-sitter doesn't support.

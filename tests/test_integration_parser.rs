@@ -1,6 +1,4 @@
-use anchor::graph::types::NodeKind;
-use anchor::graph::CodeGraph;
-use anchor::parser::extract_file;
+use anchor::parser::{extract_file, NodeKind};
 use anchor::AnchorError;
 use std::path::PathBuf;
 
@@ -200,13 +198,8 @@ impl Engine {
 "#;
     let path = PathBuf::from("engine.rs");
     let extraction = extract_file(&path, src).unwrap();
-    let mut graph = CodeGraph::new();
-    graph.build_from_extractions(vec![extraction]);
-    let stats = graph.stats();
-    assert!(stats.symbol_count >= 3);
-    assert_eq!(stats.file_count, 1);
-    let results = graph.search("Engine", 5);
-    assert!(!results.is_empty());
+    assert!(extraction.symbols.len() >= 3);
+    assert!(extraction.symbols.iter().any(|s| s.name == "Engine"));
 }
 
 #[test]
@@ -220,12 +213,16 @@ pub fn standalone() {}
 "#;
     let path = PathBuf::from("kinds.rs");
     let extraction = extract_file(&path, src).unwrap();
-    let mut graph = CodeGraph::new();
-    graph.build_from_extractions(vec![extraction]);
-    let struct_result = graph.search("MyStruct", 1);
-    assert!(!struct_result.is_empty());
-    assert_eq!(struct_result[0].kind, NodeKind::Struct);
-    let fn_result = graph.search("standalone", 1);
-    assert!(!fn_result.is_empty());
-    assert_eq!(fn_result[0].kind, NodeKind::Function);
+    let my_struct = extraction
+        .symbols
+        .iter()
+        .find(|s| s.name == "MyStruct")
+        .unwrap();
+    assert_eq!(my_struct.kind, NodeKind::Struct);
+    let standalone = extraction
+        .symbols
+        .iter()
+        .find(|s| s.name == "standalone")
+        .unwrap();
+    assert_eq!(standalone.kind, NodeKind::Function);
 }

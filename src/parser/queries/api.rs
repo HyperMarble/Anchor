@@ -9,8 +9,8 @@
 use std::path::Path;
 use tree_sitter::Node;
 
-use crate::graph::types::{ApiEndpointKind, ExtractedApiEndpoint};
 use crate::parser::language::SupportedLanguage;
+use crate::parser::types::{ApiEndpointKind, ExtractedApiEndpoint};
 
 // ── Pattern Types ────────────────────────────────────────────────────────────
 

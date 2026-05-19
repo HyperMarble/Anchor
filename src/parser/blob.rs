@@ -6,7 +6,7 @@
 //  Handles markdown, CSV, config files, and any unknown text file.
 //
 
-use crate::graph::types::*;
+use crate::parser::types::*;
 use std::path::Path;
 
 /// Extract symbols from any file tree-sitter can't parse.

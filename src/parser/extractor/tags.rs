@@ -8,8 +8,8 @@
 use tree_sitter::Node;
 
 use super::helpers::node_text;
-use crate::graph::types::*;
 use crate::parser::language::SupportedLanguage;
+use crate::parser::types::*;
 
 /// Extract import statements by walking the AST.
 pub fn extract_imports(

@@ -5,9 +5,7 @@
 //  Created by hak (tharun)
 //
 
-pub mod daemon;
 pub mod init;
-pub mod read;
 pub mod write;
 
 use clap::{Parser, Subcommand};

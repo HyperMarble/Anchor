@@ -8,8 +8,8 @@
 use tree_sitter::Node;
 
 use super::helpers::{bounded_snippet, node_text};
-use crate::graph::types::*;
 use crate::parser::language::SupportedLanguage;
+use crate::parser::types::*;
 
 const IDENT_KINDS: &[&str] = &[
     "identifier",
