@@ -18,9 +18,15 @@ use crate::error::AnchorError;
 use crate::graph::types::*;
 
 /// Extract all symbols, imports, and calls from a source file.
+/// Falls back to blob extraction for files tree-sitter doesn't support.
 pub fn extract_file(path: &Path, source: &str) -> crate::error::Result<FileExtractions> {
-    let lang = SupportedLanguage::from_path(path)
-        .ok_or_else(|| AnchorError::UnsupportedLanguage(path.to_path_buf()))?;
+    let lang = match SupportedLanguage::from_path(path) {
+        Some(l) => l,
+        None => {
+            return crate::parser::blob::extract_blob(path, source)
+                .ok_or_else(|| AnchorError::UnsupportedLanguage(path.to_path_buf()));
+        }
+    };
 
     let mut parser = Parser::new();
     let ts_lang = lang.tree_sitter_language();

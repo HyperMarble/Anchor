@@ -5,6 +5,7 @@
 //  Created by hak (tharun)
 //
 
+pub mod blob;
 pub mod extractor;
 pub mod language;
 pub mod queries;
