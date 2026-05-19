@@ -217,3 +217,17 @@ success_metrics.md
 
 # Anchor cache
 .anchor/
+
+# Runtime artifacts
+jobs/
+*.zip
+
+# OS
+.DS_Store
+
+# Claude Code private settings
+.claude/
+
+# Compiled hypothesis binaries
+hypothesis/token_count
+hypothesis/zero_to_python

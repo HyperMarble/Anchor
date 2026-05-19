@@ -420,43 +420,28 @@ impl AnchorStore {
         })
     }
 
-    /// Search symbols by text match. Uses pre-computed features for identifier-aware matching.
+    /// Search symbols using BM25 ranking with camelCase/snake_case tokenization.
+    /// Name-token matches get a 3x boost over path/parent/kind context matches.
+    /// Falls back to substring search for queries that tokenize to nothing (e.g. "id").
     pub fn search_symbols_hybrid(&self, query: &str, limit: usize) -> Result<Vec<SymbolEntry>> {
         if limit == 0 {
             return Ok(Vec::new());
         }
 
+        let query_tokens = crate::storage::bm25::tokenize(query);
+        if query_tokens.is_empty() {
+            return self.search_symbols(query, limit);
+        }
+
         let index = self.load_symbol_index()?;
-        let query_lower = query.to_lowercase();
-        let query_tokens: Vec<&str> = query_lower.split_whitespace().collect();
+        let bm25 = crate::storage::bm25::Bm25Index::build(&index.symbols);
 
         let mut scored: Vec<(SymbolEntry, f32)> = index
             .symbols
             .into_iter()
             .filter_map(|sym| {
-                let name_lower = sym.name.to_lowercase();
-                let path_lower = sym.path.to_lowercase();
-
-                let hit = if query_tokens.len() > 1 {
-                    // Multi-word: check name, path, and pre-computed features
-                    let hits = query_tokens.iter().filter(|t| {
-                        name_lower.contains(*t)
-                            || path_lower.contains(*t)
-                            || sym.features.iter().any(|f| f == *t)
-                    }).count();
-                    hits * 2 >= query_tokens.len()
-                } else {
-                    name_lower.contains(&query_lower)
-                        || path_lower.contains(&query_lower)
-                        || sym.features.iter().any(|f| f == &query_lower)
-                };
-
-                if hit {
-                    let score = score_symbol_match_f32(&sym, &query_lower);
-                    Some((sym, score))
-                } else {
-                    None
-                }
+                let score = bm25.score(&sym, &query_tokens);
+                if score > 0.0 { Some((sym, score)) } else { None }
             })
             .collect();
 
@@ -492,34 +477,6 @@ fn score_symbol_match(symbol: &SymbolEntry, query_lower: &str) -> usize {
     3
 }
 
-fn score_symbol_match_f32(symbol: &SymbolEntry, query_lower: &str) -> f32 {
-    let name_lower = symbol.name.to_lowercase();
-    let path_lower = symbol.path.to_lowercase();
-    let tokens: Vec<&str> = query_lower.split_whitespace().collect();
-
-    if tokens.len() > 1 {
-        // Multi-word: count hits across name, features, and path
-        let hits = tokens.iter().filter(|t| {
-            name_lower.contains(*t)
-                || path_lower.contains(*t)
-                || symbol.features.iter().any(|f| f == *t)
-        }).count();
-        // Name-or-feature hits weighted higher than path hits
-        let name_hits = tokens.iter().filter(|t| {
-            name_lower.contains(*t) || symbol.features.iter().any(|f| f == *t)
-        }).count();
-        return (hits as f32 / tokens.len() as f32) * 0.7
-            + (name_hits as f32 / tokens.len() as f32) * 0.3;
-    }
-
-    if name_lower == query_lower { return 1.0; }
-    if name_lower.starts_with(query_lower) { return 0.9; }
-    // Feature exact match: "lock" hits LockManager's ["lock","manager"] — beats substring noise
-    if symbol.features.iter().any(|f| f == query_lower) { return 0.85; }
-    if name_lower.contains(query_lower) { return 0.7; }
-    if path_lower.contains(query_lower) { return 0.5; }
-    0.3
-}
 
 pub fn content_hash(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();

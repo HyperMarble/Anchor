@@ -69,6 +69,28 @@ impl LockManager {
         }
     }
 
+    /// Acquire a lock for a single symbol with no graph dependency traversal.
+    /// Used by the AnchorStore-based MCP path where CodeGraph is not available.
+    pub fn try_acquire_symbol_simple(&self, symbol: &SymbolKey) -> LockResult {
+        let mut locks = self.locks.lock().unwrap();
+        if let Some(entry) = locks.get(symbol) {
+            return LockResult::Blocked {
+                blocked_by: entry.primary_symbol.clone(),
+                reason: format!("{} is already locked", symbol.display_short()),
+            };
+        }
+        let entry = crate::lock::types::LockEntry {
+            primary_symbol: symbol.clone(),
+            acquired_at: std::time::Instant::now(),
+            _operation_id: None,
+        };
+        locks.insert(symbol.clone(), entry);
+        LockResult::Acquired {
+            symbol: symbol.clone(),
+            dependents: vec![],
+        }
+    }
+
     /// Acquire a symbol lock, waiting up to `timeout` if blocked.
     pub fn acquire_symbol_with_wait(
         &self,

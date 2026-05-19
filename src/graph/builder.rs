@@ -41,6 +41,10 @@ const BUILTIN_IGNORE: &[&str] = &[
     "bin",
 ];
 
+/// Skip huge source blobs that are usually generated fixtures, perf data, or vendored payloads.
+/// Anchor's graph is for agent working context, not byte-for-byte archival indexing.
+const MAX_INDEX_FILE_BYTES: u64 = 1_000_000;
+
 /// Check if a path contains any built-in ignored directory.
 fn is_builtin_ignored(path: &Path) -> bool {
     path.components().any(|c| {
@@ -71,6 +75,12 @@ pub fn build_graph(roots: &[&Path]) -> CodeGraph {
                 .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
                 .filter(|entry| !is_builtin_ignored(entry.path()))
                 .filter(|entry| SupportedLanguage::from_path(entry.path()).is_some())
+                .filter(|entry| {
+                    entry
+                        .metadata()
+                        .map(|meta| meta.len() <= MAX_INDEX_FILE_BYTES)
+                        .unwrap_or(false)
+                })
                 .map(|entry| entry.into_path())
         })
         .collect();

@@ -46,7 +46,7 @@ impl AnchorMcp {
     }
 
     #[tool(
-        description = "Get full context for symbols: sliced code + callers + callees. Returns exact line numbers you can pass directly to 'write'. Supports multiple symbols in one call. Set bundle:true to automatically include call-graph neighbors not yet seen this session."
+        description = "Get context for symbols. Adaptive: use signature:true for just the declaration line, full:true for every line, callers/callees:false to skip call graph. Supports multiple symbols in one call. Set bundle:true to automatically include call-graph neighbors not yet seen this session."
     )]
     async fn context(
         &self,
@@ -55,6 +55,9 @@ impl AnchorMcp {
         let store = &self.store;
         let limit = req.limit.unwrap_or(5);
         let bundle = req.bundle.unwrap_or(false);
+        let signature_only = req.signature.unwrap_or(false);
+        let show_callers = req.callers.unwrap_or(true);
+        let show_callees = req.callees.unwrap_or(true);
         let call_index = store.load_call_index();
         let mut output = String::new();
         let mut bundled_names: Vec<String> = Vec::new();
@@ -105,26 +108,36 @@ impl AnchorMcp {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
-                let sliced = slice_code(&proj.text, &[], sym.line_start);
-                let callers = call_index.callers_of(&sym.name);
-                let callees = call_index.callees_of(&sym.name);
 
                 output.push_str(&format!(
                     "{} {} {}:{}\n",
                     sym.name, sym.kind, sym.path, sym.line_start
                 ));
-                if !callers.is_empty() {
+
+                if signature_only {
+                    // Just the declaration line — no body, no call graph
+                    let sig = proj.text.lines().next().unwrap_or("").trim_end();
+                    output.push_str(&format!(" {:>4}: {}\n\n", sym.line_start, sig));
+                    continue;
+                }
+
+                let callers = call_index.callers_of(&sym.name);
+                let callees = call_index.callees_of(&sym.name);
+
+                if show_callers && !callers.is_empty() {
                     output.push_str(&format!(
                         "  CALLED_BY: {}\n",
                         callers.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
                     ));
                 }
-                if !callees.is_empty() {
+                if show_callees && !callees.is_empty() {
                     output.push_str(&format!(
                         "  CALLS: {}\n",
                         callees.iter().take(8).cloned().collect::<Vec<_>>().join(", ")
                     ));
                 }
+
+                let sliced = slice_code(&proj.text, &[], sym.line_start);
                 if sliced.was_sliced {
                     output.push_str(&format!(
                         "  [{}/{} lines]\n",

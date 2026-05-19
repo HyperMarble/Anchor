@@ -36,7 +36,7 @@ impl PersistentCache {
             return;
         }
         let path = anchor_root.join(CACHE_FILE);
-        if let Ok(json) = serde_json::to_string(&self.entries) {
+        if let Ok(json) = serde_json::to_string(&self) {
             let _ = std::fs::write(path, json);
             self.dirty = false;
         }

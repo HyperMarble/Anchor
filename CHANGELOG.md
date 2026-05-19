@@ -2,6 +2,25 @@
 
 All notable changes to Anchor are documented here.
 
+## [0.1.7] - 2026-05-19
+
+### Added
+- **Content-addressed object store** (`.anchor/objects/`): git-style store for parses, slices, and patches keyed by SHA-256 hash. Path index (`paths.json`), symbol index (`symbols.json`), and call index (`calls.json`) built on top. Context projections slice exact line ranges with prefix/suffix hashes for stale-edit detection. Validated on real VS Code corpus: 96.88% avg context reduction, 50/50 lock conflicts rejected, 0 failures
+- **lockd — Go lock daemon**: full symbol-level lock daemon over Unix socket (`/tmp/anchor.lock.sock`). Acquire, release, check, list operations. TTL-based lock expiry, stale lock cleanup every 30s, ownership validation, 1MB payload guard, read deadline per request. 22 regression + integration tests
+- **lockd wired into write path**: MCP write tool acquires symbol locks via lockd before any file write. Separate tracking for lockd-held vs in-process locks, released via correct paths at all three exit points. Multi-agent write safety is now end-to-end
+- **Persistent cross-session cache**: `src/cache.rs` + `.anchor/persistent_cache.json`. Symbol hash stored on disk — unchanged symbols return `CACHED` across sessions without re-sending code
+- **Blob extraction** (`src/parser/blob.rs`): universal extractor for non-code files. Markdown → headings as symbols, CSV → rows, TOML/YAML/JSON → whole file, unknown text → brace-based chunking. Files indexed: +16%, skipped: −87%
+- **Smart bundling**: `bundle:true` on context tool auto-fetches unseen callees. Stdlib noise filter skips callees with no outgoing calls and universal names (`new`, `from`, `collect`, etc.)
+- **BM25 search** (`src/storage/bm25.rs`): TF-IDF ranking with camelCase/snake_case tokenization. Name-token matches get 3x definition boost over path/parent context. Falls back to substring for short queries
+- **Adaptive context**: `signature:true` returns only the declaration line. `callers:false` / `callees:false` skip call graph. Agent decides exactly how much it needs per call
+- **1MB file size limit in indexer**: files over 1MB skipped — generated fixtures and vendored blobs excluded from agent working context
+- **Cross-language pseudocode hypothesis** (`examples/cross_lang_pseudo.rs`): same function in 10 languages collapses to nearly identical pseudocode via tree-sitter AST walking. Validates embedding fine-tuning approach
+
+### Changed
+- README rewritten — install, quickstart, MCP setup, supported languages. No over-explanation
+- Context tool description updated to reflect adaptive mode
+- Caller namespace qualification: callers now show full parent path (e.g. `auth::validate` not `validate`)
+
 ## [0.1.6] - 2026-02-xx
 
 ### Added

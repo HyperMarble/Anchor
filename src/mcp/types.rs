@@ -19,9 +19,24 @@ pub struct ContextRequest {
     pub limit: Option<usize>,
 
     #[schemars(
+        description = "Return only the signature line — no body, no call graph. Use when you just need to know a function's name, params, and return type."
+    )]
+    pub signature: Option<bool>,
+
+    #[schemars(
         description = "Show full unsliced code (default: false). Use when you need every line, not just dependency-relevant ones."
     )]
     pub full: Option<bool>,
+
+    #[schemars(
+        description = "Include CALLED_BY callers (default: true). Set false to skip call graph and get code only."
+    )]
+    pub callers: Option<bool>,
+
+    #[schemars(
+        description = "Include CALLS callees (default: true). Set false to skip call graph and get code only."
+    )]
+    pub callees: Option<bool>,
 
     #[schemars(
         description = "Bundle call-graph neighbors (default: false). Returns callee symbols not yet seen this session — gives full understanding in one call."
