@@ -48,8 +48,8 @@ fn run(cli: Cli) -> Result<()> {
     match command {
         Commands::Build => cmd_build(&root),
 
-        Commands::Context { queries, limit, full } => {
-            cmd_context(&root, &queries, limit, full)
+        Commands::Context { queries, limit, full, bundle } => {
+            cmd_context(&root, &queries, limit, full, bundle)
         }
 
         Commands::Search { queries, pattern, limit } => {
@@ -219,45 +219,107 @@ fn cmd_search(root: &Path, queries: &[String], _pattern: Option<&str>, limit: us
     Ok(())
 }
 
-fn cmd_context(root: &Path, queries: &[String], limit: usize, _full: bool) -> Result<()> {
-    let store = open_store(root)?;
-    let query = queries.join(" ");
-    let candidates = store.search_symbols_hybrid(&query, limit)?;
+fn cmd_context(root: &Path, queries: &[String], limit: usize, _full: bool, bundle: bool) -> Result<()> {
+    use std::collections::HashSet;
 
+    let store = open_store(root)?;
     let call_index = store.load_call_index();
 
-    println!("<results query=\"{}\" count=\"{}\">", query, candidates.len());
-    for sym in &candidates {
-        let proj = match store.create_projection(sym) {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
+    // track what we've printed to avoid duplicate bundle entries
+    let mut shown: HashSet<String> = HashSet::new();
+    let mut bundled_callees: Vec<String> = Vec::new();
 
-        let sliced = slice_code(&proj.text, &[], sym.line_start);
+    for (i, query) in queries.iter().enumerate() {
+        if i > 0 {
+            println!("===");
+        }
+        let candidates = store.search_symbols_hybrid(query, limit)?;
+        println!("<results query=\"{}\" count=\"{}\">", query, candidates.len());
 
-        let callers = call_index.callers_of(&sym.name);
-        let callees = call_index.callees_of(&sym.name);
+        for sym in &candidates {
+            shown.insert(sym.name.clone());
 
-        println!("<symbol>");
-        println!("<name>{}</name>", sym.name);
-        println!("<kind>{}</kind>", sym.kind);
-        println!("<file>{}</file>", sym.path);
-        println!("<line>{}</line>", sym.line_start);
-        if !callers.is_empty() {
-            println!("<called_by>{}</called_by>", callers.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+            let proj = match store.create_projection(sym) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let sliced = slice_code(&proj.text, &[], sym.line_start);
+            let callers = call_index.callers_of(&sym.name);
+            let callees = call_index.callees_of(&sym.name);
+
+            println!("<symbol>");
+            println!("<name>{}</name>", sym.name);
+            println!("<kind>{}</kind>", sym.kind);
+            println!("<file>{}</file>", sym.path);
+            println!("<line>{}</line>", sym.line_start);
+            if !callers.is_empty() {
+                println!("<called_by>{}</called_by>", callers.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+            }
+            if !callees.is_empty() {
+                println!("<calls>{}</calls>", callees.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+            }
+            println!("<code>");
+            if sliced.was_sliced {
+                println!("[{}/{} lines, {} calls]", sliced.shown_lines, sliced.total_lines, sliced.call_count);
+            }
+            print_code_with_lines(&sliced.code, sym.line_start);
+            println!("</code>");
+            println!("</symbol>");
+
+            if bundle {
+                for callee in callees.iter().take(8) {
+                    bundled_callees.push(callee.to_string());
+                }
+            }
         }
-        if !callees.is_empty() {
-            println!("<calls>{}</calls>", callees.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
-        }
-        println!("<code>");
-        if sliced.was_sliced {
-            println!("[{}/{} lines, {} calls]", sliced.shown_lines, sliced.total_lines, sliced.call_count);
-        }
-        print_code_with_lines(&sliced.code, sym.line_start);
-        println!("</code>");
-        println!("</symbol>");
+        println!("</results>");
     }
-    println!("</results>");
+
+    if bundle && !bundled_callees.is_empty() {
+        let mut already_bundled: HashSet<String> = HashSet::new();
+        let mut bundle_lines = 0usize;
+
+        println!("--- BUNDLED ---");
+        for callee in &bundled_callees {
+            if !already_bundled.insert(callee.clone()) || shown.contains(callee) {
+                continue;
+            }
+            // only bundle project-defined functions (have their own callees in our index)
+            if call_index.callees_of(callee).is_empty() {
+                continue;
+            }
+            const SKIP: &[&str] = &["new", "from", "into", "clone", "default",
+                "collect", "iter", "map", "filter", "unwrap", "expect",
+                "to_string", "as_str", "as_ref", "drop"];
+            if SKIP.contains(&callee.as_str()) {
+                continue;
+            }
+            let neighbors = match store.search_symbols_hybrid(callee, 2) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            for sym in &neighbors {
+                if sym.name != *callee {
+                    continue;
+                }
+                shown.insert(sym.name.clone());
+                let proj = match store.create_projection(sym) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let sliced = slice_code(&proj.text, &[], sym.line_start);
+                println!("{} {} {}:{}", sym.name, sym.kind, sym.path, sym.line_start);
+                if sliced.was_sliced {
+                    println!("  [{}/{} lines]", sliced.shown_lines, sliced.total_lines);
+                }
+                print_code_with_lines(&sliced.code, sym.line_start);
+                bundle_lines += sliced.shown_lines;
+                println!();
+            }
+        }
+        eprintln!("[bundle: {} lines]", bundle_lines);
+    }
+
     Ok(())
 }
 

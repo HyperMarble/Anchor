@@ -136,6 +136,18 @@ impl AnchorMcp {
                 if !already_bundled.insert(callee.clone()) {
                     continue;
                 }
+                // skip stdlib/primitive names: only bundle callees that are themselves
+                // callers in our index (i.e. project-defined functions with their own body)
+                if call_index.callees_of(callee).is_empty() {
+                    continue;
+                }
+                // skip universal names that match unrelated code across the whole repo
+                const SKIP: &[&str] = &["new", "from", "into", "clone", "default",
+                    "collect", "iter", "map", "filter", "unwrap", "expect",
+                    "to_string", "as_str", "as_ref", "drop"];
+                if SKIP.contains(&callee.as_str()) {
+                    continue;
+                }
                 let neighbors = match store.search_symbols_hybrid(callee, 2) {
                     Ok(v) => v,
                     Err(_) => continue,

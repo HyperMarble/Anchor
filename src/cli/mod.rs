@@ -61,6 +61,10 @@ pub enum Commands {
         /// Show full unsliced code (disable graph slicing)
         #[arg(short = 'F', long)]
         full: bool,
+
+        /// Bundle call-graph neighbors not yet shown in this output
+        #[arg(short = 'b', long)]
+        bundle: bool,
     },
 
     /// Search for symbols (lightweight: names, files, lines)
@@ -109,6 +113,9 @@ pub enum Commands {
         #[arg(short, long)]
         content: Option<String>,
     },
+
+    /// Index the codebase into .anchor/ store
+    Build,
 
     /// Start MCP server (Model Context Protocol) on stdio
     Mcp,
