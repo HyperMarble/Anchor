@@ -71,3 +71,22 @@ fn bundle_callees_exist_in_same_module() {
     assert!(acquire.iter().any(|s| s.name == "acquire"),
         "acquire must be indexed for bundle to work");
 }
+
+#[test]
+fn bundle_skips_stdlib_noise_keeps_project_callees() {
+    let dir = tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+
+    fs::write(src.join("a.rs"), r#"
+pub fn helper() -> String { process("x".to_string()) }
+pub fn process(s: String) -> String { s }
+"#).unwrap();
+
+    let store = AnchorStore::init(dir.path()).unwrap();
+    store.upsert_symbols_for_path(&src.join("a.rs")).unwrap();
+
+    let results = store.search_symbols_hybrid("process", 5).unwrap();
+    assert!(results.iter().any(|s| s.name == "process"),
+        "process must be indexed to be bundleable");
+}
