@@ -6,6 +6,7 @@
 //
 
 pub mod guard;
+pub mod lockd;
 pub mod manager;
 pub mod types;
 pub mod write;

@@ -12,7 +12,7 @@ use super::format::short_kind;
 use super::types::*;
 use super::AnchorMcp;
 use crate::cache::PersistentCache;
-use crate::lock::{LockResult, SymbolKey};
+use crate::lock::{lockd, LockResult, SymbolKey};
 use crate::query::slice::slice_code;
 use crate::storage::{AnchorStore, ANCHOR_DIR};
 
@@ -535,18 +535,57 @@ impl AnchorMcp {
         let affected = store.symbols_in_range(&index, &repo_rel, start_line, end_line);
         let affected_names: Vec<String> = affected.iter().map(|s| s.name.clone()).collect();
 
-        // Acquire symbol-level locks before writing
-        let mut locked_symbols = Vec::new();
+        // Acquire symbol-level locks before writing.
+        // Try lockd (multi-agent daemon) first; fall back to in-process if unavailable.
+        // lockd_locked tracks symbols held by lockd; locked_symbols tracks in-process only.
+        let use_lockd = lockd::is_available();
+        let mut locked_symbols: Vec<SymbolKey> = Vec::new();
+        let mut lockd_locked: Vec<(String, String)> = Vec::new();
+
         for name in &affected_names {
             let key = SymbolKey::new(&full_path, name.as_str());
-            match self.lock_manager.try_acquire_symbol_simple(&key) {
-                LockResult::Acquired { symbol, .. }
-                | LockResult::AcquiredAfterWait { symbol, .. } => locked_symbols.push(symbol),
-                LockResult::Blocked { reason, .. } => {
-                    for s in &locked_symbols {
-                        self.lock_manager.release_symbol(s);
+            let path_str = full_path.to_string_lossy().to_string();
+
+            if use_lockd {
+                match lockd::acquire(name, &path_str) {
+                    lockd::LockdResult::Acquired => {
+                        lockd_locked.push((name.clone(), path_str));
                     }
-                    return Err(Self::err(format!("BLOCKED: {}", reason)));
+                    lockd::LockdResult::Blocked { owner, reason } => {
+                        for (s, p) in &lockd_locked {
+                            lockd::release(s, p);
+                        }
+                        return Err(Self::err(format!("BLOCKED by {}: {}", owner, reason)));
+                    }
+                    lockd::LockdResult::Unavailable => {
+                        // lockd went away mid-loop — fall through to in-process
+                        match self.lock_manager.try_acquire_symbol_simple(&key) {
+                            LockResult::Acquired { symbol, .. }
+                            | LockResult::AcquiredAfterWait { symbol, .. } => {
+                                locked_symbols.push(symbol);
+                            }
+                            LockResult::Blocked { reason, .. } => {
+                                for (s, p) in &lockd_locked {
+                                    lockd::release(s, p);
+                                }
+                                for s in &locked_symbols {
+                                    self.lock_manager.release_symbol(s);
+                                }
+                                return Err(Self::err(format!("BLOCKED: {}", reason)));
+                            }
+                        }
+                    }
+                }
+            } else {
+                match self.lock_manager.try_acquire_symbol_simple(&key) {
+                    LockResult::Acquired { symbol, .. }
+                    | LockResult::AcquiredAfterWait { symbol, .. } => locked_symbols.push(symbol),
+                    LockResult::Blocked { reason, .. } => {
+                        for s in &locked_symbols {
+                            self.lock_manager.release_symbol(s);
+                        }
+                        return Err(Self::err(format!("BLOCKED: {}", reason)));
+                    }
                 }
             }
         }
@@ -575,6 +614,9 @@ impl AnchorMcp {
 
         let result = crate::write::replace_range(&full_path, start_line, end_line, new_content)
             .map_err(|e| {
+                for (s, p) in &lockd_locked {
+                    lockd::release(s, p);
+                }
                 for s in &locked_symbols {
                     self.lock_manager.release_symbol(s);
                 }
@@ -585,6 +627,9 @@ impl AnchorMcp {
         let _ = store.upsert_symbols_for_path(&full_path);
 
         // Release all locks
+        for (s, p) in &lockd_locked {
+            lockd::release(s, p);
+        }
         for s in &locked_symbols {
             self.lock_manager.release_symbol(s);
         }
