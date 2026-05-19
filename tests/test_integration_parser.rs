@@ -149,16 +149,18 @@ fn test_extract_empty_source_is_ok() {
 
 #[test]
 fn test_extract_unsupported_extension_errors() {
+    // blob extractor handles unknown extensions as a whole-file chunk
     let path = PathBuf::from("script.lua");
-    let err = extract_file(&path, "print('hello')").unwrap_err();
-    assert!(matches!(err, AnchorError::UnsupportedLanguage(_)));
+    let result = extract_file(&path, "print('hello')");
+    assert!(result.is_ok());
 }
 
 #[test]
 fn test_extract_no_extension_errors() {
+    // blob extractor handles files with no extension as a whole-file chunk
     let path = PathBuf::from("Makefile");
-    let err = extract_file(&path, "all:\n\t$(MAKE)").unwrap_err();
-    assert!(matches!(err, AnchorError::UnsupportedLanguage(_)));
+    let result = extract_file(&path, "all:\n\t$(MAKE)");
+    assert!(result.is_ok());
 }
 
 #[test]

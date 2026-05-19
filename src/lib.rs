@@ -270,12 +270,9 @@ fn check_password(pw: &str) -> bool {
     fn test_extract_unsupported_language() {
         use std::path::PathBuf;
         let path = PathBuf::from("main.lua");
+        // blob extractor handles unknown extensions as text fallback
         let result = parser::extract_file(&path, "print('hello')");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            AnchorError::UnsupportedLanguage(_)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -301,12 +298,9 @@ fn check_password(pw: &str) -> bool {
     fn test_extract_no_extension() {
         use std::path::PathBuf;
         let path = PathBuf::from("Makefile");
+        // blob extractor handles files with no extension as text fallback
         let result = parser::extract_file(&path, "all: build");
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            AnchorError::UnsupportedLanguage(_)
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]

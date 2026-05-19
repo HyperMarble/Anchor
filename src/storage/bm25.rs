@@ -79,11 +79,6 @@ impl Bm25Index {
         query_tokens
             .iter()
             .map(|qt| {
-                let df = *self.df.get(qt).unwrap_or(&0);
-                if df == 0 {
-                    return 0.0;
-                }
-
                 let in_name = name_tokens.contains(qt);
                 let in_features = symbol.features.iter().any(|f| f == qt);
 
@@ -91,8 +86,16 @@ impl Bm25Index {
                     return 0.0;
                 }
 
-                let n = self.doc_count as f32;
-                let idf = ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln();
+                let df = *self.df.get(qt).unwrap_or(&0);
+                // Term matches symbol name but never appears in any feature list (e.g. blob
+                // extractors that use hardcoded features). Treat as hapax: give it a high IDF
+                // so name-only matches still rank rather than scoring zero.
+                let idf = if df == 0 {
+                    (self.doc_count as f32 + 1.0).ln()
+                } else {
+                    let n = self.doc_count as f32;
+                    ((n - df as f32 + 0.5) / (df as f32 + 0.5) + 1.0).ln()
+                };
 
                 // features are deduped so tf is always 1 when present
                 let tf = 1.0_f32;
