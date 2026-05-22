@@ -1,6 +1,13 @@
 # Anchor
 
-Agent execution harness for coding AI agents.
+Controlled CLI runtime for coding agents working inside real repositories.
+
+Anchor gives agents a repo-local way to search code, load focused context, map a
+project, and apply writes through explicit commands instead of blind file
+browsing.
+
+Status: early prototype. The current public surface is CLI-first. Anchor v2 is
+planned to add Zev, a compact code representation layer for agents.
 
 ## Install
 
@@ -19,28 +26,27 @@ cargo build --release
 ## Quick Start
 
 ```bash
-anchor build          # index the repo
-anchor search <query> # find symbols
-anchor context <name> # get symbol with callers + callees
-anchor write <name>   # safe write with lock + verification
+anchor build                 # index the repository into .anchor/
+anchor search <query>        # find symbols
+anchor context <name>        # load focused code context
+anchor map                   # show a compact codebase map
+anchor write <path> <text>   # create or overwrite a file
+anchor edit <path> --action replace --pattern <old> --content <new>
 ```
 
-## MCP Setup
+## What It Provides
 
-Add to your MCP config:
+- repo-local `.anchor/` store
+- symbol search and focused context
+- compact codebase maps for agents
+- CLI write/edit commands
+- tree-sitter based parsing across common languages
 
-```json
-{
-  "mcpServers": {
-    "anchor": {
-      "command": "anchor",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+## Anchor v2
 
-Tools available to the agent: `anchor_search`, `anchor_context`, `anchor_map`, `anchor_write`, `anchor_impact`.
+The next milestone is Zev: a compact, language-neutral code representation that
+agents can read and write, with a translation layer back to normal source code
+such as Python, Rust, Java, Go, and TypeScript.
 
 ## Supported Languages
 
