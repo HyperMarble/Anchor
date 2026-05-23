@@ -70,7 +70,11 @@ fn normalize_agent_id(raw: &str) -> Option<String> {
     let mut last_was_dash = false;
 
     for ch in raw.chars() {
-        let ch = if ch.is_ascii_alphanumeric() { ch } else { '-' };
+        let ch = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '-'
+        };
         if ch == '-' {
             if out.is_empty() || last_was_dash {
                 continue;
@@ -172,6 +176,10 @@ mod tests {
         assert_eq!(
             normalize_agent_id("codex:session_42 / worktree"),
             Some("codex-session-42-worktree".to_string())
+        );
+        assert_eq!(
+            normalize_agent_id("Claude Code SESSION"),
+            Some("claude-code-session".to_string())
         );
         assert_eq!(normalize_agent_id("---"), None);
 
