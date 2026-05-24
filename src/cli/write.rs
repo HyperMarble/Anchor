@@ -8,18 +8,67 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
+use crate::lock::lockd;
 use crate::write::{batch_replace_all, create_file, insert_after, replace_all, BatchWriteResult};
 
-/// Create a new file
-pub fn create(path: &str, content: &str) -> Result<()> {
+const CLI_FILE_LOCK: &str = "__file__";
+
+struct CliFileLock {
+    path: String,
+    acquired: bool,
+}
+
+impl Drop for CliFileLock {
+    fn drop(&mut self) {
+        if self.acquired {
+            lockd::release(CLI_FILE_LOCK, &self.path);
+        }
+    }
+}
+
+fn resolve_path(root: &Path, path: &str) -> PathBuf {
     let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn lock_path(root: &Path, path: &Path, requested: &str) -> String {
+    path.strip_prefix(root)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_else(|_| requested.trim_start_matches('/').replace('\\', "/"))
+}
+
+fn acquire_file_lock(root: &Path, path: &Path, requested: &str) -> Result<CliFileLock> {
+    let path = lock_path(root, path, requested);
+    match lockd::acquire(CLI_FILE_LOCK, &path) {
+        lockd::LockdResult::Acquired => Ok(CliFileLock {
+            path,
+            acquired: true,
+        }),
+        lockd::LockdResult::Blocked { owner, reason } => {
+            anyhow::bail!("BLOCKED by {}: {}", owner, reason)
+        }
+        lockd::LockdResult::Unavailable => Ok(CliFileLock {
+            path,
+            acquired: false,
+        }),
+    }
+}
+
+/// Create a new file
+pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
+    let full_path = resolve_path(root, path);
+    let _lock = acquire_file_lock(root, &full_path, path)?;
 
     // Create parent directories if needed
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    match create_file(path, content) {
+    match create_file(&full_path, content) {
         Ok(result) => {
             println!("<result>");
             println!("<path>{}</path>", result.path);
@@ -39,9 +88,11 @@ pub fn create(path: &str, content: &str) -> Result<()> {
 }
 
 /// Insert content after a pattern
-pub fn insert(path: &str, pattern: &str, content: &str) -> Result<()> {
-    let path = Path::new(path);
-    match insert_after(path, pattern, content) {
+pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<()> {
+    let full_path = resolve_path(root, path);
+    let _lock = acquire_file_lock(root, &full_path, path)?;
+
+    match insert_after(&full_path, pattern, content) {
         Ok(result) => {
             println!("<result>");
             println!("<path>{}</path>", result.path);
@@ -74,6 +125,7 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
 
     if paths.len() == 1 {
         // Single file
+        let _lock = acquire_file_lock(root, &paths[0], pattern)?;
         match replace_all(&paths[0], old, new) {
             Ok(result) => {
                 let count = result.replacements.unwrap_or(0);
@@ -94,6 +146,10 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         }
     } else {
         // Batch replace
+        let mut locks = Vec::with_capacity(paths.len());
+        for path in &paths {
+            locks.push(acquire_file_lock(root, path, &path.to_string_lossy())?);
+        }
         let results = batch_replace_all(&paths, old, new);
         let summary = BatchWriteResult::from_results(results);
 
@@ -213,4 +269,28 @@ pub fn expand_glob(root: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{lock_path, resolve_path};
+    use std::path::Path;
+
+    #[test]
+    fn regression_cli_lock_path_is_repo_relative() {
+        let root = Path::new("/repo");
+        let path = Path::new("/repo/src/auth.py");
+
+        assert_eq!(lock_path(root, path, "src/auth.py"), "src/auth.py");
+    }
+
+    #[test]
+    fn regression_cli_resolves_relative_paths_under_root() {
+        let root = Path::new("/repo");
+
+        assert_eq!(
+            resolve_path(root, "src/auth.py"),
+            Path::new("/repo/src/auth.py")
+        );
+    }
 }

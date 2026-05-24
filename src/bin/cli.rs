@@ -63,7 +63,7 @@ fn run(cli: Cli) -> Result<()> {
 
         Commands::Map { scope } => cmd_map(&root, scope.as_deref()),
 
-        Commands::Write { path, content } => cli_write::create(&path, &content),
+        Commands::Write { path, content } => cli_write::create(&root, &path, &content),
 
         Commands::Edit {
             path,
@@ -71,7 +71,7 @@ fn run(cli: Cli) -> Result<()> {
             pattern,
             content,
         } => match action.as_str() {
-            "insert" => cli_write::insert(&path, &pattern, content.as_deref().unwrap_or("")),
+            "insert" => cli_write::insert(&root, &path, &pattern, content.as_deref().unwrap_or("")),
             "replace" => {
                 cli_write::replace(&root, &path, &pattern, content.as_deref().unwrap_or(""))
             }
