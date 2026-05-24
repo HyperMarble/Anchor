@@ -47,6 +47,8 @@ fn run(cli: Cli) -> Result<()> {
     };
 
     match command {
+        Commands::Init => cli::init::init_cli(&root),
+
         Commands::Build => cmd_build(&root),
 
         Commands::Context {

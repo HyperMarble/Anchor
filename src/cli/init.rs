@@ -54,6 +54,28 @@ enum StepResult {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
+pub fn init_cli(root: &Path) -> Result<()> {
+    println!("<init>");
+    let rules = setup_project_agent_rules(root)?;
+    let did_configure = rules == StepResult::Done;
+    let status = match rules {
+        StepResult::Done => "configured",
+        StepResult::AlreadyDone => "already-configured",
+    };
+    println!(
+        "  <agent name=\"codex\" rules=\"{}\" path=\"{}\"/>",
+        status,
+        root.join("AGENTS.md").display()
+    );
+    println!(
+        "  <summary configured=\"{}\" skipped=\"{}\"/>",
+        u8::from(did_configure),
+        u8::from(!did_configure)
+    );
+    println!("</init>");
+    Ok(())
+}
+
 pub fn init(root: &Path) -> Result<()> {
     let home = dirs_home();
 
@@ -127,6 +149,49 @@ pub fn init(root: &Path) -> Result<()> {
     println!("</init>");
 
     Ok(())
+}
+
+fn setup_project_agent_rules(root: &Path) -> Result<StepResult> {
+    let agents_md_path = root.join("AGENTS.md");
+    const BEGIN_MARKER: &str = "<!-- anchor-cli-rules:begin -->";
+    const END_MARKER: &str = "<!-- anchor-cli-rules:end -->";
+
+    let block = format!(
+        "{BEGIN_MARKER}\n{}\n{END_MARKER}\n",
+        r#"# Anchor CLI Rules
+
+When this repository has a `.anchor/` directory, use Anchor for code context and writes.
+
+- Use `anchor build` after cloning or after large file changes.
+- Use `anchor search <query>` to find symbols.
+- Use `anchor context <symbol>` before reading whole files.
+- Use `anchor context <symbol> --bundle` when caller/callee context matters.
+- Use `anchor write` / `anchor edit` for project writes so Anchor can lock and track the change path.
+
+Avoid `cat`, `sed`, `grep`, `rg`, `find`, `head`, and `tail` for code exploration when an Anchor context command can answer the question. Shell commands are still fine for git, tests, package managers, Docker, and non-code operations.
+"#
+    );
+
+    if !agents_md_path.exists() {
+        std::fs::write(&agents_md_path, block)?;
+        return Ok(StepResult::Done);
+    }
+
+    let existing = std::fs::read_to_string(&agents_md_path)?;
+    if existing.contains(BEGIN_MARKER) {
+        return Ok(StepResult::AlreadyDone);
+    }
+
+    let mut merged = existing;
+    if !merged.is_empty() && !merged.ends_with('\n') {
+        merged.push('\n');
+    }
+    if !merged.is_empty() {
+        merged.push('\n');
+    }
+    merged.push_str(&block);
+    std::fs::write(&agents_md_path, merged)?;
+    Ok(StepResult::Done)
 }
 
 // ─── Detection ────────────────────────────────────────────────────────────────
