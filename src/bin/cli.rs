@@ -5,6 +5,7 @@
 //  Created by hak (tharun)
 //
 
+use anchor::cache::PersistentCache;
 use anchor::cli::{self, write as cli_write, Cli, Commands};
 use anchor::query::slice::slice_code;
 use anchor::storage::AnchorStore;
@@ -264,6 +265,7 @@ fn cmd_context(
 
     let store = open_store(root)?;
     let call_index = store.load_call_index();
+    let mut persistent_cache = PersistentCache::load(store.anchor_root());
 
     // track what we've printed to avoid duplicate bundle entries
     let mut shown: HashSet<String> = HashSet::new();
@@ -282,6 +284,18 @@ fn cmd_context(
 
         for sym in &candidates {
             shown.insert(sym.name.clone());
+
+            if persistent_cache.is_hit(&sym.name, &sym.path, &sym.slice_hash) {
+                println!("<symbol cached=\"true\">");
+                println!("<name>{}</name>", sym.name);
+                println!("<kind>{}</kind>", sym.kind);
+                println!("<file>{}</file>", sym.path);
+                println!("<line>{}</line>", sym.line_start);
+                println!("<cache>CACHED</cache>");
+                println!("</symbol>");
+                continue;
+            }
+            persistent_cache.update(&sym.name, &sym.path, &sym.slice_hash);
 
             let proj = match store.create_projection(sym) {
                 Ok(p) => p,
@@ -396,6 +410,8 @@ fn cmd_context(
         }
         eprintln!("[bundle: {} lines]", bundle_lines);
     }
+
+    persistent_cache.save(store.anchor_root());
 
     Ok(())
 }
