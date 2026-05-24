@@ -5,6 +5,12 @@
 //  Created by hak (tharun)
 //
 
+// Legacy API.
+//
+// Anchor's active agent integration path is the CLI. Keep this module compiling
+// for older MCP users, but do not add new product workflow here unless it is
+// also wired through the CLI.
+
 pub mod format;
 pub mod tools;
 pub mod types;

@@ -39,7 +39,7 @@ Start here:
   map [scope]           Codebase map / zoom into module
   write <path> <content> Create/overwrite file
   edit <path> ...        Insert/replace/delete text
-  mcp                   Start MCP server for agents
+  mcp                   Legacy MCP server
 
 Options:
   -r, --root <PATH>     Project root (default: .)
@@ -115,7 +115,7 @@ pub enum Commands {
     /// Index the codebase into .anchor/ store
     Build,
 
-    /// Start MCP server (Model Context Protocol) on stdio
+    /// Legacy MCP server (Model Context Protocol) on stdio
     Mcp,
 }
 
