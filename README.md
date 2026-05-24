@@ -1,13 +1,14 @@
 # Anchor
 
-Agent execution harness for coding agents working inside real repositories.
+Agent execution harness for coding agents working inside real codebases and
+workspaces.
 
-Anchor gives agents a focused context path and a checked write path for real
-codebases. The goal is to make agent work less blind: read the right code, edit
+Anchor gives agents a focused context path and a checked write path for project
+source. The goal is to make agent work less blind: read the right code, edit
 through explicit operations, and coordinate work across agent sessions.
 
-Status: early prototype. Anchor v1 focuses on context and writes. Anchor v2 is
-planned to add Zev, a compact code representation layer for models and agents.
+Status: early prototype. Anchor focuses on context, writes, and coordination for
+coding agents.
 
 ## Install
 
@@ -38,12 +39,6 @@ anchor edit <path> --action replace --pattern <old> --content <new>
 - session and lock-aware agent workflow
 - support for local and cloud-backed agent sessions
 - tree-sitter based source understanding across common languages
-
-## Anchor v2
-
-The next milestone is Zev: a natural compact code representation for models and
-agents, with a translation layer back to normal source code such as Python,
-Rust, Java, Go, and TypeScript.
 
 ## Supported Languages
 

@@ -9,6 +9,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::lock::lockd;
+use crate::storage::AnchorStore;
 use crate::write::{batch_replace_all, create_file, insert_after, replace_all, BatchWriteResult};
 
 const CLI_FILE_LOCK: &str = "__file__";
@@ -58,6 +59,12 @@ fn acquire_file_lock(root: &Path, path: &Path, requested: &str) -> Result<CliFil
     }
 }
 
+fn reindex_after_write(root: &Path, path: &Path) -> Result<()> {
+    let store = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))?;
+    let _ = store.upsert_symbols_for_path(path)?;
+    Ok(())
+}
+
 /// Create a new file
 pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
     let full_path = resolve_path(root, path);
@@ -70,6 +77,7 @@ pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
 
     match create_file(&full_path, content) {
         Ok(result) => {
+            reindex_after_write(root, &full_path)?;
             println!("<result>");
             println!("<path>{}</path>", result.path);
             println!("<status>created</status>");
@@ -94,6 +102,7 @@ pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<(
 
     match insert_after(&full_path, pattern, content) {
         Ok(result) => {
+            reindex_after_write(root, &full_path)?;
             println!("<result>");
             println!("<path>{}</path>", result.path);
             println!("<status>inserted</status>");
@@ -128,6 +137,7 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         let _lock = acquire_file_lock(root, &paths[0], pattern)?;
         match replace_all(&paths[0], old, new) {
             Ok(result) => {
+                reindex_after_write(root, &paths[0])?;
                 let count = result.replacements.unwrap_or(0);
                 println!("<result>");
                 println!("<path>{}</path>", result.path);
@@ -152,6 +162,9 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         }
         let results = batch_replace_all(&paths, old, new);
         let summary = BatchWriteResult::from_results(results);
+        for result in &summary.results {
+            reindex_after_write(root, Path::new(&result.path))?;
+        }
 
         let total_replacements: usize = summary.results.iter().filter_map(|r| r.replacements).sum();
 
