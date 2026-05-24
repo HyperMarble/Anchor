@@ -54,38 +54,6 @@ enum StepResult {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-pub fn init_cli(root: &Path) -> Result<()> {
-    println!("<init>");
-    let codex = setup_project_agent_rules(root)?;
-    let claude = setup_claude_rules(root)?;
-    let configured = [codex == StepResult::Done, claude == StepResult::Done]
-        .into_iter()
-        .filter(|done| *done)
-        .count();
-    let skipped = 2 - configured;
-    let codex_status = match codex {
-        StepResult::Done => "configured",
-        StepResult::AlreadyDone => "already-configured",
-    };
-    println!(
-        "  <agent name=\"codex\" rules=\"{}\" path=\"{}\"/>",
-        codex_status,
-        root.join("AGENTS.md").display()
-    );
-    let claude_status = match claude {
-        StepResult::Done => "configured",
-        StepResult::AlreadyDone => "already-configured",
-    };
-    println!(
-        "  <agent name=\"claude-code\" rules=\"{}\" path=\"{}\"/>",
-        claude_status,
-        root.join("CLAUDE.md").display()
-    );
-    println!("  <summary configured=\"{configured}\" skipped=\"{skipped}\"/>");
-    println!("</init>");
-    Ok(())
-}
-
 pub fn init(root: &Path) -> Result<()> {
     let home = dirs_home();
 
@@ -159,91 +127,6 @@ pub fn init(root: &Path) -> Result<()> {
     println!("</init>");
 
     Ok(())
-}
-
-fn setup_project_agent_rules(root: &Path) -> Result<StepResult> {
-    let agents_md_path = root.join("AGENTS.md");
-    const BEGIN_MARKER: &str = "<!-- anchor-cli-rules:begin -->";
-    const END_MARKER: &str = "<!-- anchor-cli-rules:end -->";
-
-    let block = format!(
-        "{BEGIN_MARKER}\n{}\n{END_MARKER}\n",
-        r#"# Anchor CLI Rules
-
-When this repository has a `.anchor/` directory, use Anchor for code context and writes.
-
-- Use `anchor build` after cloning or after large file changes.
-- Use `anchor search <query>` to find symbols.
-- Use `anchor context <symbol>` before reading whole files.
-- Use `anchor context <symbol> --bundle` when caller/callee context matters.
-- Use `anchor write` / `anchor edit` for project writes so Anchor can lock and track the change path.
-
-Avoid `cat`, `sed`, `grep`, `rg`, `find`, `head`, and `tail` for code exploration when an Anchor context command can answer the question. Shell commands are still fine for git, tests, package managers, Docker, and non-code operations.
-"#
-    );
-
-    if !agents_md_path.exists() {
-        std::fs::write(&agents_md_path, block)?;
-        return Ok(StepResult::Done);
-    }
-
-    let existing = std::fs::read_to_string(&agents_md_path)?;
-    if existing.contains(BEGIN_MARKER) {
-        return Ok(StepResult::AlreadyDone);
-    }
-
-    let mut merged = existing;
-    if !merged.is_empty() && !merged.ends_with('\n') {
-        merged.push('\n');
-    }
-    if !merged.is_empty() {
-        merged.push('\n');
-    }
-    merged.push_str(&block);
-    std::fs::write(&agents_md_path, merged)?;
-    Ok(StepResult::Done)
-}
-
-fn setup_claude_rules(root: &Path) -> Result<StepResult> {
-    let claude_md_path = root.join("CLAUDE.md");
-    const BEGIN_MARKER: &str = "<!-- anchor-claude-rules:begin -->";
-    const END_MARKER: &str = "<!-- anchor-claude-rules:end -->";
-
-    let block = format!(
-        "{BEGIN_MARKER}\n{}\n{END_MARKER}\n",
-        r#"# Anchor CLI Rules
-
-When this repository has a `.anchor/` directory, use Anchor for code context and writes before falling back to raw file reads.
-
-- Start with `anchor search <query>` or `anchor context <symbol>`.
-- Use `anchor context <symbol> --bundle` when caller/callee context matters.
-- Run `anchor build` after cloning or after broad source changes.
-- Prefer `anchor write` / `anchor edit` for project writes so Anchor can lock the file path.
-
-Use shell commands freely for git, tests, builds, package managers, Docker, and non-code operations.
-"#
-    );
-
-    if !claude_md_path.exists() {
-        std::fs::write(&claude_md_path, block)?;
-        return Ok(StepResult::Done);
-    }
-
-    let existing = std::fs::read_to_string(&claude_md_path)?;
-    if existing.contains(BEGIN_MARKER) {
-        return Ok(StepResult::AlreadyDone);
-    }
-
-    let mut merged = existing;
-    if !merged.is_empty() && !merged.ends_with('\n') {
-        merged.push('\n');
-    }
-    if !merged.is_empty() {
-        merged.push('\n');
-    }
-    merged.push_str(&block);
-    std::fs::write(&claude_md_path, merged)?;
-    Ok(StepResult::Done)
 }
 
 // ─── Detection ────────────────────────────────────────────────────────────────

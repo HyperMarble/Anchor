@@ -34,7 +34,6 @@ const HELP_TEXT: &str = "
     Infrastructure for Coding AI agents
 
 Start here:
-  init                  Install Anchor CLI rules for agents
   context <sym> [sym2…]  Code + callers + callees
   search <q> [q2…]      Find symbols
   map [scope]           Codebase map / zoom into module
@@ -48,9 +47,6 @@ Options:
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Install Anchor CLI rules for coding agents
-    Init,
-
     /// Get symbol context (code + callers + callees)
     Context {
         /// Symbol names to query (supports multiple)
