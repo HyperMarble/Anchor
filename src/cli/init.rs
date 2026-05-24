@@ -56,22 +56,32 @@ enum StepResult {
 
 pub fn init_cli(root: &Path) -> Result<()> {
     println!("<init>");
-    let rules = setup_project_agent_rules(root)?;
-    let did_configure = rules == StepResult::Done;
-    let status = match rules {
+    let codex = setup_project_agent_rules(root)?;
+    let claude = setup_claude_rules(root)?;
+    let configured = [codex == StepResult::Done, claude == StepResult::Done]
+        .into_iter()
+        .filter(|done| *done)
+        .count();
+    let skipped = 2 - configured;
+    let codex_status = match codex {
         StepResult::Done => "configured",
         StepResult::AlreadyDone => "already-configured",
     };
     println!(
         "  <agent name=\"codex\" rules=\"{}\" path=\"{}\"/>",
-        status,
+        codex_status,
         root.join("AGENTS.md").display()
     );
+    let claude_status = match claude {
+        StepResult::Done => "configured",
+        StepResult::AlreadyDone => "already-configured",
+    };
     println!(
-        "  <summary configured=\"{}\" skipped=\"{}\"/>",
-        u8::from(did_configure),
-        u8::from(!did_configure)
+        "  <agent name=\"claude-code\" rules=\"{}\" path=\"{}\"/>",
+        claude_status,
+        root.join("CLAUDE.md").display()
     );
+    println!("  <summary configured=\"{configured}\" skipped=\"{skipped}\"/>");
     println!("</init>");
     Ok(())
 }
@@ -191,6 +201,48 @@ Avoid `cat`, `sed`, `grep`, `rg`, `find`, `head`, and `tail` for code exploratio
     }
     merged.push_str(&block);
     std::fs::write(&agents_md_path, merged)?;
+    Ok(StepResult::Done)
+}
+
+fn setup_claude_rules(root: &Path) -> Result<StepResult> {
+    let claude_md_path = root.join("CLAUDE.md");
+    const BEGIN_MARKER: &str = "<!-- anchor-claude-rules:begin -->";
+    const END_MARKER: &str = "<!-- anchor-claude-rules:end -->";
+
+    let block = format!(
+        "{BEGIN_MARKER}\n{}\n{END_MARKER}\n",
+        r#"# Anchor CLI Rules
+
+When this repository has a `.anchor/` directory, use Anchor for code context and writes before falling back to raw file reads.
+
+- Start with `anchor search <query>` or `anchor context <symbol>`.
+- Use `anchor context <symbol> --bundle` when caller/callee context matters.
+- Run `anchor build` after cloning or after broad source changes.
+- Prefer `anchor write` / `anchor edit` for project writes so Anchor can lock the file path.
+
+Use shell commands freely for git, tests, builds, package managers, Docker, and non-code operations.
+"#
+    );
+
+    if !claude_md_path.exists() {
+        std::fs::write(&claude_md_path, block)?;
+        return Ok(StepResult::Done);
+    }
+
+    let existing = std::fs::read_to_string(&claude_md_path)?;
+    if existing.contains(BEGIN_MARKER) {
+        return Ok(StepResult::AlreadyDone);
+    }
+
+    let mut merged = existing;
+    if !merged.is_empty() && !merged.ends_with('\n') {
+        merged.push('\n');
+    }
+    if !merged.is_empty() {
+        merged.push('\n');
+    }
+    merged.push_str(&block);
+    std::fs::write(&claude_md_path, merged)?;
     Ok(StepResult::Done)
 }
 
