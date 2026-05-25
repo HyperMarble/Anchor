@@ -70,15 +70,29 @@ fn run(cli: Cli) -> Result<()> {
             path,
             action,
             pattern,
+            symbol,
             content,
-        } => match action.as_str() {
-            "insert" => cli_write::insert(&root, &path, &pattern, content.as_deref().unwrap_or("")),
-            "replace" => {
-                cli_write::replace(&root, &path, &pattern, content.as_deref().unwrap_or(""))
+        } => {
+            if let Some(symbol) = symbol {
+                let content = content
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("symbol edit requires --content"))?;
+                return cli_write::replace_symbol(&root, &path, &symbol, content);
             }
-            "delete" => cli_write::replace(&root, &path, &pattern, ""),
-            other => bail!("unknown edit action: {}", other),
-        },
+
+            let action = action.ok_or_else(|| anyhow::anyhow!("edit requires --action"))?;
+            let pattern = pattern.ok_or_else(|| anyhow::anyhow!("edit requires --pattern"))?;
+            match action.as_str() {
+                "insert" => {
+                    cli_write::insert(&root, &path, &pattern, content.as_deref().unwrap_or(""))
+                }
+                "replace" => {
+                    cli_write::replace(&root, &path, &pattern, content.as_deref().unwrap_or(""))
+                }
+                "delete" => cli_write::replace(&root, &path, &pattern, ""),
+                other => bail!("unknown edit action: {}", other),
+            }
+        }
 
         Commands::Mcp => tokio::runtime::Runtime::new()
             .expect("failed to create tokio runtime")

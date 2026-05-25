@@ -94,18 +94,22 @@ pub enum Commands {
         content: String,
     },
 
-    /// Edit a file by pattern
+    /// Edit a file by pattern or indexed symbol
     Edit {
         /// File path
         path: String,
 
         /// Action: insert, replace, delete
         #[arg(short, long)]
-        action: String,
+        action: Option<String>,
 
         /// Pattern to match
         #[arg(short, long)]
-        pattern: String,
+        pattern: Option<String>,
+
+        /// Indexed symbol to replace
+        #[arg(short, long)]
+        symbol: Option<String>,
 
         /// Content for insert/replace
         #[arg(short, long)]

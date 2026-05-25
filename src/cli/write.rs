@@ -9,20 +9,23 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::lock::lockd;
-use crate::storage::AnchorStore;
-use crate::write::{batch_replace_all, create_file, insert_after, replace_all, BatchWriteResult};
+use crate::storage::{content_hash, AnchorStore};
+use crate::write::{
+    batch_replace_all, create_file, insert_after, replace_all, replace_range, BatchWriteResult,
+};
 
 const CLI_FILE_LOCK: &str = "__file__";
 
-struct CliFileLock {
+struct CliLock {
+    symbol: String,
     path: String,
     acquired: bool,
 }
 
-impl Drop for CliFileLock {
+impl Drop for CliLock {
     fn drop(&mut self) {
         if self.acquired {
-            lockd::release(CLI_FILE_LOCK, &self.path);
+            lockd::release(&self.symbol, &self.path);
         }
     }
 }
@@ -42,21 +45,34 @@ fn lock_path(root: &Path, path: &Path, requested: &str) -> String {
         .unwrap_or_else(|_| requested.trim_start_matches('/').replace('\\', "/"))
 }
 
-fn acquire_file_lock(root: &Path, path: &Path, requested: &str) -> Result<CliFileLock> {
+fn acquire_lock(root: &Path, path: &Path, requested: &str, symbol: &str) -> Result<CliLock> {
     let path = lock_path(root, path, requested);
-    match lockd::acquire(CLI_FILE_LOCK, &path) {
-        lockd::LockdResult::Acquired => Ok(CliFileLock {
+    match lockd::acquire(symbol, &path) {
+        lockd::LockdResult::Acquired => Ok(CliLock {
+            symbol: symbol.to_string(),
             path,
             acquired: true,
         }),
         lockd::LockdResult::Blocked { owner, reason } => {
             anyhow::bail!("BLOCKED by {}: {}", owner, reason)
         }
-        lockd::LockdResult::Unavailable => Ok(CliFileLock {
+        lockd::LockdResult::Unavailable => Ok(CliLock {
+            symbol: symbol.to_string(),
             path,
             acquired: false,
         }),
     }
+}
+
+fn acquire_file_lock(root: &Path, path: &Path, requested: &str) -> Result<CliLock> {
+    acquire_lock(root, path, requested, CLI_FILE_LOCK)
+}
+
+fn symbol_lock_name(repo_path: &str, symbol: &str) -> String {
+    format!(
+        "sym:{}",
+        content_hash(format!("{repo_path}\0{symbol}").as_bytes())
+    )
 }
 
 fn reindex_after_write(root: &Path, path: &Path) -> Result<()> {
@@ -117,6 +133,40 @@ pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<(
             println!("</result>");
         }
     }
+    Ok(())
+}
+
+/// Replace one indexed symbol in a file.
+pub fn replace_symbol(root: &Path, path: &str, symbol: &str, content: &str) -> Result<()> {
+    let full_path = resolve_path(root, path);
+    let store = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))?;
+    let repo_path = lock_path(root, &full_path, path);
+    let index = store.load_symbol_index()?;
+    let entry = index
+        .symbols
+        .iter()
+        .find(|entry| entry.path == repo_path && entry.name == symbol)
+        .ok_or_else(|| anyhow::anyhow!("symbol '{}' not found in {}", symbol, repo_path))?;
+
+    let projection = store.create_projection(entry)?;
+    let lock_symbol = symbol_lock_name(&repo_path, symbol);
+    let _lock = acquire_lock(root, &full_path, path, &lock_symbol)?;
+    let result = replace_range(
+        &full_path,
+        projection.line_start,
+        projection.line_end,
+        content,
+    )?;
+    reindex_after_write(root, &full_path)?;
+
+    println!("<result>");
+    println!("<path>{}</path>", result.path);
+    println!("<status>symbol_replaced</status>");
+    println!("<symbol>{}</symbol>", symbol);
+    println!("<line_start>{}</line_start>", projection.line_start);
+    println!("<line_end>{}</line_end>", projection.line_end);
+    println!("<lines>{}</lines>", result.lines_written);
+    println!("</result>");
     Ok(())
 }
 
@@ -305,5 +355,17 @@ mod tests {
             resolve_path(root, "src/auth.py"),
             Path::new("/repo/src/auth.py")
         );
+    }
+
+    #[test]
+    fn regression_symbol_lock_name_is_lockd_safe_and_stable() {
+        let first = super::symbol_lock_name("src/auth.py", "Auth.login!");
+        let second = super::symbol_lock_name("src/auth.py", "Auth.login!");
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("sym:"));
+        assert!(first
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'));
     }
 }
