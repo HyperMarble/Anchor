@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const SOCKET_PATH: &str = "/tmp/anchor.lock.sock";
 const TIMEOUT: Duration = Duration::from_millis(500);
 const AGENT_ID_ENV: &str = "ANCHOR_AGENT_ID";
+const SOCKET_PATH_ENV: &str = "ANCHOR_LOCKD_SOCKET";
 
 static AGENT_ID: OnceLock<String> = OnceLock::new();
 
@@ -26,7 +27,7 @@ pub enum LockdResult {
 }
 
 fn send(req: serde_json::Value) -> Option<serde_json::Value> {
-    let mut stream = UnixStream::connect(SOCKET_PATH).ok()?;
+    let mut stream = UnixStream::connect(socket_path()).ok()?;
     stream.set_read_timeout(Some(TIMEOUT)).ok()?;
     stream.set_write_timeout(Some(TIMEOUT)).ok()?;
 
@@ -153,7 +154,11 @@ pub fn release_for_agent(symbol: &str, path: &str, agent: &str) {
 
 /// Check if lockd is reachable.
 pub fn is_available() -> bool {
-    UnixStream::connect(SOCKET_PATH).is_ok()
+    UnixStream::connect(socket_path()).is_ok()
+}
+
+fn socket_path() -> String {
+    std::env::var(SOCKET_PATH_ENV).unwrap_or_else(|_| SOCKET_PATH.to_string())
 }
 
 #[cfg(test)]
