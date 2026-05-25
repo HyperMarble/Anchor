@@ -13,7 +13,7 @@ pub fn node_text(node: &Node, source: &[u8]) -> String {
 }
 
 /// Extract full code snippet from a node (no truncation).
-/// Slicing happens at display time using graph knowledge.
+/// Slicing happens at display time using indexed call metadata.
 pub fn bounded_snippet(node: &Node, source: &[u8]) -> String {
     node.utf8_text(source).unwrap_or("").to_string()
 }

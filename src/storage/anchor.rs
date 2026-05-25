@@ -63,7 +63,7 @@ pub struct SymbolIndex {
     pub symbols: Vec<SymbolEntry>,
 }
 
-/// Call graph index: maps each symbol name to the names of symbols it calls.
+/// Call index: maps each symbol name to the names of symbols it calls.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CallIndex {
     pub calls: HashMap<String, Vec<String>>,

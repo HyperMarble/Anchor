@@ -33,8 +33,8 @@ fn session_seen_dedup_same_hash_returns_nothing_twice() {
     let results1 = store.search_symbols_hybrid("LockManager", 5).unwrap();
     let results2 = store.search_symbols_hybrid("LockManager", 5).unwrap();
 
-    // same hash → same symbol → dedup should apply at the MCP layer
-    // at storage level both calls return results; dedup is MCP session_seen
+    // same hash -> same symbol; session-level callers can deduplicate this later
+    // at storage level both calls return results
     assert!(!results1.is_empty());
     assert_eq!(
         results1[0].slice_hash, results2[0].slice_hash,

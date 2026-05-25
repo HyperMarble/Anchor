@@ -188,7 +188,7 @@ fn callee_b() {}
 }
 
 #[test]
-fn test_build_from_extractions_integrates_graph() {
+fn test_build_from_extractions_collects_symbols() {
     let src = r#"
 pub struct Engine {}
 impl Engine {

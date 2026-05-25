@@ -171,7 +171,7 @@ pub fn replace_first(
 }
 
 /// Replace a line range in a file. Line numbers are 1-indexed.
-/// This is the graph-aware write: no string matching, just line numbers.
+/// This is a range-aware write: no string matching, just line numbers.
 pub fn replace_range(
     path: &Path,
     start_line: usize,

@@ -9,8 +9,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Unique identifier for a symbol in the graph.
-/// Matches the qualified_index key in CodeGraph: (file_path, symbol_name).
+/// Unique identifier for a symbol lock.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolKey {
     pub file: PathBuf,

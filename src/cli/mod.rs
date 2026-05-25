@@ -5,7 +5,6 @@
 //  Created by hak (tharun)
 //
 
-pub mod init;
 pub mod write;
 
 use clap::{Parser, Subcommand};
@@ -39,7 +38,6 @@ Start here:
   map [scope]           Codebase map / zoom into module
   write <path> <content> Create/overwrite file
   edit <path> ...        Insert/replace/delete text
-  mcp                   Legacy MCP server
 
 Options:
   -r, --root <PATH>     Project root (default: .)
@@ -56,11 +54,11 @@ pub enum Commands {
         #[arg(short, long, default_value = "5")]
         limit: usize,
 
-        /// Show full unsliced code (disable graph slicing)
+        /// Show full unsliced code
         #[arg(short = 'F', long)]
         full: bool,
 
-        /// Bundle call-graph neighbors not yet shown in this output
+        /// Bundle call-index neighbors not yet shown in this output
         #[arg(short = 'b', long)]
         bundle: bool,
     },
@@ -118,9 +116,6 @@ pub enum Commands {
 
     /// Index the codebase into .anchor/ store
     Build,
-
-    /// Legacy MCP server (Model Context Protocol) on stdio
-    Mcp,
 }
 
 /// Print usage help

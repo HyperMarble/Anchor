@@ -19,12 +19,12 @@ pub struct SliceResult {
     pub was_sliced: bool,
 }
 
-/// Slice a symbol's code to show only graph-relevant lines.
+/// Slice a symbol's code to show only call-relevant lines.
 ///
 /// Keeps:
 /// - First line (function signature)
 /// - Last line (closing brace)
-/// - Lines containing calls to graph dependencies (call_lines)
+/// - Lines containing indexed calls (call_lines)
 /// - 1 line of context above each call line (for if/assignment)
 /// - Return statements
 ///

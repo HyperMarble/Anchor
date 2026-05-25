@@ -93,10 +93,6 @@ fn run(cli: Cli) -> Result<()> {
                 other => bail!("unknown edit action: {}", other),
             }
         }
-
-        Commands::Mcp => tokio::runtime::Runtime::new()
-            .expect("failed to create tokio runtime")
-            .block_on(anchor::mcp::run(roots)),
     }
 }
 
