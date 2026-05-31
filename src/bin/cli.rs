@@ -518,6 +518,7 @@ fn cmd_status(root: &Path) -> Result<()> {
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
     let summary = events::EventSummary::from_events(&events);
+    let quality = summary.quality_profile();
 
     println!("<status>");
     println!("<events>{}</events>", summary.event_count);
@@ -529,6 +530,12 @@ fn cmd_status(root: &Path) -> Result<()> {
     println!("<checks_failed>{}</checks_failed>", summary.checks_failed);
     println!("<lock_blocks>{}</lock_blocks>", summary.lock_blocks);
     println!("<errors>{}</errors>", summary.errors);
+    println!("<quality_score>{}</quality_score>", quality.score);
+    println!("<risk>{}</risk>", quality.risk);
+    println!("<quality_flags>{}</quality_flags>", quality.flags.len());
+    for flag in &quality.flags {
+        println!("  <flag>{flag}</flag>");
+    }
     println!("<paths>{}</paths>", summary.paths.len());
     for path in &summary.paths {
         println!("  <path>{path}</path>");
@@ -588,11 +595,13 @@ fn cmd_receipt(root: &Path) -> Result<()> {
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
     let summary = events::EventSummary::from_events(&events);
+    let quality = summary.quality_profile();
     let receipt = serde_json::json!({
         "schema": "anchor.receipt.v1",
         "repo_root": store.repo_root().to_string_lossy(),
         "event_log": events::log_path(store.anchor_root()).to_string_lossy(),
         "summary": summary,
+        "quality": quality,
     });
 
     println!("{}", serde_json::to_string_pretty(&receipt)?);

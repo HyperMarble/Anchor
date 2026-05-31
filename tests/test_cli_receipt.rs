@@ -38,6 +38,8 @@ fn cli_receipt_exports_machine_readable_summary() {
     assert_eq!(json["summary"]["event_count"], 1);
     assert_eq!(json["summary"]["checks_ok"], 1);
     assert_eq!(json["summary"]["checks_failed"], 0);
+    assert_eq!(json["quality"]["score"], 100);
+    assert_eq!(json["quality"]["risk"], "low");
     assert!(json["event_log"]
         .as_str()
         .unwrap()

@@ -37,6 +37,13 @@ pub struct EventSummary {
     pub agents: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityProfile {
+    pub score: u8,
+    pub risk: String,
+    pub flags: Vec<String>,
+}
+
 impl EventSummary {
     pub fn from_events(events: &[ExecutionEvent]) -> Self {
         let mut summary = Self {
@@ -81,6 +88,50 @@ impl EventSummary {
         summary.sessions = sessions.into_iter().collect();
         summary.agents = agents.into_iter().collect();
         summary
+    }
+
+    pub fn quality_profile(&self) -> QualityProfile {
+        let mut score: i32 = 100;
+        let mut flags = Vec::new();
+        let changed = self.edits_ok + self.writes_ok > 0;
+        let checked = self.checks_ok + self.checks_failed > 0;
+
+        if changed && self.context_reads == 0 {
+            score -= 30;
+            flags.push("changed_without_recorded_context".to_string());
+        }
+        if changed && !checked {
+            score -= 25;
+            flags.push("changed_without_recorded_check".to_string());
+        }
+        if self.checks_failed > 0 {
+            score -= 30;
+            flags.push("failed_check".to_string());
+        }
+        if self.errors > 0 {
+            score -= 20;
+            flags.push("execution_error".to_string());
+        }
+        if self.lock_blocks > 0 {
+            score -= 5;
+            flags.push("lock_conflict_seen".to_string());
+        }
+        if self.paths.len() > 3 {
+            score -= 10;
+            flags.push("broad_file_scope".to_string());
+        }
+
+        let score = score.clamp(0, 100) as u8;
+        let risk = if score >= 85 {
+            "low"
+        } else if score >= 60 {
+            "medium"
+        } else {
+            "high"
+        }
+        .to_string();
+
+        QualityProfile { score, risk, flags }
     }
 }
 
