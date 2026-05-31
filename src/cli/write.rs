@@ -18,15 +18,27 @@ use crate::write::{
 const CLI_FILE_LOCK: &str = "__file__";
 
 struct CliLock {
-    symbol: String,
+    lock_symbol: String,
+    event_symbol: Option<String>,
     path: String,
     acquired: bool,
+    anchor_root: Option<PathBuf>,
 }
 
 impl Drop for CliLock {
     fn drop(&mut self) {
         if self.acquired {
-            lockd::release(&self.symbol, &self.path);
+            lockd::release(&self.lock_symbol, &self.path);
+            if let Some(anchor_root) = &self.anchor_root {
+                events::record(
+                    anchor_root,
+                    "lock.release",
+                    Some(self.path.clone()),
+                    self.event_symbol.clone(),
+                    "ok",
+                    None,
+                );
+            }
         }
     }
 }
@@ -46,27 +58,69 @@ fn lock_path(root: &Path, path: &Path, requested: &str) -> String {
         .unwrap_or_else(|_| requested.trim_start_matches('/').replace('\\', "/"))
 }
 
-fn acquire_lock(root: &Path, path: &Path, requested: &str, symbol: &str) -> Result<CliLock> {
+fn lock_event_root(root: &Path) -> Option<PathBuf> {
+    AnchorStore::discover(root)
+        .or_else(|_| AnchorStore::init(root))
+        .ok()
+        .map(|store| store.anchor_root().to_path_buf())
+}
+
+fn acquire_lock(
+    root: &Path,
+    path: &Path,
+    requested: &str,
+    lock_symbol: &str,
+    event_symbol: Option<&str>,
+) -> Result<CliLock> {
     let path = lock_path(root, path, requested);
-    match lockd::acquire(symbol, &path) {
-        lockd::LockdResult::Acquired => Ok(CliLock {
-            symbol: symbol.to_string(),
-            path,
-            acquired: true,
-        }),
+    let anchor_root = lock_event_root(root);
+    let event_symbol = event_symbol.map(|symbol| symbol.to_string());
+
+    match lockd::acquire(lock_symbol, &path) {
+        lockd::LockdResult::Acquired => {
+            if let Some(anchor_root) = &anchor_root {
+                events::record(
+                    anchor_root,
+                    "lock.acquire",
+                    Some(path.clone()),
+                    event_symbol.clone(),
+                    "ok",
+                    None,
+                );
+            }
+            Ok(CliLock {
+                lock_symbol: lock_symbol.to_string(),
+                event_symbol,
+                path,
+                acquired: true,
+                anchor_root,
+            })
+        }
         lockd::LockdResult::Blocked { owner, reason } => {
+            if let Some(anchor_root) = &anchor_root {
+                events::record(
+                    anchor_root,
+                    "lock.acquire",
+                    Some(path),
+                    event_symbol,
+                    "blocked",
+                    Some(format!("{owner}: {reason}")),
+                );
+            }
             anyhow::bail!("BLOCKED by {}: {}", owner, reason)
         }
         lockd::LockdResult::Unavailable => Ok(CliLock {
-            symbol: symbol.to_string(),
+            lock_symbol: lock_symbol.to_string(),
+            event_symbol,
             path,
             acquired: false,
+            anchor_root,
         }),
     }
 }
 
 fn acquire_file_lock(root: &Path, path: &Path, requested: &str) -> Result<CliLock> {
-    acquire_lock(root, path, requested, CLI_FILE_LOCK)
+    acquire_lock(root, path, requested, CLI_FILE_LOCK, None)
 }
 
 fn symbol_lock_name(repo_path: &str, symbol: &str) -> String {
@@ -191,7 +245,7 @@ pub fn replace_symbol(root: &Path, path: &str, symbol: &str, content: &str) -> R
 
     let projection = store.create_projection(entry)?;
     let lock_symbol = symbol_lock_name(&repo_path, symbol);
-    let _lock = acquire_lock(root, &full_path, path, &lock_symbol)?;
+    let _lock = acquire_lock(root, &full_path, path, &lock_symbol, Some(symbol))?;
     let result = replace_range(
         &full_path,
         projection.line_start,

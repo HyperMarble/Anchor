@@ -174,6 +174,16 @@ fn symbol_lock(path: &str, symbol: &str) -> String {
     )
 }
 
+fn read_events(dir: &tempfile::TempDir) -> Vec<Value> {
+    let events_path = dir.path().join(".anchor/events/events.jsonl");
+    let raw_events = fs::read_to_string(&events_path)
+        .unwrap_or_else(|e| panic!("missing event log {}: {e}", events_path.display()));
+    raw_events
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
 #[test]
 fn cli_symbol_edit_blocks_when_another_agent_holds_same_symbol_lock() {
     let dir = tempfile::tempdir().unwrap();
@@ -210,6 +220,17 @@ fn cli_symbol_edit_blocks_when_another_agent_holds_same_symbol_lock() {
         String::from_utf8_lossy(&blocked.stderr)
     );
 
+    let events = read_events(&dir);
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "lock.acquire"
+                && event["status"] == "blocked"
+                && event["symbol"] == "target"
+                && event["path"] == "src.rs"
+        }),
+        "missing blocked lock event: {events:#?}"
+    );
+
     let unchanged = fs::read_to_string(dir.path().join("src.rs")).unwrap();
     assert!(unchanged.contains("pub fn target() -> bool {\n    true\n}"));
 
@@ -236,6 +257,26 @@ fn cli_symbol_edit_blocks_when_another_agent_holds_same_symbol_lock() {
     );
     let changed = fs::read_to_string(dir.path().join("src.rs")).unwrap();
     assert!(changed.contains("pub fn target() -> bool {\n    false\n}"));
+
+    let events = read_events(&dir);
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "lock.acquire"
+                && event["status"] == "ok"
+                && event["symbol"] == "target"
+                && event["path"] == "src.rs"
+        }),
+        "missing successful lock event: {events:#?}"
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["event_type"] == "lock.release"
+                && event["status"] == "ok"
+                && event["symbol"] == "target"
+                && event["path"] == "src.rs"
+        }),
+        "missing lock release event: {events:#?}"
+    );
 }
 
 #[test]
