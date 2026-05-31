@@ -37,7 +37,7 @@ Run tests, build commands, package-manager commands, and verifier commands throu
 anchor check -- <test-or-build-command>
 ```
 
-Use `anchor status` or `anchor trace` when you need to inspect what Anchor has recorded.
+Use `anchor status`, `anchor trace`, or `anchor receipt` when you need to inspect what Anchor has recorded.
 
 ## Multi-Agent Mode
 

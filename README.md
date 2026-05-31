@@ -36,6 +36,7 @@ anchor edit <path> --symbol <name> --content <replacement>
 anchor check -- <command>    # run and record a verification command
 anchor status                # summarize execution/provenance signals
 anchor trace                 # show recent execution events
+anchor receipt               # export machine-readable receipt + quality score
 ```
 
 ## What It Provides
@@ -46,6 +47,7 @@ anchor trace                 # show recent execution events
 - execution event log for reads, writes, locks, and checks
 - status signals for context use, edits, conflicts, errors, and verification
 - trace output for recent agent execution events
+- JSON receipts with quality score and risk flags
 - support for local and cloud-backed agent sessions
 - tree-sitter based source understanding across common languages
 

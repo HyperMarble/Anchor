@@ -56,6 +56,7 @@ NEW_SYMBOL='def refund_payment(user_id, amount):
 "$ANCHOR_BIN" -r "$REPO_DIR" context refund_payment --limit 1 > "$WORK_DIR/context_after_edit.out"
 "$ANCHOR_BIN" -r "$REPO_DIR" check -- sh -c 'test -f app.py' > "$WORK_DIR/check.out"
 "$ANCHOR_BIN" -r "$REPO_DIR" status > "$WORK_DIR/status.out"
+"$ANCHOR_BIN" -r "$REPO_DIR" receipt > "$WORK_DIR/receipt.json"
 
 raw_bytes="$(wc -c < "$REPO_DIR/app.py" | tr -d ' ')"
 context_bytes="$(wc -c < "$WORK_DIR/context_1.out" | tr -d ' ')"
@@ -76,6 +77,8 @@ status_edits_applied="false"
 if grep -q 'name="edits_applied" status="ok"' "$WORK_DIR/status.out"; then
   status_edits_applied="true"
 fi
+quality_score="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["quality"]["score"])' "$WORK_DIR/receipt.json")"
+quality_risk="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["quality"]["risk"])' "$WORK_DIR/receipt.json")"
 
 cat > "$RESULT_FILE" <<JSON
 {
@@ -99,6 +102,8 @@ cat > "$RESULT_FILE" <<JSON
   "changed_files": $changed_files,
   "git_diff_lines": $diff_lines,
   "event_count": $event_count,
+  "quality_score": $quality_score,
+  "quality_risk": "$quality_risk",
   "edited_symbol_visible_after_reindex": $manual_review_visible,
   "status_context_used": $status_context_used,
   "status_edits_applied": $status_edits_applied
