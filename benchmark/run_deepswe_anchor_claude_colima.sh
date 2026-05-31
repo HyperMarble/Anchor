@@ -8,6 +8,7 @@ DEEPSWE_ROOT="${DEEPSWE_ROOT:-/Volumes/Hak_SSD/deep-swe}"
 WORK_ROOT="${ANCHOR_BENCH_WORK_ROOT:-/Volumes/Hak_SSD/anchor-benchmark-work}"
 JOBS_DIR="$WORK_ROOT/harbor-jobs"
 TRACE_DIR="$WORK_ROOT/traces/$TASK_ID-anchor-claude-$(date +%Y%m%d-%H%M%S)"
+ARTIFACT_DIR="$WORK_ROOT/artifacts/$TASK_ID-anchor-claude-$(date +%Y%m%d-%H%M%S)"
 TASK_DIR="$DEEPSWE_ROOT/tasks/$TASK_ID"
 ANCHOR_BIN="${ANCHOR_LINUX_BIN:-$WORK_ROOT/bin/anchor-linux}"
 JOB_NAME="anchor-claude-${TASK_ID}-$(date +%Y%m%d-%H%M%S)"
@@ -36,7 +37,7 @@ if ! docker info >/dev/null 2>&1; then
   exit 3
 fi
 
-mkdir -p "$JOBS_DIR" "$TRACE_DIR"
+mkdir -p "$JOBS_DIR" "$TRACE_DIR" "$ARTIFACT_DIR"
 
 MOUNTS_JSON=$(cat <<JSON
 [
@@ -44,7 +45,8 @@ MOUNTS_JSON=$(cat <<JSON
   "$HARNESS_DIR:/anchor-harness:ro",
   "$HARNESS_DIR/CLAUDE.anchor.md:/workspace/CLAUDE.md:ro",
   "$HARNESS_DIR:/workspace/.claude:ro",
-  "$TRACE_DIR:/anchor-traces"
+  "$TRACE_DIR:/anchor-traces",
+  "$ARTIFACT_DIR:/anchor-artifacts"
 ]
 JSON
 )
@@ -64,3 +66,4 @@ harbor run \
 
 echo "job=$JOBS_DIR/$JOB_NAME"
 echo "trace=$TRACE_DIR/claude-anchor-tools.jsonl"
+echo "artifacts=$ARTIFACT_DIR"

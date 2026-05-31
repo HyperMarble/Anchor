@@ -75,6 +75,7 @@ It mounts:
 - Anchor benchmark `CLAUDE.md` at `/workspace/CLAUDE.md`
 - Claude Code hooks/settings at `/workspace/.claude`
 - hook trace output at `/anchor-traces`
+- Anchor receipt/status/trace/gate artifacts at `/anchor-artifacts`
 
 Default mode is warning/log mode:
 
@@ -90,6 +91,42 @@ ANCHOR_HOOK_MODE=strict benchmark/run_deepswe_anchor_claude_colima.sh python-sta
 
 This is the first actual Anchor-assisted benchmark path. It should be compared against the same Claude Code task run without the Anchor harness.
 
+The script prints:
+
+```text
+job=...
+trace=...
+artifacts=...
+```
+
+Keep those paths for comparison.
+
+### `run_deepswe_claude_baseline_colima.sh`
+
+Runs the same DeepSWE task with the same `claude-code` Harbor agent, but without Anchor mounts, Anchor instructions, or hooks.
+
+Run:
+
+```bash
+benchmark/run_deepswe_claude_baseline_colima.sh python-statemachine-state-data-scoping
+```
+
+Use this as the fair baseline for the Anchor-assisted run.
+
+### `collect_deepswe_compare.py`
+
+Collects one baseline job and one Anchor job into a single JSON comparison.
+
+Run:
+
+```bash
+python3 benchmark/collect_deepswe_compare.py \
+  --baseline-job /Volumes/Hak_SSD/anchor-benchmark-work/harbor-jobs/<baseline-job> \
+  --anchor-job /Volumes/Hak_SSD/anchor-benchmark-work/harbor-jobs/<anchor-job> \
+  --anchor-trace /Volumes/Hak_SSD/anchor-benchmark-work/traces/<trace-dir>/claude-anchor-tools.jsonl \
+  --anchor-artifacts /Volumes/Hak_SSD/anchor-benchmark-work/artifacts/<artifact-dir>
+```
+
 ### `current_anchor_probe.sh`
 
 Runs a controlled local probe against a small generated Python repo.
@@ -103,6 +140,8 @@ It measures:
 - auto-reindex after edit
 - execution event count
 - `anchor status` quality/provenance signals
+- `anchor receipt` quality score/risk
+- `anchor gate` enforcement
 - patch size after edit
 - raw file bytes vs Anchor context bytes
 
@@ -159,6 +198,8 @@ The current Anchor version can measure early efficiency, scope, and provenance s
 - whether reindexing makes edited symbols visible
 - whether context reads and edits were recorded
 - whether `anchor status` can summarize context/edit activity
+- whether `anchor receipt` exports machine-readable metrics
+- whether `anchor gate` enforces the quality score
 - patch size
 
 The real-task Colima runner can also prove:

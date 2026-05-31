@@ -45,6 +45,15 @@ Before finishing, run:
 anchor gate --min-score 85
 ```
 
+Then export the benchmark artifacts:
+
+```bash
+anchor receipt > /anchor-artifacts/anchor-receipt.json
+anchor status > /anchor-artifacts/anchor-status.xml
+anchor trace > /anchor-artifacts/anchor-trace.xml
+anchor gate --min-score 85 > /anchor-artifacts/anchor-gate.xml
+```
+
 ## Multi-Agent Mode
 
 If the task benefits from parallel investigation, you may use subagents or parallel reasoning where supported.
