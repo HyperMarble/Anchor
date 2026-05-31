@@ -75,4 +75,3 @@ pub fn record(
     let event = ExecutionEvent::new(event_type, path, symbol, status, message);
     let _ = append(anchor_root, &event);
 }
-

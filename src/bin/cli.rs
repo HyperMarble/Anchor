@@ -7,6 +7,7 @@
 
 use anchor::cache::PersistentCache;
 use anchor::cli::{self, write as cli_write, Cli, Commands};
+use anchor::events;
 use anchor::query::slice::slice_code;
 use anchor::storage::AnchorStore;
 use anyhow::{bail, Result};
@@ -296,6 +297,14 @@ fn cmd_context(
             shown.insert(sym.name.clone());
 
             if persistent_cache.is_hit(&sym.name, &sym.path, &sym.slice_hash) {
+                events::record(
+                    store.anchor_root(),
+                    "context.read",
+                    Some(sym.path.clone()),
+                    Some(sym.name.clone()),
+                    "cached",
+                    None,
+                );
                 println!("<symbol cached=\"true\">");
                 println!("<name>{}</name>", sym.name);
                 println!("<kind>{}</kind>", sym.kind);
@@ -309,9 +318,20 @@ fn cmd_context(
 
             let proj = match store.create_projection(sym) {
                 Ok(p) => p,
-                Err(_) => continue,
+                Err(e) => {
+                    events::record(
+                        store.anchor_root(),
+                        "context.read",
+                        Some(sym.path.clone()),
+                        Some(sym.name.clone()),
+                        "error",
+                        Some(e.to_string()),
+                    );
+                    continue;
+                }
             };
-            let sliced = slice_code(&proj.text, &[], sym.line_start);
+            let call_lines = store.call_lines_for_symbol(sym);
+            let sliced = slice_code(&proj.text, &call_lines, sym.line_start);
             let callers = call_index.callers_of(&sym.name);
             let callees = call_index.callees_of(&sym.name);
 
@@ -348,10 +368,22 @@ fn cmd_context(
                     "[{}/{} lines, {} calls]",
                     sliced.shown_lines, sliced.total_lines, sliced.call_count
                 );
+                // sliced.code already includes "{:>4}: {}\n" line numbers
+                print!("{}", sliced.code);
+            } else {
+                print_code_with_lines(&sliced.code, sym.line_start);
             }
-            print_code_with_lines(&sliced.code, sym.line_start);
             println!("</code>");
             println!("</symbol>");
+
+            events::record(
+                store.anchor_root(),
+                "context.read",
+                Some(sym.path.clone()),
+                Some(sym.name.clone()),
+                "ok",
+                None,
+            );
 
             if bundle {
                 for callee in callees.iter().take(8) {
@@ -408,12 +440,15 @@ fn cmd_context(
                     Ok(p) => p,
                     Err(_) => continue,
                 };
-                let sliced = slice_code(&proj.text, &[], sym.line_start);
+                let call_lines = store.call_lines_for_symbol(sym);
+                let sliced = slice_code(&proj.text, &call_lines, sym.line_start);
                 println!("{} {} {}:{}", sym.name, sym.kind, sym.path, sym.line_start);
                 if sliced.was_sliced {
                     println!("  [{}/{} lines]", sliced.shown_lines, sliced.total_lines);
+                    print!("{}", sliced.code);
+                } else {
+                    print_code_with_lines(&sliced.code, sym.line_start);
                 }
-                print_code_with_lines(&sliced.code, sym.line_start);
                 bundle_lines += sliced.shown_lines;
                 println!();
             }

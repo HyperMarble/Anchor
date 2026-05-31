@@ -8,8 +8,8 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::lock::lockd;
 use crate::events;
+use crate::lock::lockd;
 use crate::storage::{content_hash, AnchorStore};
 use crate::write::{
     batch_replace_all, create_file, insert_after, replace_all, replace_range, BatchWriteResult,
@@ -237,7 +237,8 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         match replace_all(&paths[0], old, new) {
             Ok(result) => {
                 reindex_after_write(root, &paths[0])?;
-                if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))
+                {
                     events::record(
                         store.anchor_root(),
                         "edit.apply",
@@ -257,7 +258,8 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
                 println!("</result>");
             }
             Err(e) => {
-                if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))
+                {
                     events::record(
                         store.anchor_root(),
                         "edit.apply",

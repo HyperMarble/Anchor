@@ -67,4 +67,3 @@ fn cli_symbol_edit_records_execution_event() {
     assert_eq!(edit_event["agent_id"], "agent-event-test");
     assert_eq!(edit_event["session_id"], "session-event-test");
 }
-

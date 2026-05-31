@@ -299,6 +299,27 @@ impl AnchorStore {
             .collect()
     }
 
+    /// Absolute line numbers (1-indexed) of every call site inside a symbol's body.
+    /// Re-parses the file to recover line info (the saved CallIndex drops it).
+    /// Used by `slice_code` to keep only call-relevant lines in projections.
+    pub fn call_lines_for_symbol(&self, sym: &SymbolEntry) -> Vec<usize> {
+        let source_path = self.repo_root.join(&sym.path);
+        let source = match fs::read_to_string(&source_path) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        let extraction = match crate::parser::extract_file(&source_path, &source) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        extraction
+            .calls
+            .into_iter()
+            .filter(|c| c.line >= sym.line_start && c.line <= sym.line_end)
+            .map(|c| c.line)
+            .collect()
+    }
+
     pub fn upsert_symbols_for_path(
         &self,
         source_path: &Path,
