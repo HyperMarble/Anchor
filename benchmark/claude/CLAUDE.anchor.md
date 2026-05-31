@@ -31,7 +31,11 @@ Do not use raw source writes for source-code changes.
 
 If Anchor fails, record the failure and stop that path instead of silently bypassing Anchor. The benchmark is measuring whether Anchor works, so bypassing Anchor invalidates the run.
 
-Tests, build commands, package-manager commands, and verifier commands may be run normally.
+Run tests, build commands, package-manager commands, and verifier commands through Anchor when practical:
+
+```bash
+anchor check -- <test-or-build-command>
+```
 
 ## Multi-Agent Mode
 

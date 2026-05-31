@@ -96,6 +96,8 @@ fn run(cli: Cli) -> Result<()> {
         }
 
         Commands::Status => cmd_status(&root),
+
+        Commands::Check { command } => cmd_check(&root, &command),
     }
 }
 
@@ -518,6 +520,8 @@ fn cmd_status(root: &Path) -> Result<()> {
     let mut cache_hits = 0usize;
     let mut edits_ok = 0usize;
     let mut writes_ok = 0usize;
+    let mut checks_ok = 0usize;
+    let mut checks_failed = 0usize;
     let mut errors = 0usize;
     let mut lock_blocks = 0usize;
     let mut paths = BTreeSet::new();
@@ -542,6 +546,8 @@ fn cmd_status(root: &Path) -> Result<()> {
             }
             ("edit.apply", "ok") => edits_ok += 1,
             ("write.apply", "ok") => writes_ok += 1,
+            ("check.run", "ok") => checks_ok += 1,
+            ("check.run", "error") => checks_failed += 1,
             ("lock.acquire", "blocked") => lock_blocks += 1,
             _ => {}
         }
@@ -553,6 +559,8 @@ fn cmd_status(root: &Path) -> Result<()> {
     println!("<cache_hits>{cache_hits}</cache_hits>");
     println!("<edits>{edits_ok}</edits>");
     println!("<writes>{writes_ok}</writes>");
+    println!("<checks_ok>{checks_ok}</checks_ok>");
+    println!("<checks_failed>{checks_failed}</checks_failed>");
     println!("<lock_blocks>{lock_blocks}</lock_blocks>");
     println!("<errors>{errors}</errors>");
     println!("<paths>{}</paths>", paths.len());
@@ -582,6 +590,12 @@ fn cmd_status(root: &Path) -> Result<()> {
         lock_blocks
     );
     println!(
+        "  <signal name=\"checks\" status=\"{}\" passed=\"{}\" failed=\"{}\"/>",
+        if checks_failed == 0 { "ok" } else { "failed" },
+        checks_ok,
+        checks_failed
+    );
+    println!(
         "  <signal name=\"errors\" status=\"{}\" count=\"{}\"/>",
         if errors == 0 { "ok" } else { "failed" },
         errors
@@ -590,6 +604,52 @@ fn cmd_status(root: &Path) -> Result<()> {
     println!("</status>");
 
     Ok(())
+}
+
+fn cmd_check(root: &Path, command: &[String]) -> Result<()> {
+    if command.is_empty() {
+        bail!("check requires a command");
+    }
+
+    let store = open_store(root)?;
+    let output = std::process::Command::new(&command[0])
+        .args(&command[1..])
+        .current_dir(root)
+        .output()?;
+    let code = output.status.code().unwrap_or(-1);
+    let status = if output.status.success() {
+        "ok"
+    } else {
+        "error"
+    };
+    let command_text = command.join(" ");
+
+    events::record(
+        store.anchor_root(),
+        "check.run",
+        None,
+        None,
+        status,
+        Some(format!("exit={code} cmd={command_text}")),
+    );
+
+    println!("<check>");
+    println!("<command>{command_text}</command>");
+    println!("<status>{status}</status>");
+    println!("<exit_code>{code}</exit_code>");
+    println!("<stdout><![CDATA[");
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    println!("]]></stdout>");
+    println!("<stderr><![CDATA[");
+    print!("{}", String::from_utf8_lossy(&output.stderr));
+    println!("]]></stderr>");
+    println!("</check>");
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        bail!("check failed with exit code {code}")
+    }
 }
 
 fn print_code_with_lines(code: &str, start_line: usize) {

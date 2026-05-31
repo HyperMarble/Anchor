@@ -54,6 +54,7 @@ NEW_SYMBOL='def refund_payment(user_id, amount):
 
 "$ANCHOR_BIN" -r "$REPO_DIR" edit app.py --symbol refund_payment --content "$NEW_SYMBOL" > "$WORK_DIR/edit.out"
 "$ANCHOR_BIN" -r "$REPO_DIR" context refund_payment --limit 1 > "$WORK_DIR/context_after_edit.out"
+"$ANCHOR_BIN" -r "$REPO_DIR" check -- sh -c 'test -f app.py' > "$WORK_DIR/check.out"
 "$ANCHOR_BIN" -r "$REPO_DIR" status > "$WORK_DIR/status.out"
 
 raw_bytes="$(wc -c < "$REPO_DIR/app.py" | tr -d ' ')"
@@ -88,6 +89,7 @@ cat > "$RESULT_FILE" <<JSON
     "symbol_edit",
     "auto_reindex_after_edit",
     "execution_events",
+    "check_events",
     "status_signals"
   ],
   "raw_file_bytes_after_edit": $raw_bytes,

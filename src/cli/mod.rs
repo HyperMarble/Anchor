@@ -35,6 +35,7 @@ const HELP_TEXT: &str = "
 Start here:
   context <sym> [sym2…]  Code + callers + callees
   status                  Session quality/provenance signals
+  check -- <cmd>          Run and record a verification command
   search <q> [q2…]      Find symbols
   map [scope]           Codebase map / zoom into module
   write <path> <content> Create/overwrite file
@@ -117,6 +118,13 @@ pub enum Commands {
 
     /// Show compact execution/provenance status
     Status,
+
+    /// Run a verification command and record the result
+    Check {
+        /// Command and arguments to run after `--`
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
 
     /// Index the codebase into .anchor/ store
     Build,
