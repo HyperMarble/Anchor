@@ -1,423 +1,566 @@
-# How Anchor Works
+# Anchor Explained
 
-Updated from the current source code after removing stale MCP and old CodeGraph
-paths.
+Anchor is an execution harness for AI coding agents.
 
-## Short Definition
+The final version is not just a local CLI and not just a code index. Anchor is
+the control plane between agents and real codebases. It gives agents a governed
+way to read code, claim work, write changes, coordinate with other sessions,
+produce evidence, and hand results back to humans or teams.
 
-Anchor is a CLI-first agent execution harness for coding agents.
+Anchor can run locally for a single developer, and it can run as a cloud/team
+service for multiple developers and multiple agent sessions working on the same
+repository.
 
-It is not Git. It borrows a few Git-like ideas: content hashes, object-style
-storage, indexes, projections, and controlled writes. The goal is different from
-Git: Anchor controls how agents read, write, and coordinate inside a working
-codebase.
+## The Final Shape
 
-Current Anchor is about three things:
-
-1. Focused context: agents ask for symbols instead of browsing whole files.
-2. Checked writes: agents write through Anchor operations instead of blind file
-   replacement.
-3. Coordination: agents use locks so two sessions do not overwrite the same
-   unit of work.
-
-Zev is not part of the current Anchor implementation. Zev is the planned future
-read/write representation layer. This file explains Anchor only.
-
-## What Exists Today
-
-Current compiled CLI commands:
+The intended product looks like this:
 
 ```text
-anchor build
-anchor search <query>
-anchor context <symbol>
-anchor context <symbol> --bundle
-anchor write <path> <content>
-anchor edit <path> --action replace --pattern <old> --content <new>
-anchor edit <path> --symbol <name> --content <new-symbol-source>
-anchor map [scope]
+Human / team
+    |
+    v
+Anchor workspace
+    |
+    |-- code understanding
+    |-- context serving
+    |-- session ownership
+    |-- symbol/file locks
+    |-- checked writes
+    |-- test gates
+    |-- provenance log
+    |-- replay / audit / rollback
+    |
+    v
+Agents: Codex, Claude Code, Cursor, OpenCode, custom agents
+    |
+    v
+Official source repository
 ```
 
-Removed from the active code path:
+The important idea is delegation. A human should be able to give work to one
+agent or many agents without losing control of the repository. Anchor owns the
+state around the work: what was read, what was claimed, what changed, what tests
+ran, what failed, what passed, and who or what is responsible.
 
-- MCP server code
-- old agent init/MCP config wiring
-- old watcher/CodeGraph module path
-- `.anchor/graph.bin`
+## Why Anchor Exists
 
-Anchor now uses a simple current store built around JSON indexes and
-content-addressed objects.
+AI coding agents can already write code. The hard part is not typing code. The
+hard part is letting agents act inside real repositories without chaos.
 
-## Current Runtime Loop
+Real agent work needs answers to questions like:
+
+- Which code did the agent read?
+- Was that context stale?
+- Which symbol or file did the agent claim?
+- Did another agent touch the same area?
+- What exactly changed?
+- What tests or checks ran?
+- Can we replay or inspect the work later?
+- Who approved it?
+- How do we know this was not a blind overwrite?
+
+Normal Git answers some historical questions after the fact. Anchor sits before
+and during the work. It coordinates the execution itself.
+
+## The Core Thesis
+
+Anchor turns agent coding from opaque chat into governed execution.
+
+Instead of:
 
 ```text
-project source
-  -> anchor build
-  -> .anchor/index/*.json
-  -> agent calls anchor search/context
-  -> agent calls anchor write/edit
-  -> Anchor locks the target
-  -> Anchor writes the change
-  -> Anchor reindexes the changed file
+agent reads random files
+agent edits files directly
+human checks a diff later
 ```
 
-The important behavior is that writes refresh the index. The agent should not be
-left with stale symbol ranges after a successful Anchor write.
+Anchor aims for:
 
-## The .anchor Store
+```text
+agent requests context
+Anchor returns focused, hashed context
+agent claims a symbol or file
+Anchor locks that work unit
+agent submits a write
+Anchor verifies, applies, reindexes, and records it
+tests/checks run as gates
+the whole session becomes replayable provenance
+```
 
-`AnchorStore::init` creates this layout:
+That is why Anchor should be understood as an execution harness, not only a
+navigation tool.
+
+## Local And Cloud
+
+Anchor has two deployment shapes.
+
+### Local Anchor
+
+Local Anchor runs inside one developer's workspace. It gives the local agent a
+structured way to inspect and mutate the repo.
+
+Local Anchor is useful for:
+
+- single-developer agent sessions
+- local CLI workflows
+- fast context lookup
+- local symbol locks
+- local write safety
+- local provenance logs
+
+### Anchor Cloud / Team Anchor
+
+Cloud/team Anchor is the shared coordination layer.
+
+In that mode, multiple humans can run their own agents against the same project,
+and Anchor coordinates the work:
+
+```text
+Developer A -> agent session A1, A2, A3
+Developer B -> agent session B1
+CI / review bot -> verification session
+
+All sessions -> shared Anchor coordination state
+```
+
+Team Anchor is for:
+
+- shared lock state
+- shared session state
+- multi-agent work ownership
+- cloud-managed workspaces
+- team-visible traces
+- review/audit artifacts
+- controlled handoff from agent output to official repository
+
+The cloud version is not a replacement for GitHub. Git remains the source-control
+system. Anchor manages agent execution before changes become commits or pull
+requests.
+
+## The Two Moats
+
+Anchor has two strategic moats.
+
+### 1. Governed Agent Execution
+
+Anchor's first moat is controlling the agent work loop.
+
+The loop is:
+
+```text
+intent -> context -> claim -> lock -> write -> verify -> record -> handoff
+```
+
+This is the transaction kernel for coding agents. Every meaningful action should
+be represented as an event with inputs, outputs, hashes, ownership, and status.
+
+The final system should make agent work:
+
+- attributable
+- inspectable
+- replayable
+- resumable
+- auditable
+- rollback-aware
+- safe for parallel sessions
+
+This is Anchor's main product layer.
+
+### 2. Zev Later
+
+Zev is the second moat, but it comes after Anchor.
+
+Anchor first controls how agents operate on a codebase. Zev then changes the
+representation agents read and write.
+
+Without Zev:
+
+```text
+source code -> Anchor context -> agent writes source edits
+```
+
+With Zev:
+
+```text
+source code -> Zev representation -> Anchor context -> agent writes Zev edits
+-> source code
+```
+
+Zev is covered later in this document because Anchor must make sense without it.
+
+## Anchor As A Transaction Kernel
+
+The best analogy is not Git. The better analogy is a database transaction log or
+a control plane.
+
+An agent write should not be just "text changed." It should become a controlled
+transaction:
+
+```text
+begin task
+  read context A
+  claim symbol B
+  acquire lock C
+  apply patch D
+  run check E
+  record result F
+commit or abort
+```
+
+The final Anchor transaction should record:
+
+- session id
+- agent id
+- model/tool identity where available
+- requested task
+- context hashes
+- target symbols/files
+- locks acquired
+- before/after hashes
+- patch content
+- commands/tests run
+- outputs
+- final status
+- approval or rejection
+
+This gives teams a way to answer: what did the agent do, why did it do it, and
+can we trust the result?
+
+## Agent Flight Recorder
+
+The second name for this layer is the agent flight recorder.
+
+Agents fail in ways that are hard to debug. A chat transcript is not enough. A
+diff is not enough. A commit is not enough.
+
+Anchor should record the execution path:
+
+```text
+context read
+search query
+symbol projection
+lock acquired
+write requested
+write applied
+index refreshed
+test command
+test output
+human approval
+handoff
+```
+
+This creates a timeline that can be inspected after a bad edit, resumed after an
+interrupted session, or attached to a review.
+
+The final product should support:
+
+- `anchor trace <session>`
+- `anchor replay <session>`
+- `anchor attest <session>`
+- cloud session timelines
+- signed provenance for important changes
+
+The honest goal is not perfect deterministic replay of model behavior. The goal
+is reproducible boundaries: restore the workspace state, replay Anchor-applied
+edits, rerun recorded checks where possible, and show exact recorded inputs and
+outputs.
+
+## Code Understanding
+
+Anchor needs code understanding because agents should not read whole repositories
+blindly.
+
+Anchor indexes the repository into:
+
+- paths
+- symbols
+- calls
+- source hashes
+- symbol hashes
+- projected slices
+- search features
+
+The point is not to build a giant graph for its own sake. The point is to serve
+the right code at the right time and to know what a write touches.
+
+The final context system should answer:
+
+- "show me this symbol"
+- "show me callers and callees"
+- "show me related tests"
+- "show me the stale/fresh state"
+- "show me what another agent is already editing"
+- "show me only what changed since I last read"
+
+## Checked Writes
+
+In Anchor, agents should not treat the file system as a raw scratchpad.
+
+The final write path should be:
+
+```text
+agent proposes change
+Anchor validates target
+Anchor checks source freshness
+Anchor checks lock ownership
+Anchor applies change
+Anchor reindexes affected files
+Anchor records the event
+Anchor returns structured result
+```
+
+This creates a narrow waist between agents and the repo. Different agents can
+have different frontends, but the write path remains controlled.
+
+## Multi-Agent Coordination
+
+Anchor is built for more than one agent.
+
+A single developer may run multiple agents. A team may have several developers,
+each with their own agent sessions. Without coordination, agents can overwrite
+each other or waste work by solving the same task.
+
+Anchor coordination is based on:
+
+- unique agent/session owner IDs
+- symbol and file locks
+- shared task/session state
+- stale-context detection
+- write ordering
+- conflict reporting
+
+The final team version should make this visible:
+
+```text
+agent-a owns src/auth.rs:login
+agent-b owns src/billing.rs:create_invoice
+agent-c is blocked on src/auth.rs:login
+CI session is verifying agent-b output
+```
+
+This is one of the places where Anchor becomes more than local tooling. It
+becomes the coordination layer for parallel AI labor.
+
+## Git-Like, But Not Git
+
+Anchor uses Git-like thinking:
+
+- content-addressed objects
+- hashes for source and slices
+- indexes
+- append-only event records
+- projections
+- safe handoff points
+
+But Anchor does not need to copy Git's user model:
+
+- no separate commit history inside Anchor
+- no branch/merge replacement
+- no trying to be source control
+
+Git stores accepted project history. Anchor manages agent execution before and
+around that history.
+
+The relationship is:
+
+```text
+Anchor governs agent work
+Git records accepted source history
+```
+
+## Store Model
+
+The final `.anchor/` store should contain:
 
 ```text
 .anchor/
   objects/
-    parses/
+    contexts/
     slices/
     patches/
+    commands/
+    test-logs/
   index/
     paths.json
     symbols.json
     calls.json
+  sessions/
   locks/
-    ranges/
-  projections/
   writes/
+  events/
+    events.jsonl
+  attestations/
 ```
 
-The store is Git-like because source states and slices are identified with
-hashes:
+Content-addressed storage matters because unchanged context, patches, and logs
+should not be duplicated. It also makes provenance stronger: each event can point
+to immutable content hashes.
 
-- `PathEntry.source_hash`: hash of a source file.
-- `SymbolEntry.source_hash`: source version the symbol came from.
-- `SymbolEntry.slice_hash`: hash of the extracted symbol body.
-- `Projection.prefix_hash` and `Projection.suffix_hash`: hash boundaries around
-  a projected symbol.
-- `object_path(kind, hash)`: maps a SHA256 hash into a content-addressed path.
+## Read Flow
 
-The current object directories exist, but the main active data path is the JSON
-index plus projections.
-
-## Build
-
-`anchor build` walks the repo with `.gitignore` awareness, reads supported files,
-extracts symbols and calls, then writes:
+Final read flow:
 
 ```text
-.anchor/index/paths.json
-.anchor/index/symbols.json
-.anchor/index/calls.json
+agent asks for context
+Anchor resolves query through index
+Anchor checks cache and freshness
+Anchor returns focused symbol/context bundle
+Anchor records what was shown
 ```
 
-Build runs extraction in parallel, then writes the indexes sequentially to avoid
-index races.
+This gives the agent enough code to reason without forcing it to scan large
+files. It also lets Anchor later explain what information the agent had before a
+write.
 
-Unsupported files are skipped. Text/config/blob-like files can still be indexed
-through the blob extractor where supported.
+## Write Flow
 
-## What Gets Indexed
-
-For source files, Anchor extracts:
-
-- symbols: functions, methods, classes, structs, modules, constants, etc.
-- imports
-- simple caller -> callee relationships
-- API-like route/client call information where the parser supports it
-- semantic search features from names, parent scopes, kinds, and paths
-
-Supported source languages in the current parser include:
-
-- Rust
-- Python
-- JavaScript
-- TypeScript / TSX
-- Go
-- Java
-- C#
-- Ruby
-- C++
-- Swift
-
-The parser uses tree-sitter for structured source extraction.
-
-## Indexes
-
-### paths.json
-
-Stores file-level state:
+Final write flow:
 
 ```text
-path
-source_hash
-bytes
+agent submits write request
+Anchor checks target symbol/file
+Anchor checks source hash
+Anchor acquires lock
+Anchor applies change
+Anchor updates index
+Anchor records event
+Anchor releases or transfers lock
 ```
 
-### symbols.json
-
-Stores symbol-level state:
+In cloud/team mode, this can become a reviewable transaction rather than an
+immediate local write:
 
 ```text
-path
-source_hash
-name
-kind
-line_start
-line_end
-slice_hash
-features
+agent proposed patch -> Anchor verification -> human/team approval -> apply
 ```
 
-This is the index used by `anchor search`, `anchor context`, and
-`anchor edit --symbol`.
+## Verification Flow
 
-### calls.json
+Anchor should know what was changed and what should be checked.
 
-Stores lightweight call relationships:
+Verification can include:
+
+- formatting
+- unit tests
+- type checks
+- targeted tests
+- dependency impact checks
+- security/policy checks
+- full fallback checks when impact is unknown
+
+Anchor should not pretend impact analysis is perfect. The safe rule is:
 
 ```text
-caller_symbol -> [callee_symbol, ...]
+known impact -> targeted checks
+unknown impact -> broader checks
 ```
 
-This is not a full graph database. It is a practical call index used for context
-and bundle mode.
+## Cloud / Team Flow
 
-## Search
-
-`anchor search` uses the symbol index.
-
-Search has two paths:
-
-1. Basic substring search over symbol names and paths.
-2. Hybrid BM25-style search over tokenized symbol features.
-
-Feature tokenization splits names like:
+Final cloud/team Anchor:
 
 ```text
-LockManager -> lock, manager
-try_acquire_symbol -> try, acquire, symbol
+team connects repo
+Anchor builds index
+developers start agent sessions
+sessions claim work
+Anchor coordinates locks and context
+agents submit writes
+Anchor records provenance
+checks run
+team reviews
+accepted changes land in Git
 ```
 
-This matters for agents because they often know intent before exact names. The
-agent can search `lock manager` and still find `LockManager`.
+The cloud version should make the invisible parts visible:
 
-## Context
+- active sessions
+- claimed symbols/files
+- blocked agents
+- changed areas
+- test status
+- risk status
+- provenance timeline
+- handoff to PR/commit
 
-`anchor context <symbol>` searches for matching symbols, creates a projection for
-each result, and prints focused code.
+## Where Zev Fits
 
-Projection creation verifies that the source file still matches the symbol's
-recorded `source_hash`. If the file changed since indexing, projection creation
-fails instead of returning stale line ranges.
+Zev is not Anchor itself.
 
-The context output includes:
+Anchor controls execution. Zev changes the representation inside that execution.
 
-- symbol name
-- kind
-- file
-- starting line
-- callers from `calls.json`
-- callees from `calls.json`
-- code slice
-
-## Context Cache
-
-Anchor has a persistent cache under `.anchor/`.
-
-If a symbol's `slice_hash` has already been returned and has not changed, Anchor
-can return a cached marker instead of resending the same code again.
-
-That is useful for long-running agent sessions because unchanged code does not
-need to consume tokens repeatedly.
-
-The cache is content-based. If the symbol body changes, the `slice_hash` changes
-and Anchor sends the new content.
-
-## Bundle Mode
-
-`anchor context <symbol> --bundle` includes selected neighboring callees from the
-call index.
-
-The current behavior is:
-
-1. Show the requested symbol context.
-2. Read callees from `calls.json`.
-3. Add selected project-defined callees that were not already shown.
-
-Bundle mode is a practical context optimization. It reduces repeated
-one-symbol-at-a-time lookups when an agent needs immediate local neighborhood
-context.
-
-## Write Path
-
-Anchor has two current write commands.
-
-### anchor write
+The Zev layer should eventually sit here:
 
 ```text
-anchor write <path> <content>
+source code
+  -> source-to-Zev
+  -> Anchor context/session/write flow
+  -> Zev-to-source
+  -> official source code
 ```
 
-This creates or overwrites a whole file.
+The intended effect:
 
-Current behavior:
+- fewer tokens per symbol
+- more context in the model window
+- cleaner writes from agents
+- language-neutral reasoning
+- easier training data for smaller coding models
 
-1. Resolve the path under the selected root.
-2. Acquire a file-level lock through lockd if available.
-3. Create parent directories if needed.
-4. Write the file.
-5. Reindex the changed file.
-6. Print a machine-readable result.
+Anchor does not depend on Zev to be useful. Zev makes Anchor stronger.
 
-### anchor edit
+## Current Implementation Status
 
-Pattern mode:
+The current codebase implements the local CLI foundation:
 
-```text
-anchor edit <path> --action replace --pattern <old> --content <new>
-anchor edit <path> --action insert --pattern <marker> --content <new>
-anchor edit <path> --action delete --pattern <old>
-```
+- `anchor build`
+- `anchor search`
+- `anchor context`
+- `anchor context --bundle`
+- `anchor status`
+- `anchor write`
+- `anchor edit`
+- `anchor edit --symbol`
+- content hashes
+- path/symbol/call indexes
+- projections with source-hash validation
+- persistent context cache
+- lockd client
+- automatic reindex after writes
+- initial execution event log for context, write/edit, and locks
+- compact status signals from the event log
+- multi-agent conflict regression tests
 
-Symbol mode:
+The current codebase does not yet implement:
 
-```text
-anchor edit <path> --symbol <name> --content <new-symbol-source>
-```
+- cloud/team service
+- session dashboard
+- full production provenance receipts
+- `anchor trace`
+- `anchor replay`
+- `anchor attest`
+- production fail-closed agent mode
+- Zev
 
-Symbol mode is the more agent-relevant path.
+The current local foundation is enough to prove the product direction: Anchor can
+sit in the agent read/write path and control context, locks, writes, and index
+freshness.
 
-Current symbol edit behavior:
+## Contributor Mental Model
 
-1. Load `.anchor/index/symbols.json`.
-2. Find the exact symbol by repo-relative path and name.
-3. Create a projection and verify the source hash is still current.
-4. Acquire a symbol-level lock through lockd if available.
-5. Replace only the symbol's indexed line range.
-6. Reindex the changed file.
-7. Print a machine-readable result.
+When adding to Anchor, ask:
 
-This gives agents a direct symbol write path without manually calculating line
-ranges.
+1. Does this help agents read less but understand more?
+2. Does this make writes safer or more controlled?
+3. Does this improve multi-agent coordination?
+4. Does this leave evidence for review, replay, or audit?
+5. Does this fit the future cloud/team execution harness?
 
-## Locking
+If the answer is no, it may be ordinary code tooling, but it may not belong in
+Anchor.
 
-Anchor has two lock implementations:
+## One-Line Vision
 
-1. In-process `LockManager`.
-2. External `anchor-lockd` Unix socket daemon.
-
-The CLI write path currently uses `anchor-lockd` through the Rust lockd client.
-
-The lock daemon uses keys like:
-
-```text
-(symbol, path, owner)
-```
-
-For file-level writes, the symbol is:
-
-```text
-__file__
-```
-
-For symbol-level writes, Anchor hashes the `(path, symbol)` pair into a lockd-safe
-symbol name:
-
-```text
-sym:<sha256>
-```
-
-That avoids lockd validation problems for source symbols with characters that
-are not allowed in lock names.
-
-Agent/session ownership comes from:
-
-```text
-ANCHOR_AGENT_ID
-```
-
-If the variable is absent, Anchor generates a process-local owner ID.
-
-## Current Lock Guarantees
-
-What is proven by tests:
-
-- the same symbol lock blocks a different agent owner
-- a file lock blocks a different agent owner
-- a different symbol can still be edited while another symbol in the same file is
-  locked
-- same-owner lock requests are allowed by lockd
-- lock owner IDs are normalized into lockd-safe strings
-
-Important limitation:
-
-If `anchor-lockd` is unavailable, the current CLI write path does not hard-fail.
-It continues without a cross-process lock. That means lock safety is only a hard
-guarantee when lockd is running and reachable.
-
-This is the next important production decision: either keep fail-open for local
-developer convenience, or make agent-mode writes fail-closed when lockd is not
-available.
-
-## Reindex After Write
-
-After successful `anchor write` or `anchor edit`, Anchor calls
-`upsert_symbols_for_path` on the changed file.
-
-That updates:
-
-- path hash
-- symbol line ranges
-- symbol slice hashes
-- symbol names if a write renamed a symbol
-
-This matters because stale context is one of the main ways coding agents make bad
-edits. Anchor's write path keeps the index fresh after accepted changes.
-
-## What Anchor Is Right Now
-
-Anchor is currently:
-
-- a working CLI prototype
-- a symbol and call indexer
-- a focused context provider
-- a checked write path
-- a symbol-level edit path
-- a lockd-aware multi-agent coordination path
-- a reindex-after-write loop
-
-Anchor is not currently:
-
-- an MCP server
-- a full graph database
-- a cloud/team service
-- a complete session manager
-- a complete write audit UI
-- a Zev runtime
-- a production-enforced sandbox
-
-## What Still Needs Work
-
-Before calling Anchor a production-grade execution harness, these pieces need to
-be finished:
-
-1. Fail-closed lock mode for agent writes when lockd is unavailable.
-2. `anchor status` to show session, lock, index, and cache state.
-3. First-class write logs exposed through CLI.
-4. Stronger multi-agent end-to-end tests with real lockd.
-5. Install/adapter wiring for Codex, Claude Code, Cursor, and OpenCode.
-6. Clear cloud/team session protocol if the hosted version is built.
-
-The strongest current foundation is the controlled read/write loop:
-
-```text
-build -> search/context -> lock -> write/edit -> reindex
-```
-
-That loop is what makes Anchor more than a code indexer.
-
-## One-Line Pitch
-
-Anchor is a CLI-first execution harness for coding agents: it gives agents
-focused symbol context, checked writes, automatic reindexing, and lock-aware
-coordination so multiple agent sessions can work in the same codebase with less
-blind reading and fewer write conflicts.
+Anchor is the execution control plane for AI coding agents: it coordinates
+context, locks, writes, verification, provenance, and team handoff so humans can
+delegate real repository work to agents without losing control.
