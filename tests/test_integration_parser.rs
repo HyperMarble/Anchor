@@ -1,5 +1,4 @@
 use anchor::parser::{extract_file, NodeKind};
-use anchor::AnchorError;
 use std::path::PathBuf;
 
 #[test]
