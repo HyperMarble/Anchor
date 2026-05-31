@@ -113,6 +113,44 @@ benchmark/run_deepswe_claude_baseline_colima.sh python-statemachine-state-data-s
 
 Use this as the fair baseline for the Anchor-assisted run.
 
+### `run_deepswe_pier_claude_baseline_colima.sh`
+
+Runs a real DeepSWE task through Pier with Claude Code and no Anchor harness.
+
+Pier is the DeepSWE-recommended runner for CLI agents because it is Harbor-compatible but supports agent network allowlists.
+
+Run:
+
+```bash
+benchmark/run_deepswe_pier_claude_baseline_colima.sh python-statemachine-state-data-scoping
+```
+
+Output goes under:
+
+```text
+/Volumes/Hak_SSD/anchor-benchmark-work/pier-jobs
+```
+
+### `run_deepswe_pier_anchor_claude_colima.sh`
+
+Runs the same Pier/Claude path with Anchor mounted and injected through Pier's prompt template support.
+
+It mounts:
+
+- Linux `anchor` binary at `/usr/local/bin/anchor`
+- Anchor benchmark harness at `/anchor-harness`
+- hook trace output at `/anchor-traces`
+
+It writes Anchor receipt/status/trace/gate artifacts into Pier's trial artifacts directory.
+
+Run:
+
+```bash
+benchmark/run_deepswe_pier_anchor_claude_colima.sh python-statemachine-state-data-scoping
+```
+
+Use this as the preferred current real-agent path. The older Harbor scripts are kept for compatibility.
+
 ### `collect_deepswe_compare.py`
 
 Collects one baseline job and one Anchor job into a single JSON comparison.
@@ -125,6 +163,16 @@ python3 benchmark/collect_deepswe_compare.py \
   --anchor-job /Volumes/Hak_SSD/anchor-benchmark-work/harbor-jobs/<anchor-job> \
   --anchor-trace /Volumes/Hak_SSD/anchor-benchmark-work/traces/<trace-dir>/claude-anchor-tools.jsonl \
   --anchor-artifacts /Volumes/Hak_SSD/anchor-benchmark-work/artifacts/<artifact-dir>
+```
+
+For Pier runs, pass the printed Pier job directories. The collector also searches nested Pier artifact folders:
+
+```bash
+python3 benchmark/collect_deepswe_compare.py \
+  --baseline-job /Volumes/Hak_SSD/anchor-benchmark-work/pier-jobs/<baseline-job> \
+  --anchor-job /Volumes/Hak_SSD/anchor-benchmark-work/pier-jobs/<anchor-job> \
+  --anchor-trace /Volumes/Hak_SSD/anchor-benchmark-work/traces/<trace-dir>/claude-anchor-tools.jsonl \
+  --anchor-artifacts /Volumes/Hak_SSD/anchor-benchmark-work/pier-jobs/<anchor-job>
 ```
 
 ### `current_anchor_probe.sh`
@@ -213,7 +261,6 @@ The real-task Colima runner can also prove:
 
 The current Anchor version cannot fully measure:
 
-- execution receipts
 - rollback/replay
 - full quality-kernel improvement
 - team/cloud coordination
