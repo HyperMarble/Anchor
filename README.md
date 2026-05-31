@@ -3,9 +3,10 @@
 Agent execution harness for coding agents working inside real codebases and
 workspaces.
 
-Anchor gives agents a focused context path and a checked write path for project
-source. The goal is to make agent work less blind: read the right code, edit
-through explicit operations, and coordinate work across agent sessions.
+Anchor gives agents a focused context path, a checked write path, lock-aware
+coordination, and a compact execution record. The goal is to make agent work
+less blind: read the right code, edit through explicit operations, verify work,
+and leave evidence for humans and later agents.
 
 Status: early prototype. Anchor focuses on context, writes, and coordination for
 coding agents.
@@ -27,9 +28,13 @@ cargo build --release
 ## Core Commands
 
 ```bash
+anchor build                 # index the workspace
 anchor context <name>        # load focused code context
 anchor write <path> <text>   # create or overwrite a file
 anchor edit <path> --action replace --pattern <old> --content <new>
+anchor edit <path> --symbol <name> --content <replacement>
+anchor check -- <command>    # run and record a verification command
+anchor status                # summarize execution/provenance signals
 ```
 
 ## What It Provides
@@ -37,6 +42,8 @@ anchor edit <path> --action replace --pattern <old> --content <new>
 - focused context for coding agents
 - checked write/edit operations
 - session and lock-aware agent workflow
+- execution event log for reads, writes, locks, and checks
+- status signals for context use, edits, conflicts, errors, and verification
 - support for local and cloud-backed agent sessions
 - tree-sitter based source understanding across common languages
 
