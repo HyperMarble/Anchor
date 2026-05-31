@@ -34,6 +34,7 @@ const HELP_TEXT: &str = "
 
 Start here:
   context <sym> [sym2…]  Code + callers + callees
+  status                  Session quality/provenance signals
   search <q> [q2…]      Find symbols
   map [scope]           Codebase map / zoom into module
   write <path> <content> Create/overwrite file
@@ -113,6 +114,9 @@ pub enum Commands {
         #[arg(short, long)]
         content: Option<String>,
     },
+
+    /// Show compact execution/provenance status
+    Status,
 
     /// Index the codebase into .anchor/ store
     Build,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::Path;
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::storage::content_hash;
@@ -62,6 +62,31 @@ pub fn append(anchor_root: &Path, event: &ExecutionEvent) -> anyhow::Result<()> 
     let line = serde_json::to_string(event)?;
     writeln!(file, "{line}")?;
     Ok(())
+}
+
+pub fn log_path(anchor_root: &Path) -> PathBuf {
+    anchor_root.join("events").join("events.jsonl")
+}
+
+pub fn load(anchor_root: &Path) -> anyhow::Result<Vec<ExecutionEvent>> {
+    let path = log_path(anchor_root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut events = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        events.push(serde_json::from_str(&line)?);
+    }
+
+    Ok(events)
 }
 
 pub fn record(

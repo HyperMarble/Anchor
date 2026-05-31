@@ -94,6 +94,8 @@ fn run(cli: Cli) -> Result<()> {
                 other => bail!("unknown edit action: {}", other),
             }
         }
+
+        Commands::Status => cmd_status(&root),
     }
 }
 
@@ -503,6 +505,90 @@ fn cmd_map(root: &Path, scope: Option<&str>) -> Result<()> {
         println!("  </module>");
     }
     println!("</map>");
+    Ok(())
+}
+
+fn cmd_status(root: &Path) -> Result<()> {
+    use std::collections::BTreeSet;
+
+    let store = open_store(root)?;
+    let events = events::load(store.anchor_root())?;
+
+    let mut context_reads = 0usize;
+    let mut cache_hits = 0usize;
+    let mut edits_ok = 0usize;
+    let mut writes_ok = 0usize;
+    let mut errors = 0usize;
+    let mut lock_blocks = 0usize;
+    let mut paths = BTreeSet::new();
+    let mut symbols = BTreeSet::new();
+
+    for event in &events {
+        if let Some(path) = &event.path {
+            paths.insert(path.clone());
+        }
+        if let Some(symbol) = &event.symbol {
+            symbols.insert(symbol.clone());
+        }
+        if event.status == "error" {
+            errors += 1;
+        }
+
+        match (event.event_type.as_str(), event.status.as_str()) {
+            ("context.read", "ok") => context_reads += 1,
+            ("context.read", "cached") => {
+                context_reads += 1;
+                cache_hits += 1;
+            }
+            ("edit.apply", "ok") => edits_ok += 1,
+            ("write.apply", "ok") => writes_ok += 1,
+            ("lock.acquire", "blocked") => lock_blocks += 1,
+            _ => {}
+        }
+    }
+
+    println!("<status>");
+    println!("<events>{}</events>", events.len());
+    println!("<context_reads>{context_reads}</context_reads>");
+    println!("<cache_hits>{cache_hits}</cache_hits>");
+    println!("<edits>{edits_ok}</edits>");
+    println!("<writes>{writes_ok}</writes>");
+    println!("<lock_blocks>{lock_blocks}</lock_blocks>");
+    println!("<errors>{errors}</errors>");
+    println!("<paths>{}</paths>", paths.len());
+    for path in &paths {
+        println!("  <path>{path}</path>");
+    }
+    println!("<symbols>{}</symbols>", symbols.len());
+    for symbol in &symbols {
+        println!("  <symbol>{symbol}</symbol>");
+    }
+    println!("<signals>");
+    println!(
+        "  <signal name=\"context_used\" status=\"{}\"/>",
+        if context_reads > 0 { "ok" } else { "missing" }
+    );
+    println!(
+        "  <signal name=\"edits_applied\" status=\"{}\"/>",
+        if edits_ok + writes_ok > 0 {
+            "ok"
+        } else {
+            "missing"
+        }
+    );
+    println!(
+        "  <signal name=\"lock_conflicts\" status=\"{}\" count=\"{}\"/>",
+        if lock_blocks == 0 { "ok" } else { "blocked" },
+        lock_blocks
+    );
+    println!(
+        "  <signal name=\"errors\" status=\"{}\" count=\"{}\"/>",
+        if errors == 0 { "ok" } else { "failed" },
+        errors
+    );
+    println!("</signals>");
+    println!("</status>");
+
     Ok(())
 }
 
