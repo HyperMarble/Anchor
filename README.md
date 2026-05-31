@@ -35,6 +35,7 @@ anchor edit <path> --action replace --pattern <old> --content <new>
 anchor edit <path> --symbol <name> --content <replacement>
 anchor check -- <command>    # run and record a verification command
 anchor status                # summarize execution/provenance signals
+anchor trace                 # show recent execution events
 ```
 
 ## What It Provides
@@ -44,6 +45,7 @@ anchor status                # summarize execution/provenance signals
 - session and lock-aware agent workflow
 - execution event log for reads, writes, locks, and checks
 - status signals for context use, edits, conflicts, errors, and verification
+- trace output for recent agent execution events
 - support for local and cloud-backed agent sessions
 - tree-sitter based source understanding across common languages
 
