@@ -37,6 +37,7 @@ Start here:
   status                  Session quality/provenance signals
   trace                   Recent execution events
   receipt                 Machine-readable execution receipt
+  gate                    Enforce quality score threshold
   check -- <cmd>          Run and record a verification command
   search <q> [q2…]      Find symbols
   map [scope]           Codebase map / zoom into module
@@ -130,6 +131,13 @@ pub enum Commands {
 
     /// Print a machine-readable execution receipt
     Receipt,
+
+    /// Enforce a minimum execution quality score
+    Gate {
+        /// Minimum acceptable quality score
+        #[arg(long, default_value = "85")]
+        min_score: u8,
+    },
 
     /// Run a verification command and record the result
     Check {

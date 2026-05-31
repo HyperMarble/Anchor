@@ -101,6 +101,8 @@ fn run(cli: Cli) -> Result<()> {
 
         Commands::Receipt => cmd_receipt(&root),
 
+        Commands::Gate { min_score } => cmd_gate(&root, min_score),
+
         Commands::Check { command } => cmd_check(&root, &command),
     }
 }
@@ -606,6 +608,36 @@ fn cmd_receipt(root: &Path) -> Result<()> {
 
     println!("{}", serde_json::to_string_pretty(&receipt)?);
     Ok(())
+}
+
+fn cmd_gate(root: &Path, min_score: u8) -> Result<()> {
+    let store = open_store(root)?;
+    let events = events::load(store.anchor_root())?;
+    let summary = events::EventSummary::from_events(&events);
+    let quality = summary.quality_profile();
+
+    println!("<gate>");
+    println!("<score>{}</score>", quality.score);
+    println!("<min_score>{min_score}</min_score>");
+    println!("<risk>{}</risk>", quality.risk);
+    println!("<flags>{}</flags>", quality.flags.len());
+    for flag in &quality.flags {
+        println!("  <flag>{flag}</flag>");
+    }
+
+    if quality.score >= min_score {
+        println!("<status>ok</status>");
+        println!("</gate>");
+        Ok(())
+    } else {
+        println!("<status>failed</status>");
+        println!("</gate>");
+        bail!(
+            "quality gate failed: score {} below {}",
+            quality.score,
+            min_score
+        )
+    }
 }
 
 fn cmd_check(root: &Path, command: &[String]) -> Result<()> {
