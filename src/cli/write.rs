@@ -9,6 +9,7 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::lock::lockd;
+use crate::events;
 use crate::storage::{content_hash, AnchorStore};
 use crate::write::{
     batch_replace_all, create_file, insert_after, replace_all, replace_range, BatchWriteResult,
@@ -94,6 +95,16 @@ pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
     match create_file(&full_path, content) {
         Ok(result) => {
             reindex_after_write(root, &full_path)?;
+            if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                events::record(
+                    store.anchor_root(),
+                    "write.apply",
+                    Some(lock_path(root, &full_path, path)),
+                    None,
+                    "ok",
+                    Some("created".into()),
+                );
+            }
             println!("<result>");
             println!("<path>{}</path>", result.path);
             println!("<status>created</status>");
@@ -102,6 +113,16 @@ pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
             println!("</result>");
         }
         Err(e) => {
+            if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                events::record(
+                    store.anchor_root(),
+                    "write.apply",
+                    Some(lock_path(root, &full_path, path)),
+                    None,
+                    "error",
+                    Some(e.to_string()),
+                );
+            }
             println!("<result>");
             println!("<status>error</status>");
             println!("<message>{}</message>", e);
@@ -119,6 +140,16 @@ pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<(
     match insert_after(&full_path, pattern, content) {
         Ok(result) => {
             reindex_after_write(root, &full_path)?;
+            if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                events::record(
+                    store.anchor_root(),
+                    "edit.apply",
+                    Some(lock_path(root, &full_path, path)),
+                    None,
+                    "ok",
+                    Some("inserted".into()),
+                );
+            }
             println!("<result>");
             println!("<path>{}</path>", result.path);
             println!("<status>inserted</status>");
@@ -127,6 +158,16 @@ pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<(
             println!("</result>");
         }
         Err(e) => {
+            if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                events::record(
+                    store.anchor_root(),
+                    "edit.apply",
+                    Some(lock_path(root, &full_path, path)),
+                    None,
+                    "error",
+                    Some(e.to_string()),
+                );
+            }
             println!("<result>");
             println!("<status>error</status>");
             println!("<message>{}</message>", e);
@@ -158,6 +199,14 @@ pub fn replace_symbol(root: &Path, path: &str, symbol: &str, content: &str) -> R
         content,
     )?;
     reindex_after_write(root, &full_path)?;
+    events::record(
+        store.anchor_root(),
+        "edit.apply",
+        Some(repo_path.clone()),
+        Some(symbol.to_string()),
+        "ok",
+        Some("symbol_replaced".into()),
+    );
 
     println!("<result>");
     println!("<path>{}</path>", result.path);
@@ -188,6 +237,16 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         match replace_all(&paths[0], old, new) {
             Ok(result) => {
                 reindex_after_write(root, &paths[0])?;
+                if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                    events::record(
+                        store.anchor_root(),
+                        "edit.apply",
+                        Some(lock_path(root, &paths[0], pattern)),
+                        None,
+                        "ok",
+                        Some("replaced".into()),
+                    );
+                }
                 let count = result.replacements.unwrap_or(0);
                 println!("<result>");
                 println!("<path>{}</path>", result.path);
@@ -198,6 +257,16 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
                 println!("</result>");
             }
             Err(e) => {
+                if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                    events::record(
+                        store.anchor_root(),
+                        "edit.apply",
+                        Some(lock_path(root, &paths[0], pattern)),
+                        None,
+                        "error",
+                        Some(e.to_string()),
+                    );
+                }
                 println!("<result>");
                 println!("<status>error</status>");
                 println!("<message>{}</message>", e);
@@ -214,6 +283,16 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
         let summary = BatchWriteResult::from_results(results);
         for result in &summary.results {
             reindex_after_write(root, Path::new(&result.path))?;
+            if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+                events::record(
+                    store.anchor_root(),
+                    "edit.apply",
+                    Some(result.path.clone()),
+                    None,
+                    "ok",
+                    Some("batch_replaced".into()),
+                );
+            }
         }
 
         let total_replacements: usize = summary.results.iter().filter_map(|r| r.replacements).sum();

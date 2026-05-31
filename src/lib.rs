@@ -9,6 +9,7 @@ pub mod cache;
 pub mod cli;
 pub mod config;
 pub mod error;
+pub mod events;
 pub mod lock;
 pub mod parser;
 pub mod query;
