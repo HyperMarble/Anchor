@@ -57,6 +57,7 @@ NEW_SYMBOL='def refund_payment(user_id, amount):
 "$ANCHOR_BIN" -r "$REPO_DIR" check -- sh -c 'test -f app.py' > "$WORK_DIR/check.out"
 "$ANCHOR_BIN" -r "$REPO_DIR" status > "$WORK_DIR/status.out"
 "$ANCHOR_BIN" -r "$REPO_DIR" receipt > "$WORK_DIR/receipt.json"
+"$ANCHOR_BIN" -r "$REPO_DIR" gate --min-score 85 > "$WORK_DIR/gate.out"
 
 raw_bytes="$(wc -c < "$REPO_DIR/app.py" | tr -d ' ')"
 context_bytes="$(wc -c < "$WORK_DIR/context_1.out" | tr -d ' ')"
@@ -93,7 +94,8 @@ cat > "$RESULT_FILE" <<JSON
     "auto_reindex_after_edit",
     "execution_events",
     "check_events",
-    "status_signals"
+    "status_signals",
+    "quality_gate"
   ],
   "raw_file_bytes_after_edit": $raw_bytes,
   "context_bytes_before_edit": $context_bytes,

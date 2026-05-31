@@ -39,6 +39,12 @@ anchor check -- <test-or-build-command>
 
 Use `anchor status`, `anchor trace`, or `anchor receipt` when you need to inspect what Anchor has recorded.
 
+Before finishing, run:
+
+```bash
+anchor gate --min-score 85
+```
+
 ## Multi-Agent Mode
 
 If the task benefits from parallel investigation, you may use subagents or parallel reasoning where supported.
