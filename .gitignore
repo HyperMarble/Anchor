@@ -210,6 +210,10 @@ __marimo__/
 
 # Anchor internal docs (private)
 success_metrics.md
+dev-docs/zev-anchor-v2-notes.md
+
+# Anchor benchmark outputs
+benchmark/results/
 
 # Vim swap files
 *.swp
