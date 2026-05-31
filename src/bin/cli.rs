@@ -99,6 +99,8 @@ fn run(cli: Cli) -> Result<()> {
 
         Commands::Trace { limit } => cmd_trace(&root, limit),
 
+        Commands::Receipt => cmd_receipt(&root),
+
         Commands::Check { command } => cmd_check(&root, &command),
     }
 }
@@ -513,74 +515,40 @@ fn cmd_map(root: &Path, scope: Option<&str>) -> Result<()> {
 }
 
 fn cmd_status(root: &Path) -> Result<()> {
-    use std::collections::BTreeSet;
-
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
-
-    let mut context_reads = 0usize;
-    let mut cache_hits = 0usize;
-    let mut edits_ok = 0usize;
-    let mut writes_ok = 0usize;
-    let mut checks_ok = 0usize;
-    let mut checks_failed = 0usize;
-    let mut errors = 0usize;
-    let mut lock_blocks = 0usize;
-    let mut paths = BTreeSet::new();
-    let mut symbols = BTreeSet::new();
-
-    for event in &events {
-        if let Some(path) = &event.path {
-            paths.insert(path.clone());
-        }
-        if let Some(symbol) = &event.symbol {
-            symbols.insert(symbol.clone());
-        }
-        if event.status == "error" {
-            errors += 1;
-        }
-
-        match (event.event_type.as_str(), event.status.as_str()) {
-            ("context.read", "ok") => context_reads += 1,
-            ("context.read", "cached") => {
-                context_reads += 1;
-                cache_hits += 1;
-            }
-            ("edit.apply", "ok") => edits_ok += 1,
-            ("write.apply", "ok") => writes_ok += 1,
-            ("check.run", "ok") => checks_ok += 1,
-            ("check.run", "error") => checks_failed += 1,
-            ("lock.acquire", "blocked") => lock_blocks += 1,
-            _ => {}
-        }
-    }
+    let summary = events::EventSummary::from_events(&events);
 
     println!("<status>");
-    println!("<events>{}</events>", events.len());
-    println!("<context_reads>{context_reads}</context_reads>");
-    println!("<cache_hits>{cache_hits}</cache_hits>");
-    println!("<edits>{edits_ok}</edits>");
-    println!("<writes>{writes_ok}</writes>");
-    println!("<checks_ok>{checks_ok}</checks_ok>");
-    println!("<checks_failed>{checks_failed}</checks_failed>");
-    println!("<lock_blocks>{lock_blocks}</lock_blocks>");
-    println!("<errors>{errors}</errors>");
-    println!("<paths>{}</paths>", paths.len());
-    for path in &paths {
+    println!("<events>{}</events>", summary.event_count);
+    println!("<context_reads>{}</context_reads>", summary.context_reads);
+    println!("<cache_hits>{}</cache_hits>", summary.cache_hits);
+    println!("<edits>{}</edits>", summary.edits_ok);
+    println!("<writes>{}</writes>", summary.writes_ok);
+    println!("<checks_ok>{}</checks_ok>", summary.checks_ok);
+    println!("<checks_failed>{}</checks_failed>", summary.checks_failed);
+    println!("<lock_blocks>{}</lock_blocks>", summary.lock_blocks);
+    println!("<errors>{}</errors>", summary.errors);
+    println!("<paths>{}</paths>", summary.paths.len());
+    for path in &summary.paths {
         println!("  <path>{path}</path>");
     }
-    println!("<symbols>{}</symbols>", symbols.len());
-    for symbol in &symbols {
+    println!("<symbols>{}</symbols>", summary.symbols.len());
+    for symbol in &summary.symbols {
         println!("  <symbol>{symbol}</symbol>");
     }
     println!("<signals>");
     println!(
         "  <signal name=\"context_used\" status=\"{}\"/>",
-        if context_reads > 0 { "ok" } else { "missing" }
+        if summary.context_reads > 0 {
+            "ok"
+        } else {
+            "missing"
+        }
     );
     println!(
         "  <signal name=\"edits_applied\" status=\"{}\"/>",
-        if edits_ok + writes_ok > 0 {
+        if summary.edits_ok + summary.writes_ok > 0 {
             "ok"
         } else {
             "missing"
@@ -588,23 +556,46 @@ fn cmd_status(root: &Path) -> Result<()> {
     );
     println!(
         "  <signal name=\"lock_conflicts\" status=\"{}\" count=\"{}\"/>",
-        if lock_blocks == 0 { "ok" } else { "blocked" },
-        lock_blocks
+        if summary.lock_blocks == 0 {
+            "ok"
+        } else {
+            "blocked"
+        },
+        summary.lock_blocks
     );
     println!(
         "  <signal name=\"checks\" status=\"{}\" passed=\"{}\" failed=\"{}\"/>",
-        if checks_failed == 0 { "ok" } else { "failed" },
-        checks_ok,
-        checks_failed
+        if summary.checks_failed == 0 {
+            "ok"
+        } else {
+            "failed"
+        },
+        summary.checks_ok,
+        summary.checks_failed
     );
     println!(
         "  <signal name=\"errors\" status=\"{}\" count=\"{}\"/>",
-        if errors == 0 { "ok" } else { "failed" },
-        errors
+        if summary.errors == 0 { "ok" } else { "failed" },
+        summary.errors
     );
     println!("</signals>");
     println!("</status>");
 
+    Ok(())
+}
+
+fn cmd_receipt(root: &Path) -> Result<()> {
+    let store = open_store(root)?;
+    let events = events::load(store.anchor_root())?;
+    let summary = events::EventSummary::from_events(&events);
+    let receipt = serde_json::json!({
+        "schema": "anchor.receipt.v1",
+        "repo_root": store.repo_root().to_string_lossy(),
+        "event_log": events::log_path(store.anchor_root()).to_string_lossy(),
+        "summary": summary,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&receipt)?);
     Ok(())
 }
 

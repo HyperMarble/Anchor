@@ -36,6 +36,7 @@ Start here:
   context <sym> [sym2…]  Code + callers + callees
   status                  Session quality/provenance signals
   trace                   Recent execution events
+  receipt                 Machine-readable execution receipt
   check -- <cmd>          Run and record a verification command
   search <q> [q2…]      Find symbols
   map [scope]           Codebase map / zoom into module
@@ -126,6 +127,9 @@ pub enum Commands {
         #[arg(short, long, default_value = "20")]
         limit: usize,
     },
+
+    /// Print a machine-readable execution receipt
+    Receipt,
 
     /// Run a verification command and record the result
     Check {

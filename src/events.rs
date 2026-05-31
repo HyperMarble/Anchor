@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -17,6 +18,70 @@ pub struct ExecutionEvent {
     pub symbol: Option<String>,
     pub status: String,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EventSummary {
+    pub event_count: usize,
+    pub context_reads: usize,
+    pub cache_hits: usize,
+    pub edits_ok: usize,
+    pub writes_ok: usize,
+    pub checks_ok: usize,
+    pub checks_failed: usize,
+    pub errors: usize,
+    pub lock_blocks: usize,
+    pub paths: Vec<String>,
+    pub symbols: Vec<String>,
+    pub sessions: Vec<String>,
+    pub agents: Vec<String>,
+}
+
+impl EventSummary {
+    pub fn from_events(events: &[ExecutionEvent]) -> Self {
+        let mut summary = Self {
+            event_count: events.len(),
+            ..Self::default()
+        };
+        let mut paths = BTreeSet::new();
+        let mut symbols = BTreeSet::new();
+        let mut sessions = BTreeSet::new();
+        let mut agents = BTreeSet::new();
+
+        for event in events {
+            sessions.insert(event.session_id.clone());
+            agents.insert(event.agent_id.clone());
+            if let Some(path) = &event.path {
+                paths.insert(path.clone());
+            }
+            if let Some(symbol) = &event.symbol {
+                symbols.insert(symbol.clone());
+            }
+            if event.status == "error" {
+                summary.errors += 1;
+            }
+
+            match (event.event_type.as_str(), event.status.as_str()) {
+                ("context.read", "ok") => summary.context_reads += 1,
+                ("context.read", "cached") => {
+                    summary.context_reads += 1;
+                    summary.cache_hits += 1;
+                }
+                ("edit.apply", "ok") => summary.edits_ok += 1,
+                ("write.apply", "ok") => summary.writes_ok += 1,
+                ("check.run", "ok") => summary.checks_ok += 1,
+                ("check.run", "error") => summary.checks_failed += 1,
+                ("lock.acquire", "blocked") => summary.lock_blocks += 1,
+                _ => {}
+            }
+        }
+
+        summary.paths = paths.into_iter().collect();
+        summary.symbols = symbols.into_iter().collect();
+        summary.sessions = sessions.into_iter().collect();
+        summary.agents = agents.into_iter().collect();
+        summary
+    }
 }
 
 impl ExecutionEvent {
