@@ -31,6 +31,13 @@ if ! command -v pier >/dev/null 2>&1; then
   exit 2
 fi
 
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${ANTHROPIC_AUTH_TOKEN:-}" && -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+  echo "Claude Code needs container-visible auth for Pier." >&2
+  echo "Export one of: ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN, CLAUDE_CODE_OAUTH_TOKEN." >&2
+  echo "Local desktop login/keychain auth is not visible inside the DeepSWE container." >&2
+  exit 2
+fi
+
 docker context use colima >/dev/null
 if ! docker info >/dev/null 2>&1; then
   echo "Docker cannot reach the Colima daemon." >&2
@@ -54,6 +61,7 @@ mounts = [
 claude_json = Path.home() / ".claude.json"
 if claude_json.exists():
     mounts.append(f"{claude_json}:/root/.claude.json:ro")
+    mounts.append(f"{claude_json}:/logs/agent/sessions/.claude.json:ro")
 print(json.dumps(mounts))
 PY
 )
@@ -65,6 +73,9 @@ pier run \
   --agent-kwarg "prompt_template_path=$PROMPT_TEMPLATE" \
   --agent-env "ANCHOR_HOOK_MODE=$MODE" \
   --agent-env "ANCHOR_TRACE_DIR=/anchor-traces" \
+  ${ANTHROPIC_API_KEY:+--agent-env "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"} \
+  ${ANTHROPIC_AUTH_TOKEN:+--agent-env "ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN"} \
+  ${CLAUDE_CODE_OAUTH_TOKEN:+--agent-env "CLAUDE_CODE_OAUTH_TOKEN=$CLAUDE_CODE_OAUTH_TOKEN"} \
   --jobs-dir "$JOBS_DIR" \
   --job-name "$JOB_NAME" \
   --n-concurrent 1 \
