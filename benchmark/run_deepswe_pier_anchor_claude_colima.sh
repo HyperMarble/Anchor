@@ -54,6 +54,9 @@ from pathlib import Path
 
 anchor_bin, harness_dir, trace_dir = sys.argv[1:]
 mounts = [
+    {"type": "bind", "source": "${HOST_VERIFIER_LOGS_PATH}", "target": "${ENV_VERIFIER_LOGS_PATH}"},
+    {"type": "bind", "source": "${HOST_AGENT_LOGS_PATH}", "target": "${ENV_AGENT_LOGS_PATH}"},
+    {"type": "bind", "source": "${HOST_ARTIFACTS_PATH}", "target": "${ENV_ARTIFACTS_PATH}"},
     f"{anchor_bin}:/usr/local/bin/anchor:ro",
     f"{harness_dir}:/anchor-harness:ro",
     f"{trace_dir}:/anchor-traces",
@@ -61,7 +64,6 @@ mounts = [
 claude_json = Path.home() / ".claude.json"
 if claude_json.exists():
     mounts.append(f"{claude_json}:/root/.claude.json:ro")
-    mounts.append(f"{claude_json}:/logs/agent/sessions/.claude.json:ro")
 print(json.dumps(mounts))
 PY
 )

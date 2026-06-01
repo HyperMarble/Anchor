@@ -39,11 +39,14 @@ MOUNTS_JSON=$(python3 - <<'PY'
 import json
 from pathlib import Path
 
-mounts = []
+mounts = [
+    {"type": "bind", "source": "${HOST_VERIFIER_LOGS_PATH}", "target": "${ENV_VERIFIER_LOGS_PATH}"},
+    {"type": "bind", "source": "${HOST_AGENT_LOGS_PATH}", "target": "${ENV_AGENT_LOGS_PATH}"},
+    {"type": "bind", "source": "${HOST_ARTIFACTS_PATH}", "target": "${ENV_ARTIFACTS_PATH}"},
+]
 claude_json = Path.home() / ".claude.json"
 if claude_json.exists():
     mounts.append(f"{claude_json}:/root/.claude.json:ro")
-    mounts.append(f"{claude_json}:/logs/agent/sessions/.claude.json:ro")
 print(json.dumps(mounts))
 PY
 )
