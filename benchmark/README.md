@@ -151,6 +151,46 @@ benchmark/run_deepswe_pier_anchor_claude_colima.sh python-statemachine-state-dat
 
 Use this as the preferred current real-agent path. The older Harbor scripts are kept for compatibility.
 
+### `run_deepswe_claude_pair.py`
+
+Runs one DeepSWE task twice with local Claude Code:
+
+- baseline: Claude solves normally
+- anchor: Claude is instructed to use Anchor for context, edits, checks, receipt, and gate
+
+This does not use Pier. Anchor owns the runner and metrics.
+
+The runner prepares each repo from the DeepSWE task image, removes upstream git history, initializes a fresh one-commit repository, and does not copy `solution/` or hidden tests into the agent workspace. After Claude finishes, the runner applies `tests/test.patch` and runs the task verifier inside the DeepSWE Docker image.
+
+Run:
+
+```bash
+python3 benchmark/run_deepswe_claude_pair.py python-statemachine-state-data-scoping
+```
+
+Run only one side:
+
+```bash
+python3 benchmark/run_deepswe_claude_pair.py python-statemachine-state-data-scoping --mode baseline
+python3 benchmark/run_deepswe_claude_pair.py python-statemachine-state-data-scoping --mode anchor
+```
+
+Output goes under:
+
+```text
+/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe
+```
+
+The summary records:
+
+- verifier reward and test exits
+- duration
+- changed files
+- diff size
+- patch bytes
+- Claude tool counts
+- Anchor event count and receipt quality for the Anchor run
+
 ### `collect_deepswe_compare.py`
 
 Collects one baseline job and one Anchor job into a single JSON comparison.
