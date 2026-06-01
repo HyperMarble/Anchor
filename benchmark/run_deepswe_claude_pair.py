@@ -183,6 +183,40 @@ def parse_tool_counts(path: Path) -> dict[str, int]:
     return counts
 
 
+def classify_agent_log(path: Path, exit_code: int) -> dict[str, Any]:
+    status = "ok" if exit_code == 0 else "failed"
+    reason = None
+    rate_limit = None
+    result_text = None
+
+    for line in path.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        if event.get("type") == "rate_limit_event":
+            status = "rate_limited"
+            rate_limit = event.get("rate_limit_info")
+            continue
+
+        if event.get("type") == "result":
+            if event.get("is_error"):
+                reason = event.get("terminal_reason") or event.get("subtype") or "error"
+            if isinstance(event.get("result"), str):
+                result_text = event["result"][:500]
+
+    return {
+        "status": status,
+        "reason": reason,
+        "rate_limit": rate_limit,
+        "result_preview": result_text,
+    }
+
+
 def git_metrics(repo_dir: Path) -> dict[str, Any]:
     changed = run(["git", "diff", "--name-only"], cwd=repo_dir).stdout.splitlines()
     diff = run(["git", "diff", "--binary"], cwd=repo_dir).stdout
@@ -205,6 +239,7 @@ def verify_with_task_image(task: dict[str, Any], repo_dir: Path, logs_dir: Path)
         r'''#!/usr/bin/env bash
 set -uo pipefail
 mkdir -p /logs/verifier /logs/artifacts
+echo "verifier started" > /logs/verifier/preflight.txt
 cd /app || exit 6
 git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
 git diff --binary > /logs/artifacts/model.patch
@@ -243,25 +278,30 @@ fi
     )
     verifier.chmod(0o755)
 
-    run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            f"{repo_dir}:/app",
-            "-v",
-            f"{tests_dir}:/tests:ro",
-            "-v",
-            f"{logs_dir}:/logs",
-            "-v",
-            f"{verifier}:/verify.sh:ro",
-            task["docker_image"],
-            "bash",
-            "/verify.sh",
-        ],
-        check=False,
-    )
+    docker_stdout = logs_dir / "docker-verify.stdout"
+    docker_stderr = logs_dir / "docker-verify.stderr"
+    with docker_stdout.open("w") as out, docker_stderr.open("w") as err:
+        proc = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                f"{repo_dir}:/app",
+                "-v",
+                f"{tests_dir}:/tests:ro",
+                "-v",
+                f"{logs_dir}:/logs",
+                "-v",
+                f"{verifier}:/verify.sh:ro",
+                task["docker_image"],
+                "bash",
+                "/verify.sh",
+            ],
+            text=True,
+            stdout=out,
+            stderr=err,
+        )
 
     reward_path = logs_dir / "verifier" / "reward.txt"
     reward = reward_path.read_text().strip() if reward_path.exists() else "missing"
@@ -271,6 +311,10 @@ fi
         "base_exit": read_optional(logs_dir / "verifier" / "base.exit"),
         "new_exit": read_optional(logs_dir / "verifier" / "new.exit"),
         "model_patch_bytes": file_size(logs_dir / "artifacts" / "model.patch"),
+        "docker_exit": proc.returncode,
+        "preflight": (logs_dir / "verifier" / "preflight.txt").exists(),
+        "stdout_bytes": file_size(docker_stdout),
+        "stderr_bytes": file_size(docker_stderr),
     }
 
 
@@ -286,10 +330,11 @@ def anchor_artifacts(repo_dir: Path, anchor_bin: Path) -> dict[str, Any]:
     anchor_root = repo_dir / ".anchor"
     event_file = anchor_root / "events" / "events.jsonl"
     receipt = None
-    try:
-        receipt = json.loads(run([str(anchor_bin), "-r", str(repo_dir), "receipt"]).stdout)
-    except Exception:
-        receipt = None
+    if anchor_root.exists():
+        try:
+            receipt = json.loads(run([str(anchor_bin), "-r", str(repo_dir), "receipt"]).stdout)
+        except Exception:
+            receipt = None
     return {
         "event_count": len(event_file.read_text().splitlines()) if event_file.exists() else 0,
         "has_anchor_dir": anchor_root.exists(),
@@ -313,8 +358,19 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
     (run_dir / "prompt.txt").write_text(prompt)
 
     agent = run_claude(mode, repo_dir, prompt, run_dir / "claude.jsonl", args.agent_timeout_sec)
+    agent["log"] = classify_agent_log(run_dir / "claude.jsonl", agent["exit_code"])
     metrics = git_metrics(repo_dir)
-    verify = verify_with_task_image(task, repo_dir, logs_dir)
+    if metrics["patch_bytes"] == 0 and agent["exit_code"] != 0:
+        verify = {
+            "reward": "skipped",
+            "passed": False,
+            "base_exit": None,
+            "new_exit": None,
+            "model_patch_bytes": 0,
+            "skip_reason": "agent_failed_without_patch",
+        }
+    else:
+        verify = verify_with_task_image(task, repo_dir, logs_dir)
     tools = parse_tool_counts(run_dir / "claude.jsonl")
     result = {
         "mode": mode,
