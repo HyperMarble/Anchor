@@ -191,6 +191,50 @@ The summary records:
 - Claude tool counts
 - Anchor event count and receipt quality for the Anchor run
 
+### `run_deepswe_codex_pair.py`
+
+Runs one DeepSWE task twice with local Codex:
+
+- baseline: Codex solves normally
+- anchor: Codex is instructed to use Anchor for context, edits, checks, receipt, and gate
+
+This is the direct benchmark for whether Anchor helps Codex itself. It uses the same repo preparation and verifier path as the Claude pair runner: source is copied from the DeepSWE task image, upstream git history is removed, and the verifier runs inside the task image after the agent finishes.
+
+Run:
+
+```bash
+python3 benchmark/run_deepswe_codex_pair.py python-statemachine-state-data-scoping
+```
+
+Run only one side:
+
+```bash
+python3 benchmark/run_deepswe_codex_pair.py python-statemachine-state-data-scoping --mode baseline
+python3 benchmark/run_deepswe_codex_pair.py python-statemachine-state-data-scoping --mode anchor
+```
+
+Pin a Codex model:
+
+```bash
+python3 benchmark/run_deepswe_codex_pair.py python-statemachine-state-data-scoping --codex-model gpt-5
+```
+
+Output goes under:
+
+```text
+/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe-codex
+```
+
+The summary records:
+
+- verifier reward and test exits
+- duration
+- changed files
+- diff size
+- patch bytes
+- Codex JSONL tool counts when present
+- Anchor event count and receipt quality for the Anchor run
+
 ### `collect_deepswe_compare.py`
 
 Collects one baseline job and one Anchor job into a single JSON comparison.
