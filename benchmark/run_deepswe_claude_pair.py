@@ -280,26 +280,25 @@ fi
 
     docker_stdout = logs_dir / "docker-verify.stdout"
     docker_stderr = logs_dir / "docker-verify.stderr"
+    container_name = f"anchor-native-verify-{os.getpid()}-{int(time.time() * 1000)}"
     with docker_stdout.open("w") as out, docker_stderr.open("w") as err:
-        proc = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{repo_dir}:/app",
-                "-v",
-                f"{tests_dir}:/tests:ro",
-                "-v",
-                f"{logs_dir}:/logs",
-                task["docker_image"],
-                "bash",
-                "/logs/verify.sh",
-            ],
-            text=True,
-            stdout=out,
-            stderr=err,
-        )
+        proc = subprocess.CompletedProcess(["docker", "exec", container_name], returncode=125)
+        try:
+            run(["docker", "create", "--name", container_name, task["docker_image"], "sleep", "infinity"], stdout=out, stderr=err)
+            run(["docker", "start", container_name], stdout=out, stderr=err)
+            run(["docker", "exec", container_name, "mkdir", "-p", "/tests", "/logs"], stdout=out, stderr=err)
+            run(["docker", "cp", f"{repo_dir}/.", f"{container_name}:/app"], stdout=out, stderr=err)
+            run(["docker", "cp", str(tests_dir / "test.patch"), f"{container_name}:/tests/test.patch"], stdout=out, stderr=err)
+            run(["docker", "cp", str(verifier), f"{container_name}:/verify.sh"], stdout=out, stderr=err)
+            proc = subprocess.run(
+                ["docker", "exec", container_name, "bash", "/verify.sh"],
+                text=True,
+                stdout=out,
+                stderr=err,
+            )
+            run(["docker", "cp", f"{container_name}:/logs/.", str(logs_dir)], stdout=out, stderr=err, check=False)
+        finally:
+            run(["docker", "rm", "-f", container_name], stdout=out, stderr=err, check=False)
 
     reward_path = logs_dir / "verifier" / "reward.txt"
     reward = reward_path.read_text().strip() if reward_path.exists() else "missing"
