@@ -212,13 +212,18 @@ def classify_agent_log(path: Path, exit_code: int) -> dict[str, Any]:
             event = json.loads(line)
         except json.JSONDecodeError:
             lowered = line.lower()
-            if "rate limit" in lowered or "429" in lowered:
+            if exit_code != 0 and ("rate limit" in lowered or "429" in lowered):
                 status = "rate_limited"
                 reason = "rate_limit"
             continue
 
-        text = json.dumps(event).lower()
-        if event.get("type") == "rate_limit_event" or "rate_limit" in text or "429" in text:
+        text_fields = " ".join(
+            str(event.get(key, ""))
+            for key in ("message", "error", "result", "text", "aggregated_output")
+        ).lower()
+        if event.get("type") == "rate_limit_event" or (
+            exit_code != 0 and ("rate limit" in text_fields or "429" in text_fields)
+        ):
             status = "rate_limited"
             rate_limit = event.get("rate_limit_info") or event
             continue
@@ -314,11 +319,9 @@ fi
                 f"{tests_dir}:/tests:ro",
                 "-v",
                 f"{logs_dir}:/logs",
-                "-v",
-                f"{verifier}:/verify.sh:ro",
                 task["docker_image"],
                 "bash",
-                "/verify.sh",
+                "/logs/verify.sh",
             ],
             text=True,
             stdout=out,
