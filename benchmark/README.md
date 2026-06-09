@@ -191,6 +191,50 @@ The summary records:
 - Claude tool counts
 - Anchor event count and receipt quality for the Anchor run
 
+The Codex runner also reports product-level metrics. These are derived metrics;
+they do not change the agent prompt or product behavior.
+
+Efficiency means the task finishes with less waste:
+
+- fewer estimated log tokens
+- fewer changed files
+- fewer diff lines and patch bytes
+- fewer raw read-like commands
+- less runtime, when quality is not worse
+
+Quality means the generated patch is correct and grounded:
+
+- verifier reward/pass status
+- patch scope
+- Anchor receipt quality score and flags
+- changed line/file scope from Anchor provenance
+
+Safety means the run avoids work that breaks the repo or wastes future tokens:
+
+- no raw terminal writes
+- no unrecorded repo changes
+- stale writes are blocked before mutation
+- lock conflicts are visible
+- checks are recorded
+
+The important rule is:
+
+```text
+Do not claim an Anchor win from efficiency alone if quality is worse.
+Do not claim a quality win when both runs fail.
+Do not treat context reads as broad edit scope.
+```
+
+The final JSON contains:
+
+```text
+results[].product_metrics
+product_comparison.efficiency_delta
+product_comparison.quality_delta
+product_comparison.safety_delta
+product_comparison.read_this_first
+```
+
 ### `run_deepswe_codex_pair.py`
 
 Runs one DeepSWE task twice with local Codex:
@@ -234,6 +278,48 @@ The summary records:
 - patch bytes
 - Codex JSONL tool counts when present
 - Anchor event count and receipt quality for the Anchor run
+
+### `run_deepswe_pi_pair.py`
+
+Runs one DeepSWE task twice with local Pi:
+
+- baseline: Pi solves normally
+- anchor: Pi is instructed to use Anchor for context, edits, checks, receipt, and gate
+
+Pi is useful here because it is a small terminal harness with basic tools. That makes it a clean comparison point for whether Anchor helps a minimal agent harness, not only Codex or Claude Code.
+
+Install Pi first if `pi` is not on PATH:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+```
+
+Run:
+
+```bash
+python3 benchmark/run_deepswe_pi_pair.py python-statemachine-state-data-scoping
+```
+
+Run only one side:
+
+```bash
+python3 benchmark/run_deepswe_pi_pair.py python-statemachine-state-data-scoping --mode baseline
+python3 benchmark/run_deepswe_pi_pair.py python-statemachine-state-data-scoping --mode anchor
+```
+
+Pin a Pi provider/model:
+
+```bash
+python3 benchmark/run_deepswe_pi_pair.py python-statemachine-state-data-scoping --pi-provider openai --pi-model gpt-5
+```
+
+Output goes under:
+
+```text
+/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe-pi
+```
+
+The summary records the same metrics as the Codex pair runner so baseline, Codex, Claude, and Pi runs can be compared without changing the verifier.
 
 ### `collect_deepswe_compare.py`
 

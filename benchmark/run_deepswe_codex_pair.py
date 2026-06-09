@@ -20,6 +20,11 @@ except ModuleNotFoundError:  # pragma: no cover
 ANCHOR_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DEEPSWE_ROOT = Path("/Volumes/Hak_SSD/deep-swe")
 DEFAULT_WORK_ROOT = Path("/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe-codex")
+DEFAULT_DOCKER_PLATFORM = os.environ.get("ANCHOR_DOCKER_PLATFORM", "linux/amd64")
+
+
+def progress(message: str) -> None:
+    print(f"[anchor-benchmark] {message}", flush=True)
 
 
 def run(
@@ -31,14 +36,103 @@ def run(
     stderr: Any = subprocess.STDOUT,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        env=env,
+    try:
+        return subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            env=env,
+            text=True,
+            stdout=stdout,
+            stderr=stderr,
+            check=check,
+        )
+    except subprocess.CalledProcessError as exc:
+        output = exc.stdout or exc.stderr or ""
+        raise RuntimeError(
+            f"command failed with exit {exc.returncode}: {' '.join(map(str, exc.cmd))}\n{output}"
+        ) from exc
+
+
+def anchor_protect(anchor_bin: Path, repo_dir: Path, action: str) -> None:
+    progress(f"anchor protect {action}")
+    run([str(anchor_bin), "--root", str(repo_dir), "protect", action], cwd=repo_dir)
+
+
+def docker_wait_running(container_name: str, timeout_sec: int = 120) -> None:
+    deadline = time.time() + timeout_sec
+    progress(f"waiting for container {container_name} to run")
+    while time.time() < deadline:
+        inspect = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                "{{.State.Running}} {{.State.Status}} {{.State.ExitCode}} {{.State.Error}}",
+                container_name,
+            ],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        output = inspect.stdout.strip()
+        if inspect.returncode == 0:
+            parts = output.split(maxsplit=3)
+            running = parts[0] == "true" if parts else False
+            status = parts[1] if len(parts) > 1 else "unknown"
+            exit_code = parts[2] if len(parts) > 2 else "unknown"
+            error = parts[3] if len(parts) > 3 else ""
+            if running:
+                progress(f"container {container_name} is running")
+                return
+            if status in {"exited", "dead"}:
+                logs = subprocess.run(
+                    ["docker", "logs", container_name],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                ).stdout[-4000:]
+                raise RuntimeError(
+                    f"container {container_name} exited before verifier setup "
+                    f"(status={status}, exit={exit_code}, error={error}). "
+                    f"Image platform is forced to {DEFAULT_DOCKER_PLATFORM}; "
+                    "if this is an amd64 image on arm64 Colima, make sure Colima supports x86_64 emulation.\n"
+                    f"{logs}"
+                )
+        time.sleep(1)
+
+    raise RuntimeError(f"timed out waiting for container {container_name} to run")
+
+
+def ensure_docker_ready() -> None:
+    probe = subprocess.run(
+        ["docker", "info"],
         text=True,
-        stdout=stdout,
-        stderr=stderr,
-        check=check,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if probe.returncode == 0:
+        return
+
+    context = subprocess.run(
+        ["docker", "context", "ls"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    hak_colima = subprocess.run(
+        ["/bin/zsh", "-lc", "COLIMA_HOME=/Volumes/Hak_SSD/colima colima status"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+    raise SystemExit(
+        "Docker is not reachable for the DeepSWE benchmark.\n\n"
+        f"docker info output:\n{probe.stdout}\n"
+        f"docker context ls output:\n{context.stdout}\n"
+        f"Hak_SSD Colima status:\n{hak_colima.stdout}\n"
+        "Fix for the intended Hak_SSD Docker store:\n"
+        "  COLIMA_HOME=/Volumes/Hak_SSD/colima colima start\n"
     )
 
 
@@ -61,7 +155,22 @@ def clean_copy_from_image(image: str, repo_dir: Path) -> None:
 
     container_name = f"anchor-codex-prepare-{os.getpid()}"
     try:
-        run(["docker", "create", "--name", container_name, image, "sleep", "infinity"])
+        progress(f"creating source container {container_name}")
+        run(
+            [
+                "docker",
+                "create",
+                "--platform",
+                DEFAULT_DOCKER_PLATFORM,
+                "--name",
+                container_name,
+                "--entrypoint",
+                "sleep",
+                image,
+                "infinity",
+            ]
+        )
+        progress(f"copying /app from {container_name}")
         run(["docker", "cp", f"{container_name}:/app/.", str(repo_dir)])
     finally:
         run(["docker", "rm", "-f", container_name], check=False)
@@ -89,6 +198,7 @@ Rules:
 - Do not use git log, git show, git blame, or remote history to infer the answer.
 - You may inspect source files, edit code, and run local tests or build commands.
 - Keep the patch scoped to the task.
+- Do not add or edit test files as final changes unless the task explicitly requires it. Hidden tests evaluate the result.
 """
 
 
@@ -104,20 +214,23 @@ Rules:
 - Do not inspect benchmark solution files, hidden tests, parent directories, or runner files.
 - Do not use git log, git show, git blame, or remote history to infer the answer.
 - Keep the patch scoped to the task.
+- Do not add or edit test files as final changes unless the task explicitly requires it. Hidden tests evaluate the result.
 
 Use Anchor as the execution harness.
+Source files are protected before your session starts. Raw source edits will fail.
 
 Anchor command:
 {anchor_bin}
 
 Required workflow:
-1. Run `{anchor_bin} build`.
-2. Use `{anchor_bin} context <symbol>` for source understanding before broad raw reads.
-3. Use `{anchor_bin} edit <path> --symbol <symbol_name> --content '<full replacement symbol>'` for scoped source edits when possible.
-4. Run checks through `{anchor_bin} check -- <command>` when practical.
-5. Before finishing, run `{anchor_bin} status`, `{anchor_bin} receipt`, and `{anchor_bin} gate --min-score 85`.
+1. Start with one Anchor task intake: `{anchor_bin} task "<short task summary>" --limit 8 --context-limit 4`. Anchor prepares the index automatically.
+2. Use `{anchor_bin} context <symbol> --limit 1` only when the intake is missing a specific symbol you need.
+3. Do not run `{anchor_bin} build` unless Anchor reports a stale/missing index error. If you manually run it, run it at most once.
+4. Do not use broad raw source reads (`cat`, `sed`, `nl`, large `rg` dumps) as primary exploration. If Anchor returns zero results or errors, use the narrowest raw read possible and keep going.
+5. Make every source edit through `{anchor_bin} edit <path> --symbol <symbol_name> --content '<full replacement symbol>'`, `{anchor_bin} edit <path> --action replace --pattern '<old>' --content '<new>'`, or `{anchor_bin} write <path> <content>`.
+6. Run at least one focused test-like verification command through `{anchor_bin} check -- <command>` before finishing. Prefer the `<preferred_check>` or `<check_hints>` from the task intake when present. Lint and smoke scripts are useful but do not replace a test-like check. If Anchor prints `<handoff_gate status="blocked" .../>`, resolve the reason before finishing. Do not spend time running Anchor status, receipt, or gate; the benchmark runner collects those after the session.
 
-The benchmark is measuring whether Anchor improves efficiency, scope, quality, and safety. Do not silently bypass Anchor if it fails; record what failed.
+The benchmark is measuring Anchor as the controlled execution harness, not as optional decoration. The run is invalid if you silently bypass Anchor for source understanding or source writes.
 """
 
 
@@ -200,6 +313,62 @@ def parse_tool_counts(path: Path) -> dict[str, int]:
     return counts
 
 
+def parse_command_metrics(path: Path, anchor_bin: Path | None = None) -> dict[str, int]:
+    metrics = {
+        "completed_commands": 0,
+        "failed_commands": 0,
+        "anchor_commands": 0,
+        "anchor_tasks": 0,
+        "anchor_builds": 0,
+        "anchor_contexts": 0,
+        "anchor_edits": 0,
+        "anchor_writes": 0,
+        "anchor_checks": 0,
+        "anchor_statuses": 0,
+        "anchor_receipts": 0,
+        "anchor_gates": 0,
+        "raw_read_like_commands": 0,
+    }
+    anchor_text = str(anchor_bin) if anchor_bin else "anchor"
+
+    for line in path.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") or {}
+        if event.get("type") != "item.completed" or item.get("type") != "command_execution":
+            continue
+
+        command = str(item.get("command", ""))
+        metrics["completed_commands"] += 1
+        if item.get("exit_code") not in (0, None):
+            metrics["failed_commands"] += 1
+
+        if anchor_text in command or " anchor " in command:
+            metrics["anchor_commands"] += 1
+            for name, key in [
+                (" build", "anchor_builds"),
+                (" task", "anchor_tasks"),
+                (" context", "anchor_contexts"),
+                (" edit", "anchor_edits"),
+                (" write", "anchor_writes"),
+                (" check", "anchor_checks"),
+                (" status", "anchor_statuses"),
+                (" receipt", "anchor_receipts"),
+                (" gate", "anchor_gates"),
+            ]:
+                if name in command:
+                    metrics[key] += 1
+        elif any(token in command for token in ("sed -n", "cat ", "nl -ba", "rg ")):
+            metrics["raw_read_like_commands"] += 1
+
+    return metrics
+
+
 def classify_agent_log(path: Path, exit_code: int) -> dict[str, Any]:
     status = "ok" if exit_code == 0 else "failed"
     reason = None
@@ -246,12 +415,67 @@ def classify_agent_log(path: Path, exit_code: int) -> dict[str, Any]:
     }
 
 
+def is_untracked_test_path(path: str) -> bool:
+    p = Path(path)
+    parts = set(p.parts)
+    return "tests" in parts or p.name.startswith("test_") or p.name.endswith("_test.py")
+
+
+def is_internal_untracked_path(path: str) -> bool:
+    p = Path(path)
+    parts = set(p.parts)
+    return bool(
+        parts
+        & {
+            ".anchor",
+            ".cache",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".venv",
+            "__pycache__",
+        }
+    ) or p.suffix in {".pyc", ".pyo"}
+
+
+def prepare_untracked_for_patch(repo_dir: Path) -> dict[str, list[str]]:
+    untracked = run(["git", "ls-files", "--others", "--exclude-standard"], cwd=repo_dir).stdout.splitlines()
+    patchable = [
+        path
+        for path in untracked
+        if not is_untracked_test_path(path) and not is_internal_untracked_path(path)
+    ]
+    ignored = sorted(set(untracked) - set(patchable))
+    if patchable:
+        run(["git", "add", "--intent-to-add", "--", *patchable], cwd=repo_dir)
+    return {
+        "untracked_before": untracked,
+        "untracked_patchable": patchable,
+        "untracked_ignored": ignored,
+    }
+
+
 def git_metrics(repo_dir: Path) -> dict[str, Any]:
+    untracked_info = prepare_untracked_for_patch(repo_dir)
     changed = run(["git", "diff", "--name-only"], cwd=repo_dir).stdout.splitlines()
+    untracked_after_prepare = run(
+        ["git", "ls-files", "--others", "--exclude-standard"], cwd=repo_dir
+    ).stdout.splitlines()
+    all_changed = sorted(set(changed) | set(untracked_info["untracked_before"]))
     diff = run(["git", "diff", "--binary"], cwd=repo_dir).stdout
     return {
-        "changed_files": len(changed),
-        "changed_file_list": changed,
+        "changed_files": len(all_changed),
+        "changed_file_list": all_changed,
+        "patch_files": len(changed),
+        "patch_file_list": changed,
+        "untracked_files": len(untracked_info["untracked_before"]),
+        "untracked_file_list": untracked_info["untracked_before"],
+        "untracked_patchable_files": len(untracked_info["untracked_patchable"]),
+        "untracked_patchable_file_list": untracked_info["untracked_patchable"],
+        "untracked_ignored_files": len(untracked_info["untracked_ignored"]),
+        "untracked_ignored_file_list": untracked_info["untracked_ignored"],
+        "untracked_after_prepare_files": len(untracked_after_prepare),
+        "untracked_after_prepare_file_list": untracked_after_prepare,
         "diff_lines": len(diff.splitlines()),
         "patch_bytes": len(diff.encode()),
     }
@@ -271,6 +495,46 @@ mkdir -p /logs/verifier /logs/artifacts
 echo "verifier started" > /logs/verifier/preflight.txt
 cd /app || exit 6
 git config --global --add safe.directory "$(pwd)" 2>/dev/null || true
+git status --porcelain --untracked-files=all > /logs/verifier/pre_clean_status.txt
+python3 - <<'PY'
+import subprocess
+from pathlib import Path
+
+def is_test_path(path: str) -> bool:
+    p = Path(path)
+    parts = set(p.parts)
+    return "tests" in parts or p.name.startswith("test_") or p.name.endswith("_test.py")
+
+def is_internal_path(path: str) -> bool:
+    p = Path(path)
+    parts = set(p.parts)
+    return bool(
+        parts
+        & {
+            ".anchor",
+            ".cache",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".venv",
+            "__pycache__",
+        }
+    ) or p.suffix in {".pyc", ".pyo"}
+
+paths = subprocess.run(
+    ["git", "ls-files", "--others", "--exclude-standard"],
+    text=True,
+    stdout=subprocess.PIPE,
+    check=True,
+).stdout.splitlines()
+patchable = [p for p in paths if not is_test_path(p) and not is_internal_path(p)]
+ignored = sorted(set(paths) - set(patchable))
+if patchable:
+    subprocess.run(["git", "add", "--intent-to-add", "--", *patchable], check=True)
+Path("/logs/verifier/untracked_patchable.txt").write_text("\n".join(patchable) + ("\n" if patchable else ""))
+Path("/logs/verifier/untracked_ignored.txt").write_text("\n".join(ignored) + ("\n" if ignored else ""))
+PY
+git clean -fdx >/logs/verifier/clean.stdout 2>/logs/verifier/clean.stderr || true
 git diff --binary > /logs/artifacts/model.patch
 
 python3 - <<'PY'
@@ -287,9 +551,11 @@ for f in sorted(files):
 PY
 
 if ! git apply --whitespace=nowarn /tests/test.patch >/logs/verifier/apply.stdout 2>/logs/verifier/apply.stderr; then
+  echo 1 > /logs/verifier/test_apply.exit
   echo 0 > /logs/verifier/reward.txt
   exit 0
 fi
+echo 0 > /logs/verifier/test_apply.exit
 
 chmod +x /app/test.sh
 bash /app/test.sh base >/logs/verifier/base.stdout 2>/logs/verifier/base.stderr
@@ -313,30 +579,61 @@ fi
     with docker_stdout.open("w") as out, docker_stderr.open("w") as err:
         proc = subprocess.CompletedProcess(["docker", "exec", container_name], returncode=125)
         try:
-            run(["docker", "create", "--name", container_name, task["docker_image"], "sleep", "infinity"], stdout=out, stderr=err)
+            progress(f"creating verifier container {container_name}")
+            run(
+                [
+                    "docker",
+                    "create",
+                    "--platform",
+                    DEFAULT_DOCKER_PLATFORM,
+                    "--name",
+                    container_name,
+                    "--entrypoint",
+                    "sleep",
+                    task["docker_image"],
+                    "infinity",
+                ],
+                stdout=out,
+                stderr=err,
+            )
+            progress(f"starting verifier container {container_name}")
             run(["docker", "start", container_name], stdout=out, stderr=err)
+            docker_wait_running(container_name)
+            progress("preparing verifier filesystem")
             run(["docker", "exec", container_name, "mkdir", "-p", "/tests", "/logs"], stdout=out, stderr=err)
             run(["docker", "cp", f"{repo_dir}/.", f"{container_name}:/app"], stdout=out, stderr=err)
             run(["docker", "cp", str(tests_dir / "test.patch"), f"{container_name}:/tests/test.patch"], stdout=out, stderr=err)
             run(["docker", "cp", str(verifier), f"{container_name}:/verify.sh"], stdout=out, stderr=err)
+            progress("running verifier")
             proc = subprocess.run(
                 ["docker", "exec", container_name, "bash", "/verify.sh"],
                 text=True,
                 stdout=out,
                 stderr=err,
             )
+            progress("copying verifier logs")
             run(["docker", "cp", f"{container_name}:/logs/.", str(logs_dir)], stdout=out, stderr=err, check=False)
         finally:
             run(["docker", "rm", "-f", container_name], stdout=out, stderr=err, check=False)
 
     reward_path = logs_dir / "verifier" / "reward.txt"
     reward = reward_path.read_text().strip() if reward_path.exists() else "missing"
+    base_exit = read_optional(logs_dir / "verifier" / "base.exit")
+    new_exit = read_optional(logs_dir / "verifier" / "new.exit")
+    test_apply_exit = read_optional(logs_dir / "verifier" / "test_apply.exit")
     return {
         "reward": reward,
         "passed": reward == "1",
-        "base_exit": read_optional(logs_dir / "verifier" / "base.exit"),
-        "new_exit": read_optional(logs_dir / "verifier" / "new.exit"),
+        "test_apply_exit": test_apply_exit,
+        "test_apply_succeeded": test_apply_exit == "0",
+        "test_apply_stderr": read_optional(logs_dir / "verifier" / "apply.stderr"),
+        "base_exit": base_exit,
+        "new_exit": new_exit,
+        "base_timeout": base_exit == "124",
+        "new_timeout": new_exit == "124",
         "model_patch_bytes": file_size(logs_dir / "artifacts" / "model.patch"),
+        "untracked_patchable_file_list": read_lines(logs_dir / "verifier" / "untracked_patchable.txt"),
+        "untracked_ignored_file_list": read_lines(logs_dir / "verifier" / "untracked_ignored.txt"),
         "docker_exit": proc.returncode,
         "preflight": (logs_dir / "verifier" / "preflight.txt").exists(),
         "stdout_bytes": file_size(docker_stdout),
@@ -346,6 +643,10 @@ fi
 
 def read_optional(path: Path) -> str | None:
     return path.read_text().strip() if path.exists() else None
+
+
+def read_lines(path: Path) -> list[str]:
+    return path.read_text().splitlines() if path.exists() else []
 
 
 def file_size(path: Path) -> int:
@@ -364,8 +665,172 @@ def anchor_artifacts(repo_dir: Path, anchor_bin: Path) -> dict[str, Any]:
     return {
         "event_count": len(event_file.read_text().splitlines()) if event_file.exists() else 0,
         "has_anchor_dir": anchor_root.exists(),
+        "receipt_summary": (receipt or {}).get("summary"),
         "receipt_quality": (receipt or {}).get("quality"),
     }
+
+
+def product_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    git = result.get("git") or {}
+    verify = result.get("verify") or {}
+    agent = result.get("agent") or {}
+    commands = result.get("command_metrics") or {}
+    anchor = result.get("anchor") or {}
+    anchor_summary = anchor.get("receipt_summary") or {}
+    anchor_quality = anchor.get("receipt_quality") or {}
+
+    agent_log_bytes = int(result.get("agent_log_bytes") or 0)
+    patch_bytes = int(git.get("patch_bytes") or 0)
+    diff_lines = int(git.get("diff_lines") or 0)
+    changed_files = int(git.get("patch_files") or git.get("changed_files") or 0)
+    completed_commands = int(commands.get("completed_commands") or 0)
+    failed_commands = int(commands.get("failed_commands") or 0)
+    raw_read_like_commands = int(commands.get("raw_read_like_commands") or 0)
+
+    return {
+        "efficiency": {
+            "agent_log_bytes": agent_log_bytes,
+            "agent_log_est_tokens": estimate_tokens(agent_log_bytes),
+            "duration_sec": agent.get("duration_sec"),
+            "completed_commands": completed_commands,
+            "failed_commands": failed_commands,
+            "raw_read_like_commands": raw_read_like_commands,
+            "changed_files": changed_files,
+            "diff_lines": diff_lines,
+            "patch_bytes": patch_bytes,
+        },
+        "quality": {
+            "passed": bool(verify.get("passed")),
+            "reward": verify.get("reward"),
+            "base_exit": verify.get("base_exit"),
+            "new_exit": verify.get("new_exit"),
+            "test_apply_succeeded": verify.get("test_apply_succeeded"),
+            "patch_files": changed_files,
+            "diff_lines": diff_lines,
+            "patch_bytes": patch_bytes,
+            "anchor_quality_score": anchor_quality.get("score"),
+            "anchor_quality_risk": anchor_quality.get("risk"),
+            "anchor_quality_flags": anchor_quality.get("flags") or [],
+            "anchor_changed_file_scope": anchor_summary.get("changed_file_scope"),
+            "anchor_changed_line_total": anchor_summary.get("changed_line_total"),
+            "anchor_max_changed_lines": anchor_summary.get("max_changed_lines"),
+        },
+        "safety": {
+            "raw_terminal_writes": int(anchor_summary.get("raw_terminal_writes") or 0),
+            "unrecorded_changed_files": int(anchor_summary.get("unrecorded_changed_files") or 0),
+            "stale_write_blocks": int(anchor_summary.get("stale_write_blocks") or 0),
+            "lock_blocks": int(anchor_summary.get("lock_blocks") or 0),
+            "guarded_writes": int(anchor_summary.get("guarded_writes") or 0),
+            "checks_ok": int(anchor_summary.get("checks_ok") or 0),
+            "checks_failed": int(anchor_summary.get("checks_failed") or 0),
+        },
+    }
+
+
+def estimate_tokens(byte_count: int) -> int:
+    return round(byte_count / 4)
+
+
+def pair_comparison(results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    by_mode = {result.get("mode"): result for result in results}
+    baseline = by_mode.get("baseline")
+    anchor = by_mode.get("anchor")
+    if not baseline or not anchor:
+        return None
+
+    baseline_metrics = baseline["product_metrics"]
+    anchor_metrics = anchor["product_metrics"]
+    return {
+        "efficiency_delta": {
+            "agent_log_bytes": relative_delta(
+                baseline_metrics["efficiency"]["agent_log_bytes"],
+                anchor_metrics["efficiency"]["agent_log_bytes"],
+            ),
+            "duration_sec": relative_delta(
+                baseline_metrics["efficiency"]["duration_sec"],
+                anchor_metrics["efficiency"]["duration_sec"],
+            ),
+            "changed_files": relative_delta(
+                baseline_metrics["efficiency"]["changed_files"],
+                anchor_metrics["efficiency"]["changed_files"],
+            ),
+            "diff_lines": relative_delta(
+                baseline_metrics["efficiency"]["diff_lines"],
+                anchor_metrics["efficiency"]["diff_lines"],
+            ),
+            "patch_bytes": relative_delta(
+                baseline_metrics["efficiency"]["patch_bytes"],
+                anchor_metrics["efficiency"]["patch_bytes"],
+            ),
+            "raw_read_like_commands": relative_delta(
+                baseline_metrics["efficiency"]["raw_read_like_commands"],
+                anchor_metrics["efficiency"]["raw_read_like_commands"],
+            ),
+        },
+        "quality_delta": {
+            "baseline_passed": baseline_metrics["quality"]["passed"],
+            "anchor_passed": anchor_metrics["quality"]["passed"],
+            "baseline_reward": baseline_metrics["quality"]["reward"],
+            "anchor_reward": anchor_metrics["quality"]["reward"],
+            "anchor_quality_score": anchor_metrics["quality"]["anchor_quality_score"],
+            "anchor_quality_flags": anchor_metrics["quality"]["anchor_quality_flags"],
+        },
+        "safety_delta": {
+            "anchor_raw_terminal_writes": anchor_metrics["safety"]["raw_terminal_writes"],
+            "anchor_unrecorded_changed_files": anchor_metrics["safety"]["unrecorded_changed_files"],
+            "anchor_stale_write_blocks": anchor_metrics["safety"]["stale_write_blocks"],
+            "anchor_lock_blocks": anchor_metrics["safety"]["lock_blocks"],
+            "anchor_guarded_writes": anchor_metrics["safety"]["guarded_writes"],
+            "anchor_checks_ok": anchor_metrics["safety"]["checks_ok"],
+            "anchor_checks_failed": anchor_metrics["safety"]["checks_failed"],
+        },
+        "read_this_first": interpret_pair(baseline_metrics, anchor_metrics),
+    }
+
+
+def relative_delta(baseline: Any, candidate: Any) -> dict[str, Any]:
+    if baseline in (None, 0) or candidate is None:
+        return {"baseline": baseline, "anchor": candidate, "relative_change": None}
+    change = (float(candidate) - float(baseline)) / float(baseline)
+    return {
+        "baseline": baseline,
+        "anchor": candidate,
+        "relative_change": round(change, 4),
+        "improvement": round(-change, 4),
+    }
+
+
+def interpret_pair(baseline_metrics: dict[str, Any], anchor_metrics: dict[str, Any]) -> list[str]:
+    notes: list[str] = []
+    baseline_passed = baseline_metrics["quality"]["passed"]
+    anchor_passed = anchor_metrics["quality"]["passed"]
+    if anchor_passed and not baseline_passed:
+        notes.append("quality_win_anchor_passed_baseline_failed")
+    elif baseline_passed and not anchor_passed:
+        notes.append("quality_loss_anchor_failed_baseline_passed")
+    elif anchor_passed and baseline_passed:
+        notes.append("both_passed_compare_efficiency_and_safety")
+    else:
+        notes.append("both_failed_do_not_claim_quality_win")
+
+    log_delta = relative_delta(
+        baseline_metrics["efficiency"]["agent_log_bytes"],
+        anchor_metrics["efficiency"]["agent_log_bytes"],
+    )
+    improvement = log_delta.get("improvement")
+    if isinstance(improvement, float) and improvement >= 0.5:
+        notes.append("efficiency_target_met_agent_log_reduced_50_percent_or_more")
+    elif isinstance(improvement, float) and improvement > 0:
+        notes.append("efficiency_improved_but_under_50_percent_target")
+    elif isinstance(improvement, float):
+        notes.append("efficiency_not_improved_agent_log_grew")
+
+    quality_flags = anchor_metrics["quality"]["anchor_quality_flags"]
+    if quality_flags:
+        notes.append("anchor_receipt_has_quality_flags_inspect_before_claiming_win")
+    if anchor_metrics["safety"]["raw_terminal_writes"] or anchor_metrics["safety"]["unrecorded_changed_files"]:
+        notes.append("safety_failed_raw_or_unrecorded_changes_seen")
+    return notes
 
 
 def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root: Path) -> dict[str, Any]:
@@ -383,14 +848,23 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
     )
     (run_dir / "prompt.txt").write_text(prompt)
 
-    agent = run_codex(
-        mode,
-        repo_dir,
-        prompt,
-        run_dir / "codex.jsonl",
-        args.agent_timeout_sec,
-        args.codex_model,
-    )
+    protection_enabled = False
+    if mode == "anchor":
+        anchor_protect(args.anchor_bin, repo_dir, "on")
+        protection_enabled = True
+
+    try:
+        agent = run_codex(
+            mode,
+            repo_dir,
+            prompt,
+            run_dir / "codex.jsonl",
+            args.agent_timeout_sec,
+            args.codex_model,
+        )
+    finally:
+        if protection_enabled:
+            anchor_protect(args.anchor_bin, repo_dir, "off")
     agent["log"] = classify_agent_log(run_dir / "codex.jsonl", agent["exit_code"])
     metrics = git_metrics(repo_dir)
     if metrics["patch_bytes"] == 0 and agent["exit_code"] != 0:
@@ -411,9 +885,11 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
         "git": metrics,
         "verify": verify,
         "tool_counts": tools,
+        "command_metrics": parse_command_metrics(run_dir / "codex.jsonl", args.anchor_bin),
         "agent_log_bytes": file_size(run_dir / "codex.jsonl"),
         "anchor": anchor_artifacts(repo_dir, args.anchor_bin) if mode == "anchor" else None,
     }
+    result["product_metrics"] = product_metrics(result)
     (run_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     return result
 
@@ -428,6 +904,7 @@ def main() -> int:
     parser.add_argument("--anchor-bin", type=Path, default=ANCHOR_ROOT / "target" / "debug" / "anchor")
     parser.add_argument("--codex-model", default=None)
     args = parser.parse_args()
+    ensure_docker_ready()
 
     task_dir = args.deepswe_root / "tasks" / args.task_id
     if not task_dir.exists():
@@ -445,6 +922,7 @@ def main() -> int:
         "task_id": args.task_id,
         "out_dir": str(out_root),
         "results": results,
+        "product_comparison": pair_comparison(results),
     }
     (out_root / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -452,4 +930,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except RuntimeError as exc:
+        raise SystemExit(str(exc))
