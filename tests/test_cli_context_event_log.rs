@@ -1,5 +1,6 @@
 use std::fs;
 use std::process::Command;
+use std::thread;
 
 #[test]
 fn cli_context_records_read_and_cache_events() {
@@ -79,4 +80,87 @@ fn cli_context_records_read_and_cache_events() {
         .expect("missing context.read ok event");
     assert_eq!(first_read["agent_id"], "agent-context-test");
     assert_eq!(first_read["session_id"], "session-context-test");
+    assert!(
+        first_read["meta"]["source_hash"].as_str().is_some(),
+        "missing source_hash meta: {raw_events}"
+    );
+    assert!(
+        first_read["meta"]["slice_hash"].as_str().is_some(),
+        "missing slice_hash meta: {raw_events}"
+    );
+}
+
+#[test]
+fn cli_parallel_context_reads_keep_event_log_valid_jsonl() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("src.rs");
+    fs::write(
+        &source,
+        "pub fn login() -> bool {\n    true\n}\n\npub fn logout() -> bool {\n    false\n}\n",
+    )
+    .unwrap();
+
+    let anchor = env!("CARGO_BIN_EXE_anchor");
+
+    let build = Command::new(anchor)
+        .arg("--root")
+        .arg(dir.path())
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for i in 0..24 {
+            let root = dir.path().to_path_buf();
+            handles.push(scope.spawn(move || {
+                let context = Command::new(anchor)
+                    .env("ANCHOR_AGENT_ID", format!("agent-{i}"))
+                    .env("ANCHOR_SESSION_ID", "parallel-context-session")
+                    .arg("--root")
+                    .arg(root)
+                    .arg("context")
+                    .arg("login")
+                    .arg("--limit")
+                    .arg("1")
+                    .output()
+                    .unwrap();
+                assert!(
+                    context.status.success(),
+                    "context failed: {}\n{}",
+                    String::from_utf8_lossy(&context.stderr),
+                    String::from_utf8_lossy(&context.stdout)
+                );
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+    });
+
+    let events_path = dir.path().join(".anchor/events/events.jsonl");
+    let raw_events = fs::read_to_string(&events_path)
+        .unwrap_or_else(|e| panic!("missing event log {}: {e}", events_path.display()));
+    assert!(!raw_events.contains("}{"), "{raw_events}");
+
+    let events: Vec<serde_json::Value> = raw_events
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let context_reads = events
+        .iter()
+        .filter(|event| {
+            event["event_type"] == "context.read"
+                && event["symbol"] == "login"
+                && event["path"] == "src.rs"
+        })
+        .count();
+
+    assert_eq!(context_reads, 24, "{raw_events}");
 }

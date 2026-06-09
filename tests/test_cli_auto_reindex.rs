@@ -43,6 +43,17 @@ fn cli_edit_reindexes_changed_file_without_rebuild() {
         "edit failed: {}",
         String::from_utf8_lossy(&edit.stderr)
     );
+    let edit_stdout = String::from_utf8_lossy(&edit.stdout);
+    assert!(edit_stdout.contains("<before_hash>"), "{edit_stdout}");
+    assert!(edit_stdout.contains("<after_hash>"), "{edit_stdout}");
+    assert!(
+        !edit_stdout.contains("<old>old_name</old>"),
+        "{edit_stdout}"
+    );
+    assert!(
+        !edit_stdout.contains("<new>new_name</new>"),
+        "{edit_stdout}"
+    );
 
     let new_hit = Command::new(anchor)
         .arg("--root")

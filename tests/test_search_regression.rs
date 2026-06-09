@@ -1,4 +1,5 @@
 use std::fs;
+use std::process::Command;
 
 use anchor::storage::AnchorStore;
 use tempfile::tempdir;
@@ -112,4 +113,43 @@ fn hybrid_search_zero_results_before_feature_fix_now_returns_hits() {
     assert!(hits
         .iter()
         .any(|h| h.name == "VectorStorage" || h.name == "get_vector_storage"));
+}
+
+#[test]
+fn hybrid_search_prefers_source_definition_over_docs_heading() {
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("docs")).unwrap();
+    fs::create_dir_all(dir.path().join("statemachine")).unwrap();
+    fs::write(
+        dir.path().join("README.md"),
+        "# State\n\nDocumentation heading.\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("docs/api.md"), "## State\n\nAPI docs.\n").unwrap();
+    fs::write(
+        dir.path().join("statemachine/state.py"),
+        "class State:\n    pass\n",
+    )
+    .unwrap();
+
+    let anchor = env!("CARGO_BIN_EXE_anchor");
+    let build = Command::new(anchor)
+        .arg("--root")
+        .arg(dir.path())
+        .arg("build")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "build failed: {}\n{}",
+        String::from_utf8_lossy(&build.stderr),
+        String::from_utf8_lossy(&build.stdout)
+    );
+
+    let store = AnchorStore::open(dir.path()).unwrap();
+    let hits = store.search_symbols_hybrid("State", 5).unwrap();
+
+    assert!(!hits.is_empty(), "expected State hits");
+    assert_eq!(hits[0].name, "State", "{hits:#?}");
+    assert_eq!(hits[0].path, "statemachine/state.py", "{hits:#?}");
 }

@@ -25,6 +25,7 @@ fn cli_check_records_verification_result() {
 
     let stdout = String::from_utf8_lossy(&check.stdout);
     assert!(stdout.contains("<status>ok</status>"), "{stdout}");
+    assert!(stdout.contains("<kind>non_test</kind>"), "{stdout}");
     assert!(stdout.contains("verified"), "{stdout}");
 
     let events_path = dir.path().join(".anchor/events/events.jsonl");
@@ -43,6 +44,7 @@ fn cli_check_records_verification_result() {
                     .as_str()
                     .map(|message| message.contains("cmd=sh -c printf verified"))
                     .unwrap_or(false)
+                && event["meta"]["check_kind"] == "non_test"
         }),
         "missing check.run event: {raw_events}"
     );
@@ -61,6 +63,10 @@ fn cli_check_records_verification_result() {
     let status_stdout = String::from_utf8_lossy(&status.stdout);
     assert!(
         status_stdout.contains("<checks_ok>1</checks_ok>"),
+        "{status_stdout}"
+    );
+    assert!(
+        status_stdout.contains("<test_checks_ok>0</test_checks_ok>"),
         "{status_stdout}"
     );
     assert!(

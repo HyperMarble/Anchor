@@ -42,6 +42,14 @@ fn cli_edit_symbol_replaces_only_indexed_symbol_and_reindexes() {
         String::from_utf8_lossy(&edit.stderr),
         String::from_utf8_lossy(&edit.stdout)
     );
+    let edit_stdout = String::from_utf8_lossy(&edit.stdout);
+    assert!(edit_stdout.contains("<before_hash>"), "{edit_stdout}");
+    assert!(edit_stdout.contains("<after_hash>"), "{edit_stdout}");
+    assert!(edit_stdout.contains("<content_hash>"), "{edit_stdout}");
+    assert!(
+        !edit_stdout.contains("pub fn new_name() -> bool"),
+        "{edit_stdout}"
+    );
 
     let updated = fs::read_to_string(&source).unwrap();
     assert!(updated.contains("pub fn new_name() -> bool"));

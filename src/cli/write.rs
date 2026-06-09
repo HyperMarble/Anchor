@@ -5,11 +5,13 @@
 //  Created by hak (tharun)
 //
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
+use crate::cli::protect;
 use crate::events;
 use crate::lock::lockd;
+use crate::parser::language::is_source_path;
 use crate::storage::{content_hash, AnchorStore};
 use crate::write::{
     batch_replace_all, create_file, insert_after, replace_all, replace_range, BatchWriteResult,
@@ -136,35 +138,350 @@ fn reindex_after_write(root: &Path, path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn file_hash(path: &Path) -> Option<String> {
+    std::fs::read(path).ok().map(|bytes| content_hash(&bytes))
+}
+
+fn file_text(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok()
+}
+
+fn content_hash_text(content: &str) -> String {
+    content_hash(content.as_bytes())
+}
+
+fn block_existing_source_write(root: &Path, path: &Path, requested: &str) -> Result<()> {
+    if !path.exists() || !is_source_path(path) {
+        return Ok(());
+    }
+
+    let repo_path = lock_path(root, path, requested);
+    if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+        events::record(
+            store.anchor_root(),
+            "write.guard",
+            Some(repo_path.clone()),
+            None,
+            "blocked",
+            Some("existing source files must be changed through anchor edit".to_string()),
+        );
+    }
+
+    println!("<result>");
+    println!("<status>source_write_requires_edit</status>");
+    println!("<path>{}</path>", repo_path);
+    println!("<message>existing source files must be changed through anchor edit</message>");
+    println!("</result>");
+    bail!("existing source files must be changed through anchor edit");
+}
+
+struct ExpectedHash {
+    value: Option<String>,
+    source: &'static str,
+}
+
+fn expected_hash_from_recent_read(
+    root: &Path,
+    path: &Path,
+    requested: &str,
+    provided_hash: Option<&str>,
+) -> ExpectedHash {
+    if let Some(provided_hash) = provided_hash {
+        return ExpectedHash {
+            value: Some(provided_hash.to_string()),
+            source: "provided",
+        };
+    }
+
+    let Some(store) = AnchorStore::discover(root)
+        .or_else(|_| AnchorStore::init(root))
+        .ok()
+    else {
+        return ExpectedHash {
+            value: None,
+            source: "none",
+        };
+    };
+    let repo_path = lock_path(root, path, requested);
+    let session_id = std::env::var("ANCHOR_SESSION_ID").unwrap_or_else(|_| "local".into());
+    let agent_id = lockd::agent_id().to_string();
+    let Some(events) = events::load(store.anchor_root()).ok() else {
+        return ExpectedHash {
+            value: None,
+            source: "none",
+        };
+    };
+
+    let value = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.event_type == "context.read"
+                && (event.status == "ok" || event.status == "cached")
+                && event.path.as_deref() == Some(repo_path.as_str())
+                && event.session_id == session_id
+                && event.agent_id == agent_id
+        })
+        .and_then(|event| event.meta.get("source_hash").cloned());
+
+    if value.is_some() {
+        ExpectedHash {
+            value,
+            source: "context",
+        }
+    } else {
+        ExpectedHash {
+            value: None,
+            source: "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChangeSummary {
+    start_line: usize,
+    old_end_line: usize,
+    new_end_line: usize,
+    old_changed_lines: usize,
+    new_changed_lines: usize,
+}
+
+fn line_change_summary(before: Option<&str>, after: &str) -> ChangeSummary {
+    let before_lines: Vec<&str> = before.unwrap_or("").lines().collect();
+    let after_lines: Vec<&str> = after.lines().collect();
+
+    let mut prefix = 0;
+    while prefix < before_lines.len()
+        && prefix < after_lines.len()
+        && before_lines[prefix] == after_lines[prefix]
+    {
+        prefix += 1;
+    }
+
+    let mut suffix = 0;
+    while suffix < before_lines.len().saturating_sub(prefix)
+        && suffix < after_lines.len().saturating_sub(prefix)
+        && before_lines[before_lines.len() - 1 - suffix]
+            == after_lines[after_lines.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+
+    let old_end_line = before_lines.len().saturating_sub(suffix);
+    let new_end_line = after_lines.len().saturating_sub(suffix);
+    let old_changed_lines = old_end_line.saturating_sub(prefix);
+    let new_changed_lines = new_end_line.saturating_sub(prefix);
+
+    ChangeSummary {
+        start_line: prefix + 1,
+        old_end_line,
+        new_end_line,
+        old_changed_lines,
+        new_changed_lines,
+    }
+}
+
+fn verify_expected_hash(
+    root: &Path,
+    path: &Path,
+    requested: &str,
+    before_hash: Option<&str>,
+    expected_hash: Option<&str>,
+    event_kind: &str,
+    event_symbol: Option<&str>,
+) -> Result<()> {
+    let Some(expected_hash) = expected_hash else {
+        return Ok(());
+    };
+    let actual_hash = before_hash.unwrap_or("missing");
+    if actual_hash == expected_hash {
+        return Ok(());
+    }
+
+    if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+        events::record(
+            store.anchor_root(),
+            event_kind,
+            Some(lock_path(root, path, requested)),
+            event_symbol.map(str::to_string),
+            "blocked",
+            Some(format!(
+                "stale_file expected={} actual={}",
+                expected_hash, actual_hash
+            )),
+        );
+    }
+
+    println!("<result>");
+    println!("<path>{}</path>", lock_path(root, path, requested));
+    println!("<status>stale_file</status>");
+    println!("<expected_hash>{}</expected_hash>", expected_hash);
+    println!("<actual_hash>{}</actual_hash>", actual_hash);
+    println!("</result>");
+
+    anyhow::bail!(
+        "stale file: expected hash {}, actual {}",
+        expected_hash,
+        actual_hash
+    )
+}
+
+fn write_event_meta(
+    before_hash: Option<&str>,
+    after_hash: Option<&str>,
+    expected_hash: &ExpectedHash,
+    content_hash: Option<String>,
+    change: Option<&ChangeSummary>,
+    lines: usize,
+    bytes: usize,
+    replacements: Option<usize>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut meta = std::collections::BTreeMap::new();
+    meta.insert(
+        "before_hash".to_string(),
+        before_hash.unwrap_or("missing").to_string(),
+    );
+    meta.insert(
+        "after_hash".to_string(),
+        after_hash.unwrap_or("missing").to_string(),
+    );
+    meta.insert(
+        "expected_hash_source".to_string(),
+        expected_hash.source.to_string(),
+    );
+    if let Some(expected_hash) = &expected_hash.value {
+        meta.insert("expected_hash".to_string(), expected_hash.clone());
+    }
+    if let Some(content_hash) = content_hash {
+        meta.insert("content_hash".to_string(), content_hash);
+    }
+    if let Some(change) = change {
+        meta.insert(
+            "changed_start_line".to_string(),
+            change.start_line.to_string(),
+        );
+        meta.insert("old_end_line".to_string(), change.old_end_line.to_string());
+        meta.insert("new_end_line".to_string(), change.new_end_line.to_string());
+        meta.insert(
+            "old_changed_lines".to_string(),
+            change.old_changed_lines.to_string(),
+        );
+        meta.insert(
+            "new_changed_lines".to_string(),
+            change.new_changed_lines.to_string(),
+        );
+    }
+    meta.insert("lines".to_string(), lines.to_string());
+    meta.insert("bytes".to_string(), bytes.to_string());
+    if let Some(replacements) = replacements {
+        meta.insert("replacements".to_string(), replacements.to_string());
+    }
+    meta
+}
+
+fn print_compact_write_receipt(
+    status: &str,
+    path: &str,
+    before_hash: Option<&str>,
+    after_hash: Option<&str>,
+    change: Option<&ChangeSummary>,
+    lines: usize,
+    bytes: usize,
+    replacements: Option<usize>,
+) {
+    println!("<result>");
+    println!("<path>{}</path>", path);
+    println!("<status>{}</status>", status);
+    if let Some(before_hash) = before_hash {
+        println!("<before_hash>{}</before_hash>", before_hash);
+    }
+    if let Some(after_hash) = after_hash {
+        println!("<after_hash>{}</after_hash>", after_hash);
+    }
+    if let Some(change) = change {
+        println!(
+            "<changed_range start=\"{}\" old_end=\"{}\" new_end=\"{}\" old_lines=\"{}\" new_lines=\"{}\"/>",
+            change.start_line,
+            change.old_end_line,
+            change.new_end_line,
+            change.old_changed_lines,
+            change.new_changed_lines
+        );
+    }
+    println!("<lines>{}</lines>", lines);
+    println!("<bytes>{}</bytes>", bytes);
+    if let Some(replacements) = replacements {
+        println!("<replacements>{}</replacements>", replacements);
+    }
+    println!("</result>");
+}
+
 /// Create a new file
-pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
+pub fn create(root: &Path, path: &str, content: &str, expected_hash: Option<&str>) -> Result<()> {
     let full_path = resolve_path(root, path);
     let _lock = acquire_file_lock(root, &full_path, path)?;
+    let before_hash = file_hash(&full_path);
+    let before_text = file_text(&full_path);
+    block_existing_source_write(root, &full_path, path)?;
+    let expected_hash = expected_hash_from_recent_read(root, &full_path, path, expected_hash);
+    verify_expected_hash(
+        root,
+        &full_path,
+        path,
+        before_hash.as_deref(),
+        expected_hash.value.as_deref(),
+        "write.guard",
+        None,
+    )?;
 
     // Create parent directories if needed
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    match create_file(&full_path, content) {
+    match protect::with_unlocked_path(root, &full_path, || {
+        create_file(&full_path, content).map_err(anyhow::Error::from)
+    }) {
         Ok(result) => {
             reindex_after_write(root, &full_path)?;
+            let after_hash = file_hash(&full_path);
+            let after_text = file_text(&full_path).unwrap_or_default();
+            let change = line_change_summary(before_text.as_deref(), &after_text);
             if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
-                events::record(
+                events::record_with_meta(
                     store.anchor_root(),
                     "write.apply",
                     Some(lock_path(root, &full_path, path)),
                     None,
                     "ok",
-                    Some("created".into()),
+                    Some(format!(
+                        "created before={} after={} content={}",
+                        before_hash.as_deref().unwrap_or("missing"),
+                        after_hash.as_deref().unwrap_or("missing"),
+                        content_hash_text(content)
+                    )),
+                    write_event_meta(
+                        before_hash.as_deref(),
+                        after_hash.as_deref(),
+                        &expected_hash,
+                        Some(content_hash_text(content)),
+                        Some(&change),
+                        result.lines_written,
+                        result.bytes_written,
+                        None,
+                    ),
                 );
             }
-            println!("<result>");
-            println!("<path>{}</path>", result.path);
-            println!("<status>created</status>");
-            println!("<lines>{}</lines>", result.lines_written);
-            println!("<bytes>{}</bytes>", result.bytes_written);
-            println!("</result>");
+            print_compact_write_receipt(
+                "created",
+                &result.path,
+                before_hash.as_deref(),
+                after_hash.as_deref(),
+                Some(&change),
+                result.lines_written,
+                result.bytes_written,
+                None,
+            );
         }
         Err(e) => {
             if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
@@ -187,29 +504,71 @@ pub fn create(root: &Path, path: &str, content: &str) -> Result<()> {
 }
 
 /// Insert content after a pattern
-pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<()> {
+pub fn insert(
+    root: &Path,
+    path: &str,
+    pattern: &str,
+    content: &str,
+    expected_hash: Option<&str>,
+) -> Result<()> {
     let full_path = resolve_path(root, path);
     let _lock = acquire_file_lock(root, &full_path, path)?;
+    let before_hash = file_hash(&full_path);
+    let before_text = file_text(&full_path);
+    let expected_hash = expected_hash_from_recent_read(root, &full_path, path, expected_hash);
+    verify_expected_hash(
+        root,
+        &full_path,
+        path,
+        before_hash.as_deref(),
+        expected_hash.value.as_deref(),
+        "edit.guard",
+        None,
+    )?;
 
-    match insert_after(&full_path, pattern, content) {
+    match protect::with_unlocked_path(root, &full_path, || {
+        insert_after(&full_path, pattern, content).map_err(anyhow::Error::from)
+    }) {
         Ok(result) => {
             reindex_after_write(root, &full_path)?;
+            let after_hash = file_hash(&full_path);
+            let after_text = file_text(&full_path).unwrap_or_default();
+            let change = line_change_summary(before_text.as_deref(), &after_text);
             if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
-                events::record(
+                events::record_with_meta(
                     store.anchor_root(),
                     "edit.apply",
                     Some(lock_path(root, &full_path, path)),
                     None,
                     "ok",
-                    Some("inserted".into()),
+                    Some(format!(
+                        "inserted before={} after={} content={}",
+                        before_hash.as_deref().unwrap_or("missing"),
+                        after_hash.as_deref().unwrap_or("missing"),
+                        content_hash_text(content)
+                    )),
+                    write_event_meta(
+                        before_hash.as_deref(),
+                        after_hash.as_deref(),
+                        &expected_hash,
+                        Some(content_hash_text(content)),
+                        Some(&change),
+                        result.lines_written,
+                        result.bytes_written,
+                        None,
+                    ),
                 );
             }
-            println!("<result>");
-            println!("<path>{}</path>", result.path);
-            println!("<status>inserted</status>");
-            println!("<lines>{}</lines>", result.lines_written);
-            println!("<pattern>{}</pattern>", pattern);
-            println!("</result>");
+            print_compact_write_receipt(
+                "inserted",
+                &result.path,
+                before_hash.as_deref(),
+                after_hash.as_deref(),
+                Some(&change),
+                result.lines_written,
+                result.bytes_written,
+                None,
+            );
         }
         Err(e) => {
             if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
@@ -232,10 +591,19 @@ pub fn insert(root: &Path, path: &str, pattern: &str, content: &str) -> Result<(
 }
 
 /// Replace one indexed symbol in a file.
-pub fn replace_symbol(root: &Path, path: &str, symbol: &str, content: &str) -> Result<()> {
+pub fn replace_symbol(
+    root: &Path,
+    path: &str,
+    symbol: &str,
+    content: &str,
+    expected_hash: Option<&str>,
+) -> Result<()> {
     let full_path = resolve_path(root, path);
     let store = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))?;
     let repo_path = lock_path(root, &full_path, path);
+    let before_hash = file_hash(&full_path);
+    let before_text = file_text(&full_path);
+    let expected_hash = expected_hash_from_recent_read(root, &full_path, path, expected_hash);
     let index = store.load_symbol_index()?;
     let entry = index
         .symbols
@@ -246,20 +614,50 @@ pub fn replace_symbol(root: &Path, path: &str, symbol: &str, content: &str) -> R
     let projection = store.create_projection(entry)?;
     let lock_symbol = symbol_lock_name(&repo_path, symbol);
     let _lock = acquire_lock(root, &full_path, path, &lock_symbol, Some(symbol))?;
-    let result = replace_range(
+    verify_expected_hash(
+        root,
         &full_path,
-        projection.line_start,
-        projection.line_end,
-        content,
+        path,
+        before_hash.as_deref(),
+        expected_hash.value.as_deref(),
+        "edit.guard",
+        Some(symbol),
     )?;
+    let result = protect::with_unlocked_path(root, &full_path, || {
+        replace_range(
+            &full_path,
+            projection.line_start,
+            projection.line_end,
+            content,
+        )
+        .map_err(anyhow::Error::from)
+    })?;
     reindex_after_write(root, &full_path)?;
-    events::record(
+    let after_hash = file_hash(&full_path);
+    let after_text = file_text(&full_path).unwrap_or_default();
+    let change = line_change_summary(before_text.as_deref(), &after_text);
+    events::record_with_meta(
         store.anchor_root(),
         "edit.apply",
         Some(repo_path.clone()),
         Some(symbol.to_string()),
         "ok",
-        Some("symbol_replaced".into()),
+        Some(format!(
+            "symbol_replaced before={} after={} content={}",
+            before_hash.as_deref().unwrap_or("missing"),
+            after_hash.as_deref().unwrap_or("missing"),
+            content_hash_text(content)
+        )),
+        write_event_meta(
+            before_hash.as_deref(),
+            after_hash.as_deref(),
+            &expected_hash,
+            Some(content_hash_text(content)),
+            Some(&change),
+            result.lines_written,
+            result.bytes_written,
+            None,
+        ),
     );
 
     println!("<result>");
@@ -268,13 +666,38 @@ pub fn replace_symbol(root: &Path, path: &str, symbol: &str, content: &str) -> R
     println!("<symbol>{}</symbol>", symbol);
     println!("<line_start>{}</line_start>", projection.line_start);
     println!("<line_end>{}</line_end>", projection.line_end);
+    if let Some(before_hash) = &before_hash {
+        println!("<before_hash>{}</before_hash>", before_hash);
+    }
+    if let Some(after_hash) = &after_hash {
+        println!("<after_hash>{}</after_hash>", after_hash);
+    }
+    println!(
+        "<changed_range start=\"{}\" old_end=\"{}\" new_end=\"{}\" old_lines=\"{}\" new_lines=\"{}\"/>",
+        change.start_line,
+        change.old_end_line,
+        change.new_end_line,
+        change.old_changed_lines,
+        change.new_changed_lines
+    );
+    println!(
+        "<content_hash>{}</content_hash>",
+        content_hash_text(content)
+    );
     println!("<lines>{}</lines>", result.lines_written);
+    println!("<bytes>{}</bytes>", result.bytes_written);
     println!("</result>");
     Ok(())
 }
 
 /// Replace text in files (supports glob patterns)
-pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
+pub fn replace(
+    root: &Path,
+    pattern: &str,
+    old: &str,
+    new: &str,
+    expected_hash: Option<&str>,
+) -> Result<()> {
     let paths = expand_glob(root, pattern)?;
 
     if paths.is_empty() {
@@ -288,28 +711,64 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
     if paths.len() == 1 {
         // Single file
         let _lock = acquire_file_lock(root, &paths[0], pattern)?;
-        match replace_all(&paths[0], old, new) {
+        let before_hash = file_hash(&paths[0]);
+        let before_text = file_text(&paths[0]);
+        let expected_hash = expected_hash_from_recent_read(root, &paths[0], pattern, expected_hash);
+        verify_expected_hash(
+            root,
+            &paths[0],
+            pattern,
+            before_hash.as_deref(),
+            expected_hash.value.as_deref(),
+            "edit.guard",
+            None,
+        )?;
+        match protect::with_unlocked_path(root, &paths[0], || {
+            replace_all(&paths[0], old, new).map_err(anyhow::Error::from)
+        }) {
             Ok(result) => {
                 reindex_after_write(root, &paths[0])?;
+                let after_hash = file_hash(&paths[0]);
+                let after_text = file_text(&paths[0]).unwrap_or_default();
+                let change = line_change_summary(before_text.as_deref(), &after_text);
                 if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))
                 {
-                    events::record(
+                    events::record_with_meta(
                         store.anchor_root(),
                         "edit.apply",
                         Some(lock_path(root, &paths[0], pattern)),
                         None,
                         "ok",
-                        Some("replaced".into()),
+                        Some(format!(
+                            "replaced before={} after={} old={} new={}",
+                            before_hash.as_deref().unwrap_or("missing"),
+                            after_hash.as_deref().unwrap_or("missing"),
+                            content_hash_text(old),
+                            content_hash_text(new)
+                        )),
+                        write_event_meta(
+                            before_hash.as_deref(),
+                            after_hash.as_deref(),
+                            &expected_hash,
+                            Some(content_hash_text(new)),
+                            Some(&change),
+                            result.lines_written,
+                            result.bytes_written,
+                            result.replacements,
+                        ),
                     );
                 }
                 let count = result.replacements.unwrap_or(0);
-                println!("<result>");
-                println!("<path>{}</path>", result.path);
-                println!("<status>replaced</status>");
-                println!("<replacements>{}</replacements>", count);
-                println!("<old>{}</old>", old);
-                println!("<new>{}</new>", new);
-                println!("</result>");
+                print_compact_write_receipt(
+                    "replaced",
+                    &result.path,
+                    before_hash.as_deref(),
+                    after_hash.as_deref(),
+                    Some(&change),
+                    result.lines_written,
+                    result.bytes_written,
+                    Some(count),
+                );
             }
             Err(e) => {
                 if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))
@@ -330,15 +789,26 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
             }
         }
     } else {
+        if expected_hash.is_some() {
+            anyhow::bail!("--expect-hash is only supported for single-file edits");
+        }
         // Batch replace
         let mut locks = Vec::with_capacity(paths.len());
         for path in &paths {
             locks.push(acquire_file_lock(root, path, &path.to_string_lossy())?);
         }
-        let results = batch_replace_all(&paths, old, new);
+        let before_hashes: std::collections::HashMap<String, String> = paths
+            .iter()
+            .filter_map(|path| {
+                file_hash(path).map(|hash| (path.to_string_lossy().to_string(), hash))
+            })
+            .collect();
+        let results =
+            protect::with_unlocked_paths(root, &paths, || Ok(batch_replace_all(&paths, old, new)))?;
         let summary = BatchWriteResult::from_results(results);
         for result in &summary.results {
             reindex_after_write(root, Path::new(&result.path))?;
+            let after_hash = file_hash(Path::new(&result.path));
             if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
                 events::record(
                     store.anchor_root(),
@@ -346,7 +816,16 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
                     Some(result.path.clone()),
                     None,
                     "ok",
-                    Some("batch_replaced".into()),
+                    Some(format!(
+                        "batch_replaced before={} after={} old={} new={}",
+                        before_hashes
+                            .get(&result.path)
+                            .map(String::as_str)
+                            .unwrap_or("missing"),
+                        after_hash.as_deref().unwrap_or("missing"),
+                        content_hash_text(old),
+                        content_hash_text(new)
+                    )),
                 );
             }
         }
@@ -363,14 +842,17 @@ pub fn replace(root: &Path, pattern: &str, old: &str, new: &str) -> Result<()> {
             total_replacements
         );
         println!("<time_ms>{}</time_ms>", summary.total_time_ms);
-        println!("<old>{}</old>", old);
-        println!("<new>{}</new>", new);
+        println!("<old_hash>{}</old_hash>", content_hash_text(old));
+        println!("<new_hash>{}</new_hash>", content_hash_text(new));
         println!("<files>");
         for result in &summary.results {
             if let Some(count) = result.replacements {
+                let after_hash = file_hash(Path::new(&result.path));
                 println!(
-                    "<file path=\"{}\" replacements=\"{}\"/>",
-                    result.path, count
+                    "<file path=\"{}\" replacements=\"{}\" after_hash=\"{}\"/>",
+                    result.path,
+                    count,
+                    after_hash.as_deref().unwrap_or("missing")
                 );
             }
         }
@@ -471,7 +953,7 @@ pub fn expand_glob(root: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{lock_path, resolve_path};
+    use super::{line_change_summary, lock_path, resolve_path, ChangeSummary};
     use std::path::Path;
 
     #[test]
@@ -502,5 +984,33 @@ mod tests {
         assert!(first
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'));
+    }
+
+    #[test]
+    fn regression_line_change_summary_detects_middle_replace() {
+        assert_eq!(
+            line_change_summary(Some("a\nb\nc\n"), "a\nB\nc\n"),
+            ChangeSummary {
+                start_line: 2,
+                old_end_line: 2,
+                new_end_line: 2,
+                old_changed_lines: 1,
+                new_changed_lines: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn regression_line_change_summary_detects_insert() {
+        assert_eq!(
+            line_change_summary(Some("a\nc\n"), "a\nb\nc\n"),
+            ChangeSummary {
+                start_line: 2,
+                old_end_line: 1,
+                new_end_line: 2,
+                old_changed_lines: 0,
+                new_changed_lines: 1,
+            }
+        );
     }
 }

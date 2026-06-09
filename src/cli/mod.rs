@@ -5,6 +5,7 @@
 //  Created by hak (tharun)
 //
 
+pub mod protect;
 pub mod write;
 
 use clap::{Parser, Subcommand};
@@ -33,15 +34,18 @@ const HELP_TEXT: &str = "
     Infrastructure for Coding AI agents
 
 Start here:
+  task <intent>           One-shot task intake for agent work
   context <sym> [sym2…]  Code + callers + callees
   status                  Session quality/provenance signals
   trace                   Recent execution events
   receipt                 Machine-readable execution receipt
   gate                    Enforce quality score threshold
+  protect                 Make source files writable only through Anchor
   check -- <cmd>          Run and record a verification command
+  run -- <cmd>            Run terminal command with raw-write audit
   search <q> [q2…]      Find symbols
   map [scope]           Codebase map / zoom into module
-  write <path> <content> Create/overwrite file
+  write <path> <content> Create file / overwrite non-source file
   edit <path> ...        Insert/replace/delete text
 
 Options:
@@ -50,6 +54,20 @@ Options:
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Build one compact task intake: symbols, code slices, related files, and test hints
+    Task {
+        /// Natural-language task intent
+        intent: Vec<String>,
+
+        /// Max ranked symbols to inspect
+        #[arg(short, long, default_value = "8")]
+        limit: usize,
+
+        /// Max symbols to include with code in the packet
+        #[arg(short = 'c', long, default_value = "4")]
+        context_limit: usize,
+    },
+
     /// Get symbol context (code + callers + callees)
     Context {
         /// Symbol names to query (supports multiple)
@@ -88,13 +106,17 @@ pub enum Commands {
         scope: Option<String>,
     },
 
-    /// Create or overwrite a file
+    /// Create a file or overwrite a non-source file
     Write {
         /// File path
         path: String,
 
         /// File content
         content: String,
+
+        /// Required current file hash before writing. Use "missing" for new files.
+        #[arg(long)]
+        expect_hash: Option<String>,
     },
 
     /// Edit a file by pattern or indexed symbol
@@ -117,6 +139,17 @@ pub enum Commands {
         /// Content for insert/replace
         #[arg(short, long)]
         content: Option<String>,
+
+        /// Required current file hash before editing. Use "missing" for new files.
+        #[arg(long)]
+        expect_hash: Option<String>,
+    },
+
+    /// Protect source files from raw writes: on, off, or status
+    Protect {
+        /// Action: on, off, status
+        #[arg(default_value = "status")]
+        action: String,
     },
 
     /// Show compact execution/provenance status
@@ -141,6 +174,13 @@ pub enum Commands {
 
     /// Run a verification command and record the result
     Check {
+        /// Command and arguments to run after `--`
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// Run a terminal command and fail if it mutates files outside Anchor writes
+    Run {
         /// Command and arguments to run after `--`
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,

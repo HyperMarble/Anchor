@@ -22,8 +22,8 @@ struct MockLockd {
 impl MockLockd {
     fn start() -> Self {
         let id = NEXT_SOCKET_ID.fetch_add(1, Ordering::SeqCst);
-        let socket = PathBuf::from(format!(
-            "/tmp/anchor-lockd-cli-conflict-{}-{}.sock",
+        let socket = PathBuf::from("/private/tmp").join(format!(
+            "anchor-lockd-cli-conflict-{}-{}.sock",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::error::{AnchorError, Result};
+use crate::parser::language::is_source_path;
 
 pub const ANCHOR_DIR: &str = ".anchor";
 
@@ -86,6 +87,42 @@ impl CallIndex {
             .map(|v| v.iter().map(|s| s.as_str()).collect())
             .unwrap_or_default()
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryIndex {
+    pub schema: String,
+    pub commits_scanned: usize,
+    pub cochanges: Vec<CoChangeEntry>,
+    #[serde(default)]
+    pub adjacency: BTreeMap<String, Vec<HistoryNeighbor>>,
+    pub paths: Vec<PathHistoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CoChangeEntry {
+    pub path: String,
+    pub related_path: String,
+    pub commits: usize,
+    #[serde(default)]
+    pub score: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryNeighbor {
+    pub related_path: String,
+    pub commits: usize,
+    pub score: usize,
+    pub is_test: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PathHistoryEntry {
+    pub path: String,
+    pub commits: usize,
+    #[serde(default)]
+    pub score: usize,
+    pub is_test: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +321,29 @@ impl AnchorStore {
         serde_json::from_slice(&bytes).unwrap_or_default()
     }
 
+    pub fn history_index_path(&self) -> PathBuf {
+        self.anchor_root.join("index").join("history.json")
+    }
+
+    pub fn save_history_index(&self, index: &HistoryIndex) -> Result<()> {
+        let path = self.history_index_path();
+        fs::create_dir_all(path.parent().ok_or_else(|| {
+            AnchorError::InvalidStructure(format!(
+                "history index has no parent: {}",
+                path.display()
+            ))
+        })?)?;
+        fs::write(path, serde_json::to_vec_pretty(index)?)?;
+        Ok(())
+    }
+
+    pub fn load_history_index(&self) -> HistoryIndex {
+        let Ok(bytes) = fs::read(self.history_index_path()) else {
+            return HistoryIndex::default();
+        };
+        serde_json::from_slice(&bytes).unwrap_or_default()
+    }
+
     /// Symbols in a file that overlap the given line range. Used for write impact analysis.
     pub fn symbols_in_range<'a>(
         &self,
@@ -470,7 +530,14 @@ impl AnchorStore {
             })
             .collect();
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            scored_symbol_rank(&b.0, query, b.1)
+                .partial_cmp(&scored_symbol_rank(&a.0, query, a.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.path.cmp(&b.0.path))
+                .then_with(|| a.0.line_start.cmp(&b.0.line_start))
+                .then_with(|| a.0.name.cmp(&b.0.name))
+        });
         scored.truncate(limit);
 
         Ok(scored.into_iter().map(|(sym, _)| sym).collect())
@@ -486,6 +553,35 @@ impl AnchorStore {
 
         Ok(relative.to_string_lossy().replace('\\', "/"))
     }
+}
+
+fn scored_symbol_rank(symbol: &SymbolEntry, query: &str, bm25_score: f32) -> f32 {
+    let query_lower = query.to_lowercase();
+    let name_lower = symbol.name.to_lowercase();
+    let path = Path::new(&symbol.path);
+    let source_bonus = if is_source_path(path) { 80.0 } else { -60.0 };
+    let kind_bonus = match symbol.kind.as_str() {
+        "Class" | "Function" | "Method" | "Struct" | "Enum" | "Interface" | "Trait" => 25.0,
+        "Module" if is_source_path(path) => 5.0,
+        "Module" => -30.0,
+        _ => 0.0,
+    };
+    let name_bonus = if name_lower == query_lower {
+        500.0
+    } else if name_lower.starts_with(&query_lower) {
+        160.0
+    } else if name_lower.contains(&query_lower) {
+        80.0
+    } else {
+        0.0
+    };
+    let test_penalty = if symbol.path.contains("/tests/") || symbol.path.starts_with("tests/") {
+        -15.0
+    } else {
+        0.0
+    };
+
+    bm25_score + source_bonus + kind_bonus + name_bonus + test_penalty
 }
 
 fn score_symbol_match(symbol: &SymbolEntry, query_lower: &str) -> usize {
