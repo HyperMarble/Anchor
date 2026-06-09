@@ -226,6 +226,74 @@ The final Anchor transaction should record:
 This gives teams a way to answer: what did the agent do, why did it do it, and
 can we trust the result?
 
+## Git-Native Behavioral Index
+
+Anchor should use Git as more than final source control.
+
+Git can act as a behavioral parser for the repository. It cannot fully replace
+language-aware parsing for exact symbol ranges or call resolution, but it can
+show how the project actually changes over time.
+
+Each commit is a concrete tree plus an accepted patch. Across many commits, Git
+can reveal patterns that a static source graph cannot:
+
+- files that usually change together
+- tests that move with a feature
+- paths that are repeatedly involved in similar fixes
+- files that were touched and later reverted
+- high-churn or high-risk areas
+- patch shapes that solved similar work before
+
+A normal code graph might say:
+
+```text
+refund_payment calls payment_lock
+```
+
+A Git-native behavioral index should also say:
+
+```text
+past refund fixes usually changed refund_payment and payment_lock
+tests/test_refund.py was the useful check
+invoice_email.py was touched once and reverted as unrelated
+editing refund_payment alone failed in a previous attempt
+```
+
+That last line requires execution awareness. Git records accepted work history.
+Anchor records attempted work history:
+
+```text
+task intent
+context reads
+locks acquired
+edits attempted
+checks failed
+checks passed
+reverts
+final receipt
+```
+
+Together:
+
+```text
+Git history = accepted work history
+Anchor provenance = attempted work history
+```
+
+This is the stronger direction than "Anchor is a source graph." The source graph
+is only a derived working view. The product direction is:
+
+```text
+Git-derived behavioral facts
++ parser-derived code facts
++ execution provenance
++ locks and checked writes
+= governed agent execution
+```
+
+The parser/indexer is still needed for exact current-code facts. Git provides
+the historical behavior layer. Anchor uses both to guide and control agent work.
+
 ## Agent Flight Recorder
 
 The second name for this layer is the agent flight recorder.

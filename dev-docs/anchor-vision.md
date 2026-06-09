@@ -129,6 +129,41 @@ The agent should not freely rewrite broad parts of the repository when the task 
 
 This improves quality and safety.
 
+The freshness check is a known production pattern applied to agent writes.
+Other systems call this optimistic concurrency control, optimistic locking,
+conditional writes, or lost-update prevention.
+
+The simple rule is:
+
+```text
+read version X
+write only if still version X
+if changed, reject and reread
+```
+
+Examples from existing infrastructure:
+
+- HTTP APIs use `ETag` plus `If-Match` to avoid overwriting a resource changed
+  by someone else.
+- DynamoDB conditional writes and optimistic locking update an item only if its
+  version still matches.
+- Kubernetes uses `resourceVersion`; stale updates get conflict responses.
+
+Anchor applies the same idea to source files:
+
+```text
+agent reads file hash X through Anchor
+agent later writes through Anchor
+Anchor checks the file still has hash X
+
+same hash -> write allowed
+different hash -> stale write blocked
+```
+
+This is mainly useful for multi-agent, team, and long-running work, but it can
+also protect a single agent if a formatter, generator, test setup command, or
+human changes the file during the task.
+
 ### Multi-Agent Coordination
 
 Anchor coordinates many agents working in the same project.
@@ -173,11 +208,94 @@ This helps humans audit work, but it also helps future agents.
 
 The record becomes operational memory.
 
+### Git-Native Behavioral Index
+
+Anchor should not become just another source graph.
+
+A normal source graph answers static code questions:
+
+- where a symbol lives
+- which file contains a function
+- what calls what
+- which references point to a definition
+
+That is useful, but it is not enough to make agents better at real software work.
+
+Anchor should use Git as a behavioral parser of the repository. Each commit is a
+specific tree plus a specific accepted change. Across history, Git can reveal:
+
+- files that usually change together
+- tests that usually change or fail near a feature
+- symbols or paths that repeatedly appear in similar fixes
+- files that were touched and later reverted
+- areas with high churn or high regression risk
+- patch shapes that solved a class of tasks before
+
+This is different from only asking "what calls this function?" It asks:
+
+```text
+when humans or agents changed this behavior before,
+what actually had to move?
+```
+
+Anchor should combine that historical signal with execution provenance:
+
+- what the agent read
+- what it locked
+- what it edited
+- what failed
+- what passed
+- what was reverted
+- what was accepted
+
+Together, this becomes a historical and execution-aware index:
+
+```text
+Git history = accepted work history
+Anchor provenance = attempted work history
+```
+
+The syntax/parser index still matters for exact symbol ranges, calls, and scoped
+writes. But the product moat is not "we have a graph." The stronger direction is:
+
+```text
+Git-derived behavioral facts
++ parser-derived code facts
++ execution provenance
++ locks and checked writes
+= Anchor execution harness
+```
+
+This keeps Git as the foundation while avoiding the trap of becoming a generic
+Sourcegraph-style clone.
+
 ### Quality Kernel
 
 The quality kernel uses execution memory and verification signals to improve future agent work.
 
-It should learn from:
+The first version should be deterministic. It should not depend on another model
+judging the patch. It should score the execution evidence Anchor already has:
+
+- did the agent read context before editing
+- did it read the same file it edited
+- did the file change after it was read
+- did the write use a freshness guard
+- how many files changed
+- how many lines changed
+- did checks pass or fail
+- did the agent touch risky paths such as auth, billing, config, migrations, or security files
+- were there lock conflicts or stale-write blocks
+
+The output should be:
+
+```text
+score
+risk
+flags
+recommended next actions
+```
+
+Later versions should learn from:
 
 - repeated failed edits
 - broad patches that were rejected
@@ -289,4 +407,3 @@ Before a serious launch, Anchor must prove:
 The promise is not that agents become perfect.
 
 The promise is that agents become cheaper, cleaner, and safer to run through Anchor.
-

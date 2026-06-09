@@ -156,6 +156,60 @@ logic
 - Still required: final grammar, source-to-Zev correctness checks, Zev-to-source
   regeneration, and real benchmark tasks.
 
+## Doctor-Normalized Canonical Layer
+
+Zev should not be treated as a compression layer over arbitrary raw source.
+The stronger hypothesis is:
+
+```
+raw source
+  -> doctor normalization
+  -> canonical source
+  -> Zev representation
+```
+
+The Zev representation is built on top of the normalized/canonical layer, not
+directly on messy source code. This matters because raw source contains noise
+that is not part of the program's meaningful structure:
+
+- formatting differences
+- import ordering
+- unused imports or unused locals
+- equivalent syntax choices
+- inconsistent project style
+- framework anti-patterns
+- agent-written structural mess
+
+Doctor tools already exist in pieces across ecosystems: Ruff/Black for Python,
+ESLint/Biome/React Doctor for JS and React, Clippy/rustfmt/cargo fix for Rust,
+gofmt/go fix/go vet for Go, OpenRewrite for Java, Rector for PHP, RuboCop for
+Ruby, clang-tidy/clang-format for C/C++, and Roslyn/dotnet format for .NET.
+The hypothesis is not that linting is new. The hypothesis is that these
+deterministic doctor passes can become the canonicalization front-end before
+Zev conversion.
+
+For Python, a minimal proof works:
+
+```
+raw Python
+  -> ruff check --fix
+  -> ruff format
+  -> stable canonical Python
+```
+
+Safe doctor mode should be the default because safe fixes are meant to preserve
+semantics. Unsafe fixes may still be useful, but only behind explicit policy,
+tests, or a quality gate, because they can change behavior.
+
+So the actual Zev claim is:
+
+> Zev is not "compress source code." Zev is "represent doctor-clean canonical
+> code compactly."
+
+This gives the representation a stable input surface. If the same messy code
+normalizes to the same canonical source, Zev has less syntax noise to encode and
+the model sees a more consistent program shape.
+
 ## What Needs Building
 
 1. **Final Zev grammar/parser**

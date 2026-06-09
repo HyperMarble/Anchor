@@ -29,6 +29,7 @@ cargo build --release
 
 ```bash
 anchor build                 # index the workspace
+anchor task "<intent>"       # get task intake: symbols, slices, related files, likely tests
 anchor context <name>        # load focused code context
 anchor write <path> <text>   # create or overwrite a file
 anchor edit <path> --action replace --pattern <old> --content <new>
@@ -43,6 +44,7 @@ anchor gate --min-score 85   # fail if recorded quality is below threshold
 ## What It Provides
 
 - focused context for coding agents
+- task intake that combines current code facts with Git-history behavior
 - checked write/edit operations
 - session and lock-aware agent workflow
 - execution event log for reads, writes, locks, and checks
