@@ -215,6 +215,9 @@ dev-docs/zev-anchor-v2-notes.md
 # Anchor benchmark outputs
 benchmark/results/
 
+# Local runtime state
+data/
+
 # Vim swap files
 *.swp
 *.swo
