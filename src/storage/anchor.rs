@@ -184,6 +184,14 @@ impl AnchorStore {
                 return Self::open(&current);
             }
 
+            // A `.git` directory marks the project boundary. Walking past it
+            // can silently attach to an unrelated store higher up the disk
+            // (e.g. a stray `.anchor` at a mount root), which mixes state
+            // across every repo below it.
+            if current.join(".git").exists() {
+                return Err(AnchorError::NotFound(start.join(ANCHOR_DIR)));
+            }
+
             if !current.pop() {
                 return Err(AnchorError::NotFound(start.join(ANCHOR_DIR)));
             }

@@ -490,3 +490,28 @@ fn real_mlflow_anchor_store_projection_benchmark() {
     assert_eq!(metrics.stale_rejections, metrics.symbols_tested);
     assert_eq!(metrics.failures, 0);
 }
+
+#[test]
+fn discover_stops_at_git_boundary_instead_of_escaping_to_ancestor_store() {
+    use anchor::storage::AnchorStore;
+    use std::fs;
+
+    let outer = tempfile::tempdir().unwrap();
+    // stray store above the repo, like a forgotten .anchor at a mount root
+    fs::create_dir_all(outer.path().join(".anchor")).unwrap();
+    let repo = outer.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::create_dir_all(repo.join("src")).unwrap();
+
+    let result = AnchorStore::discover(&repo);
+    assert!(
+        result.is_err(),
+        "a git repo without its own store must not attach to an ancestor store"
+    );
+
+    // without a .git boundary the ancestor store is still discoverable
+    let plain = outer.path().join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    let found = AnchorStore::discover(&plain);
+    assert!(found.is_ok(), "non-repo directories may still walk up");
+}
