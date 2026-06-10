@@ -140,6 +140,7 @@ def bench_efficiency_quality(repo: Path, count: int) -> dict:
                 continue
             hits = [f for f in truth_present if f in ranked]
             top_correct = bool(ranked) and ranked[0] in truth_present
+            top3_correct = any(f in truth_present for f in ranked[:3])
             # baseline = read the same number of candidate files Anchor ranked,
             # but whole; floor at the truth set so we never flatter Anchor.
             cand = ranked[: max(len(truth_present), 4)] or truth_present
@@ -148,6 +149,7 @@ def bench_efficiency_quality(repo: Path, count: int) -> dict:
                 {
                     "recall": len(hits) / len(truth_present),
                     "top_correct": top_correct,
+                    "top3_correct": top3_correct,
                     "served": served,
                     "baseline": base,
                 }
@@ -162,6 +164,7 @@ def bench_efficiency_quality(repo: Path, count: int) -> dict:
     n = len(rows)
     recall = sum(r["recall"] for r in rows) / n
     top1 = sum(1 for r in rows if r["top_correct"]) / n
+    top3 = sum(1 for r in rows if r["top3_correct"]) / n
     served = sum(r["served"] for r in rows)
     base = sum(r["baseline"] for r in rows)
     saved = 1 - served / base if base else 0.0
@@ -169,6 +172,7 @@ def bench_efficiency_quality(repo: Path, count: int) -> dict:
         "tasks": n,
         "quality_recall_at_workspace": round(recall, 3),
         "quality_top1_accuracy": round(top1, 3),
+        "quality_top3_accuracy": round(top3, 3),
         "efficiency_token_savings_vs_wholefile": round(saved, 3),
         "tokens_served": served,
         "tokens_baseline": base,
@@ -246,7 +250,7 @@ def main():
         name = Path(repo).name
         clone = isolated_clone(Path(repo))
         try:
-            report["efficiency_quality"][name] = bench_efficiency_quality(clone, 15)
+            report["efficiency_quality"][name] = bench_efficiency_quality(clone, 30)
         finally:
             shutil.rmtree(clone.parent, ignore_errors=True)
     print(json.dumps(report, indent=2))

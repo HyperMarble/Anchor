@@ -170,6 +170,10 @@ pub enum Commands {
         /// Minimum acceptable quality score
         #[arg(long, default_value = "85")]
         min_score: u8,
+
+        /// Fail when any changed source file has no recorded Anchor write event
+        #[arg(long)]
+        require_receipts: bool,
     },
 
     /// Run a verification command and record the result
