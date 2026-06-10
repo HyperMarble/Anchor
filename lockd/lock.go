@@ -22,8 +22,9 @@ type LockEntry struct {
 // LockManager holds all active locks behind a single RWMutex.
 // Reads (check, list) hold RLock; writes (acquire, release) hold Lock.
 type LockManager struct {
-	mu    sync.RWMutex
-	locks map[LockKey]*LockEntry
+	mu          sync.RWMutex
+	locks       map[LockKey]*LockEntry
+	persistPath string
 }
 
 func NewLockManager() *LockManager {

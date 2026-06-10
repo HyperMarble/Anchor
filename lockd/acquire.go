@@ -27,11 +27,13 @@ func (m *LockManager) Acquire(req Request) Response {
 	case !held || now.After(existing.ExpiresAt):
 		// not locked or stale — grant
 		m.locks[key] = &LockEntry{Owner: req.Agent, AcquiredAt: now, ExpiresAt: expires}
+		m.persistLocked()
 		return okResp()
 
 	case existing.Owner == req.Agent:
 		// same agent re-acquiring — refresh TTL
 		existing.ExpiresAt = expires
+		m.persistLocked()
 		return okResp()
 
 	default:

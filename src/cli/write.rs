@@ -19,6 +19,15 @@ use crate::write::{
 
 const CLI_FILE_LOCK: &str = "__file__";
 
+/// Fail-closed mode. With `ANCHOR_STRICT=1`, governance gaps become refusals
+/// instead of warnings: writes are blocked when lockd is unreachable and when
+/// an existing source file has no recorded read for this session.
+pub fn strict_mode() -> bool {
+    std::env::var("ANCHOR_STRICT")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "on"))
+        .unwrap_or(false)
+}
+
 struct CliLock {
     lock_symbol: String,
     event_symbol: Option<String>,
@@ -111,13 +120,43 @@ fn acquire_lock(
             }
             anyhow::bail!("BLOCKED by {}: {}", owner, reason)
         }
-        lockd::LockdResult::Unavailable => Ok(CliLock {
-            lock_symbol: lock_symbol.to_string(),
-            event_symbol,
-            path,
-            acquired: false,
-            anchor_root,
-        }),
+        lockd::LockdResult::Unavailable => {
+            if strict_mode() {
+                if let Some(anchor_root) = &anchor_root {
+                    events::record(
+                        anchor_root,
+                        "lock.acquire",
+                        Some(path.clone()),
+                        event_symbol,
+                        "blocked",
+                        Some("strict mode: lockd unavailable".to_string()),
+                    );
+                }
+                println!("<result>");
+                println!("<path>{}</path>", path);
+                println!("<status>lockd_unavailable</status>");
+                println!("<message>strict mode requires a reachable lockd before writes</message>");
+                println!("</result>");
+                anyhow::bail!("strict mode: lockd unavailable, refusing unlocked write");
+            }
+            if let Some(anchor_root) = &anchor_root {
+                events::record(
+                    anchor_root,
+                    "lock.skip",
+                    Some(path.clone()),
+                    event_symbol.clone(),
+                    "warn",
+                    Some("lockd unavailable; proceeding without coordination".to_string()),
+                );
+            }
+            Ok(CliLock {
+                lock_symbol: lock_symbol.to_string(),
+                event_symbol,
+                path,
+                acquired: false,
+                anchor_root,
+            })
+        }
     }
 }
 
@@ -205,24 +244,7 @@ fn expected_hash_from_recent_read(
     let repo_path = lock_path(root, path, requested);
     let session_id = std::env::var("ANCHOR_SESSION_ID").unwrap_or_else(|_| "local".into());
     let agent_id = lockd::agent_id().to_string();
-    let Some(events) = events::load(store.anchor_root()).ok() else {
-        return ExpectedHash {
-            value: None,
-            source: "none",
-        };
-    };
-
-    let value = events
-        .iter()
-        .rev()
-        .find(|event| {
-            event.event_type == "context.read"
-                && (event.status == "ok" || event.status == "cached")
-                && event.path.as_deref() == Some(repo_path.as_str())
-                && event.session_id == session_id
-                && event.agent_id == agent_id
-        })
-        .and_then(|event| event.meta.get("source_hash").cloned());
+    let value = events::last_read_hash(store.anchor_root(), &session_id, &agent_id, &repo_path);
 
     if value.is_some() {
         ExpectedHash {
@@ -279,6 +301,63 @@ fn line_change_summary(before: Option<&str>, after: &str) -> ChangeSummary {
         old_changed_lines,
         new_changed_lines,
     }
+}
+
+/// Strict-mode read requirement: an existing source file may only be changed
+/// by a session that has actually read it (a recorded `context.read`).
+fn enforce_read_requirement(
+    root: &Path,
+    path: &Path,
+    requested: &str,
+    expected_hash: &ExpectedHash,
+    event_kind: &str,
+    event_symbol: Option<&str>,
+) -> Result<()> {
+    if !strict_mode()
+        || expected_hash.value.is_some()
+        || !path.exists()
+        || !is_source_path(path)
+    {
+        return Ok(());
+    }
+    let repo_path = lock_path(root, path, requested);
+    if let Ok(store) = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root)) {
+        events::record(
+            store.anchor_root(),
+            event_kind,
+            Some(repo_path.clone()),
+            event_symbol.map(str::to_string),
+            "blocked",
+            Some("strict mode: no recorded read for this session".to_string()),
+        );
+    }
+    println!("<result>");
+    println!("<path>{}</path>", repo_path);
+    println!("<status>read_required</status>");
+    println!("<message>strict mode: read this file through anchor context before editing it</message>");
+    println!("</result>");
+    anyhow::bail!("strict mode: no recorded read for {}", repo_path)
+}
+
+/// Provenance is load-bearing: the attempt is recorded *before* the file is
+/// touched, so an unwritable event log refuses the mutation instead of
+/// producing an unrecorded change.
+fn record_write_attempt(
+    root: &Path,
+    path: &Path,
+    requested: &str,
+    operation: &str,
+    symbol: Option<&str>,
+) -> Result<()> {
+    let store = AnchorStore::discover(root).or_else(|_| AnchorStore::init(root))?;
+    events::record_required(
+        store.anchor_root(),
+        "write.attempt",
+        Some(lock_path(root, path, requested)),
+        symbol.map(str::to_string),
+        "ok",
+        Some(format!("operation={operation}")),
+    )
 }
 
 fn verify_expected_hash(
@@ -433,14 +512,18 @@ pub fn create(root: &Path, path: &str, content: &str, expected_hash: Option<&str
         "write.guard",
         None,
     )?;
+    enforce_read_requirement(root, &full_path, path, &expected_hash, "write.guard", None)?;
+    record_write_attempt(root, &full_path, path, "create", None)?;
 
     // Create parent directories if needed
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    match protect::with_unlocked_path(root, &full_path, || {
-        create_file(&full_path, content).map_err(anyhow::Error::from)
+    match crate::write::governed(|| {
+        protect::with_unlocked_path(root, &full_path, || {
+            create_file(&full_path, content).map_err(anyhow::Error::from)
+        })
     }) {
         Ok(result) => {
             reindex_after_write(root, &full_path)?;
@@ -525,9 +608,13 @@ pub fn insert(
         "edit.guard",
         None,
     )?;
+    enforce_read_requirement(root, &full_path, path, &expected_hash, "edit.guard", None)?;
+    record_write_attempt(root, &full_path, path, "insert", None)?;
 
-    match protect::with_unlocked_path(root, &full_path, || {
-        insert_after(&full_path, pattern, content).map_err(anyhow::Error::from)
+    match crate::write::governed(|| {
+        protect::with_unlocked_path(root, &full_path, || {
+            insert_after(&full_path, pattern, content).map_err(anyhow::Error::from)
+        })
     }) {
         Ok(result) => {
             reindex_after_write(root, &full_path)?;
@@ -623,14 +710,18 @@ pub fn replace_symbol(
         "edit.guard",
         Some(symbol),
     )?;
-    let result = protect::with_unlocked_path(root, &full_path, || {
-        replace_range(
-            &full_path,
-            projection.line_start,
-            projection.line_end,
-            content,
-        )
-        .map_err(anyhow::Error::from)
+    enforce_read_requirement(root, &full_path, path, &expected_hash, "edit.guard", Some(symbol))?;
+    record_write_attempt(root, &full_path, path, "replace_symbol", Some(symbol))?;
+    let result = crate::write::governed(|| {
+        protect::with_unlocked_path(root, &full_path, || {
+            replace_range(
+                &full_path,
+                projection.line_start,
+                projection.line_end,
+                content,
+            )
+            .map_err(anyhow::Error::from)
+        })
     })?;
     reindex_after_write(root, &full_path)?;
     let after_hash = file_hash(&full_path);
@@ -723,8 +814,12 @@ pub fn replace(
             "edit.guard",
             None,
         )?;
-        match protect::with_unlocked_path(root, &paths[0], || {
-            replace_all(&paths[0], old, new).map_err(anyhow::Error::from)
+        enforce_read_requirement(root, &paths[0], pattern, &expected_hash, "edit.guard", None)?;
+        record_write_attempt(root, &paths[0], pattern, "replace", None)?;
+        match crate::write::governed(|| {
+            protect::with_unlocked_path(root, &paths[0], || {
+                replace_all(&paths[0], old, new).map_err(anyhow::Error::from)
+            })
         }) {
             Ok(result) => {
                 reindex_after_write(root, &paths[0])?;
@@ -797,14 +892,30 @@ pub fn replace(
         for path in &paths {
             locks.push(acquire_file_lock(root, path, &path.to_string_lossy())?);
         }
+        for path in &paths {
+            let requested = path.to_string_lossy().to_string();
+            let expected = expected_hash_from_recent_read(root, path, &requested, None);
+            verify_expected_hash(
+                root,
+                path,
+                &requested,
+                file_hash(path).as_deref(),
+                expected.value.as_deref(),
+                "edit.guard",
+                None,
+            )?;
+            enforce_read_requirement(root, path, &requested, &expected, "edit.guard", None)?;
+            record_write_attempt(root, path, &requested, "batch_replace", None)?;
+        }
         let before_hashes: std::collections::HashMap<String, String> = paths
             .iter()
             .filter_map(|path| {
                 file_hash(path).map(|hash| (path.to_string_lossy().to_string(), hash))
             })
             .collect();
-        let results =
-            protect::with_unlocked_paths(root, &paths, || Ok(batch_replace_all(&paths, old, new)))?;
+        let results = crate::write::governed(|| {
+            protect::with_unlocked_paths(root, &paths, || Ok(batch_replace_all(&paths, old, new)))
+        })?;
         let summary = BatchWriteResult::from_results(results);
         for result in &summary.results {
             reindex_after_write(root, Path::new(&result.path))?;

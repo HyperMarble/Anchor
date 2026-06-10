@@ -88,11 +88,11 @@ func TestValidateSymbol(t *testing.T) {
 
 func TestNormTTL(t *testing.T) {
 	cases := []struct{ in, want int }{
-		{0, 300},   // default
-		{-1, 300},  // negative → default
+		{0, 300},     // default
+		{-1, 300},    // negative → default
 		{9999, 3600}, // cap at max
-		{120, 120}, // passthrough
-		{1, 1},     // min
+		{120, 120},   // passthrough
+		{1, 1},       // min
 	}
 	for _, c := range cases {
 		got := normTTL(c.in)

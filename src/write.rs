@@ -5,8 +5,46 @@
 //  Created by hak (tharun)
 //
 
+use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+thread_local! {
+    static GOVERNED_WRITE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Marks the enclosed raw write as coming through the governed path (locks,
+/// hash checks, provenance). Direct library calls outside this wrapper are
+/// recorded as `write.raw` so bypasses leave evidence just like terminal
+/// writes do.
+pub(crate) fn governed<T>(operation: impl FnOnce() -> T) -> T {
+    GOVERNED_WRITE.with(|flag| {
+        let previous = flag.replace(true);
+        let result = operation();
+        flag.set(previous);
+        result
+    })
+}
+
+fn record_ungoverned_write(path: &Path, operation: &str) {
+    if GOVERNED_WRITE.with(|flag| flag.get()) {
+        return;
+    }
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    let Ok(store) = crate::storage::AnchorStore::discover(parent) else {
+        return;
+    };
+    crate::events::record(
+        store.anchor_root(),
+        "write.raw",
+        Some(path.display().to_string()),
+        None,
+        "warn",
+        Some(format!("ungoverned library write: {operation}")),
+    );
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WriteError {
@@ -30,6 +68,7 @@ fn read_file(path: &Path) -> Result<String, WriteError> {
 
 /// Create a new file with the given content.
 pub fn create_file(path: &Path, content: &str) -> Result<WriteResult, WriteError> {
+    record_ungoverned_write(path, "create_file");
     let start = std::time::Instant::now();
 
     fs::write(path, content)?;
@@ -49,6 +88,7 @@ pub fn create_file(path: &Path, content: &str) -> Result<WriteResult, WriteError
 
 /// Insert content after a pattern in a file.
 pub fn insert_after(path: &Path, pattern: &str, content: &str) -> Result<WriteResult, WriteError> {
+    record_ungoverned_write(path, "insert_after");
     let start = std::time::Instant::now();
 
     let original = read_file(path)?;
@@ -82,6 +122,7 @@ pub fn insert_after(path: &Path, pattern: &str, content: &str) -> Result<WriteRe
 
 /// Insert content before a pattern in a file.
 pub fn insert_before(path: &Path, pattern: &str, content: &str) -> Result<WriteResult, WriteError> {
+    record_ungoverned_write(path, "insert_before");
     let start = std::time::Instant::now();
 
     let original = read_file(path)?;
@@ -113,6 +154,7 @@ pub fn replace_all(
     old_pattern: &str,
     new_content: &str,
 ) -> Result<WriteResult, WriteError> {
+    record_ungoverned_write(path, "replace_all");
     let start = std::time::Instant::now();
 
     let original = read_file(path)?;
@@ -144,15 +186,14 @@ pub fn replace_first(
     old_pattern: &str,
     new_content: &str,
 ) -> Result<WriteResult, WriteError> {
+    record_ungoverned_write(path, "replace_first");
     let start = std::time::Instant::now();
 
     let original = read_file(path)?;
 
-    if !original.contains(old_pattern) {
+    let Some((first, rest)) = original.split_once(old_pattern) else {
         return Err(WriteError::PatternNotFound(old_pattern.to_string()));
-    }
-
-    let (first, rest) = original.split_once(old_pattern).unwrap();
+    };
     let new_content = format!("{}{}{}", first, new_content, rest);
 
     fs::write(path, &new_content)?;
@@ -178,6 +219,7 @@ pub fn replace_range(
     end_line: usize,
     new_content: &str,
 ) -> Result<WriteResult, WriteError> {
+    record_ungoverned_write(path, "replace_range");
     let start = std::time::Instant::now();
 
     if start_line == 0 || end_line == 0 || start_line > end_line {

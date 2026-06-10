@@ -46,6 +46,19 @@ anchor receipt               # export machine-readable receipt + quality score
 anchor gate --min-score 85   # fail if recorded quality is below threshold
 ```
 
+## Strict Mode
+
+By default Anchor degrades gracefully: if the lock daemon is unreachable or a
+file has no recorded read, the write proceeds and the gap is recorded as an
+event. Set `ANCHOR_STRICT=1` to fail closed instead:
+
+- writes are refused when lockd is unreachable
+- existing source files can only be edited by a session that has read them
+  through `anchor context`
+
+In both modes, every mutation records a `write.attempt` event *before* the
+file is touched — if the event log cannot be written, the write is refused.
+
 ## What It Provides
 
 - task-scoped working sets instead of whole-workspace context

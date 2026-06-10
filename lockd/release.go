@@ -27,6 +27,7 @@ func (m *LockManager) Release(req Request) Response {
 		return failResp("not_owner")
 	default:
 		delete(m.locks, key)
+		m.persistLocked()
 		return okResp()
 	}
 }

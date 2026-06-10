@@ -12,6 +12,11 @@ use std::time::{Duration, Instant};
 
 use super::types::*;
 
+/// Locks held longer than this are treated as abandoned. Mirrors lockd's
+/// default TTL so the in-process and daemon lock semantics stay aligned; an
+/// unreleased lock must never outlive its session forever.
+const LOCK_TTL: Duration = Duration::from_secs(300);
+
 /// Manages symbol-level write locks.
 pub struct LockManager {
     locks: Mutex<HashMap<SymbolKey, LockEntry>>,
@@ -26,9 +31,16 @@ impl LockManager {
         }
     }
 
+    fn entry_expired(entry: &LockEntry) -> bool {
+        entry.acquired_at.elapsed() >= LOCK_TTL
+    }
+
     /// Acquire a lock for a single symbol. Returns immediately with `Blocked` if already locked.
     pub fn try_acquire_symbol_simple(&self, symbol: &SymbolKey) -> LockResult {
         let mut locks = self.locks.lock().unwrap();
+        if locks.get(symbol).is_some_and(Self::entry_expired) {
+            locks.remove(symbol);
+        }
         if let Some(entry) = locks.get(symbol) {
             return LockResult::Blocked {
                 blocked_by: entry.primary_symbol.clone(),
@@ -60,6 +72,9 @@ impl LockManager {
         let mut locks = self.locks.lock().unwrap();
 
         loop {
+            if locks.get(&key).is_some_and(Self::entry_expired) {
+                locks.remove(&key);
+            }
             if let Some(entry) = locks.get(&key) {
                 let blocked_by = entry.primary_symbol.clone();
                 let elapsed = start.elapsed();
