@@ -2971,23 +2971,19 @@ fn build_task_workspace(
 
     let mut selected_slices = select_diverse_task_slices(slices, 12);
 
-    // Rank a file by its single best slice, with only a small bonus for
-    // additional matches. Summing slice scores lets a file with several
-    // mediocre matches outrank the file holding the one symbol the task is
-    // actually about.
     for slice in &selected_slices {
         path_hashes.insert(slice.path.clone(), slice.source_hash.clone());
         let selected_count = slice_counts.entry(slice.path.clone()).or_default();
-        let score = slice.score.max(0);
+        let contribution = match *selected_count {
+            0 => slice.score.max(0),
+            1 => slice.score.max(0) / 2,
+            _ => slice.score.max(0) / 4,
+        };
+        *selected_count += 1;
         let entry = path_scores
             .entry(slice.path.clone())
             .or_insert((0, "source".to_string()));
-        if *selected_count == 0 {
-            entry.0 = entry.0.max(score);
-        } else {
-            entry.0 = entry.0.max(score) + (score / 10).min(60);
-        }
-        *selected_count += 1;
+        entry.0 += contribution;
     }
 
     for path in related_files {
