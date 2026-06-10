@@ -37,7 +37,7 @@ impl LockManager {
 
     /// Acquire a lock for a single symbol. Returns immediately with `Blocked` if already locked.
     pub fn try_acquire_symbol_simple(&self, symbol: &SymbolKey) -> LockResult {
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         if locks.get(symbol).is_some_and(Self::entry_expired) {
             locks.remove(symbol);
         }
@@ -69,7 +69,7 @@ impl LockManager {
     pub fn acquire_with_wait(&self, file: &Path, timeout: Duration) -> LockResult {
         let key = SymbolKey::new(file, "__file__");
         let start = Instant::now();
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
 
         loop {
             if locks.get(&key).is_some_and(Self::entry_expired) {
@@ -86,7 +86,7 @@ impl LockManager {
                 }
                 let remaining = timeout - elapsed;
                 let (new_locks, timed_out) =
-                    self.lock_released.wait_timeout(locks, remaining).unwrap();
+                    self.lock_released.wait_timeout(locks, remaining).unwrap_or_else(|e| e.into_inner());
                 locks = new_locks;
                 if timed_out.timed_out() {
                     return LockResult::Blocked {
@@ -120,7 +120,7 @@ impl LockManager {
 
     /// Release a symbol lock.
     pub fn release_symbol(&self, symbol: &SymbolKey) {
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<SymbolKey> = locks
             .iter()
             .filter(|(_, entry)| entry.primary_symbol == *symbol)
@@ -136,7 +136,7 @@ impl LockManager {
     /// Release a file-level lock.
     pub fn release(&self, file: &Path) {
         let file = normalize_path(file);
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<SymbolKey> = locks
             .iter()
             .filter(|(_, entry)| entry.primary_symbol.file == file)
@@ -152,14 +152,14 @@ impl LockManager {
     /// Check if a file has any active locks.
     pub fn is_locked(&self, file: &Path) -> bool {
         let file = normalize_path(file);
-        let locks = self.locks.lock().unwrap();
+        let locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         locks.keys().any(|k| k.file == file)
     }
 
     /// Get lock status for a file.
     pub fn status(&self, file: &Path) -> LockStatus {
         let file = normalize_path(file);
-        let locks = self.locks.lock().unwrap();
+        let locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         for (key, entry) in locks.iter() {
             if key.file == file {
                 return LockStatus::Locked {
@@ -173,7 +173,7 @@ impl LockManager {
 
     /// Get all currently held locks.
     pub fn active_locks(&self) -> Vec<LockInfo> {
-        let locks = self.locks.lock().unwrap();
+        let locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut primaries: HashMap<SymbolKey, Vec<SymbolKey>> = HashMap::new();
         let mut acquired_times: HashMap<SymbolKey, Instant> = HashMap::new();
