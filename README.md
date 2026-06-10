@@ -1,15 +1,20 @@
 # Anchor
 
-Agent execution harness for coding agents working inside real codebases and
-workspaces.
+Execution harness and infrastructure layer for AI agents.
 
-Anchor gives agents a focused context path, a checked write path, lock-aware
-coordination, and a compact execution record. The goal is to make agent work
-less blind: read the right code, edit through explicit operations, verify work,
-and leave evidence for humans and later agents.
+AI agents are already capable enough to do serious work. The problem is the
+execution environment around them: they search blindly, reread noisy context,
+waste tokens, lose track of changes, and quality drops as the session context
+fills up.
 
-Status: early prototype. Anchor focuses on context, writes, and coordination for
-coding agents.
+Anchor sits around the agent and gives it a smaller, sharper execution path. It
+turns a task into a compact working set, keeps the important context outside the
+model window, routes reads/writes/checks through explicit operations, records
+what happened, and coordinates work across agent sessions.
+
+Status: early prototype. The first implementation targets source-code
+workspaces, but the product shape is broader: Anchor is the execution layer that
+helps agents work with higher efficiency, quality, and safety.
 
 ## Install
 
@@ -43,16 +48,12 @@ anchor gate --min-score 85   # fail if recorded quality is below threshold
 
 ## What It Provides
 
-- focused context for coding agents
-- task intake that combines current code facts with Git-history behavior
-- checked write/edit operations
-- session and lock-aware agent workflow
-- execution event log for reads, writes, locks, and checks
-- status signals for context use, edits, conflicts, errors, and verification
-- trace output for recent agent execution events
-- JSON receipts with quality score and risk flags
-- quality gate enforcement for benchmark and CI-style workflows
-- support for local and cloud-backed agent sessions
+- task-scoped working sets instead of whole-workspace context
+- compact code slices, likely files, related files, likely tests, and verification plans
+- explicit read, write, edit, run, and check operations
+- provenance logs for what the agent read, changed, ran, and verified
+- coordination across local or cloud-backed agent sessions
+- quality and safety signals from the actual execution trace
 - tree-sitter based source understanding across common languages
 
 ## Supported Languages

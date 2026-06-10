@@ -11,13 +11,19 @@ use anchor::events;
 use anchor::lock::lockd;
 use anchor::parser::language::is_indexable_text_path;
 use anchor::query::slice::slice_code;
-use anchor::storage::{content_hash, AnchorStore, SymbolEntry};
+use anchor::storage::{
+    content_hash, AnchorStore, CallIndex, HistoryIndex, PathIndex, SymbolEntry, SymbolIndex,
+};
 use anyhow::{bail, Result};
 use clap::Parser;
 use ignore::Walk;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
+
+const TASK_WORKSPACE_SCHEMA: &str = "anchor.task_workspace.v1";
+const TASK_WORKSPACE_CURRENT: &str = "current.json";
 
 fn main() {
     tracing_subscriber::fmt()
@@ -529,6 +535,334 @@ fn index_has_stale_paths(root: &Path, store: &AnchorStore) -> Result<bool> {
     Ok(false)
 }
 
+#[derive(Debug)]
+struct TaskIndexState {
+    store: AnchorStore,
+    symbol_index: SymbolIndex,
+    call_index: CallIndex,
+    path_index: PathIndex,
+    history_index: HistoryIndex,
+    scoped_files: usize,
+}
+
+#[derive(Debug, Default)]
+struct TaskFileCandidates {
+    source_paths: Vec<String>,
+    test_paths: Vec<String>,
+}
+
+fn prepare_task_index_state(
+    root: &Path,
+    task_tokens: &std::collections::BTreeSet<String>,
+    limit: usize,
+) -> Result<TaskIndexState> {
+    let store = open_store(root)?;
+    let mut history_index = store.load_history_index();
+    if history_index.schema.is_empty() && !store.history_index_path().exists() {
+        history_index = build_history_index(root);
+        store.save_history_index(&history_index)?;
+    }
+
+    let candidates = task_file_candidates(root, task_tokens, &history_index, limit)?;
+    let scoped_files = refresh_task_scoped_indexes(root, &store, &candidates)?;
+
+    Ok(TaskIndexState {
+        symbol_index: store.load_symbol_index()?,
+        call_index: store.load_call_index(),
+        path_index: store.load_path_index()?,
+        history_index,
+        store,
+        scoped_files,
+    })
+}
+
+fn task_file_candidates(
+    root: &Path,
+    task_tokens: &std::collections::BTreeSet<String>,
+    history_index: &HistoryIndex,
+    limit: usize,
+) -> Result<TaskFileCandidates> {
+    use std::collections::BTreeMap;
+    use std::io::Read;
+
+    const TASK_SOURCE_SCAN_BYTES: usize = 48 * 1024;
+    const TASK_SOURCE_SCAN_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+
+    let source_limit = limit.clamp(8, 24);
+    let test_limit = limit.saturating_mul(2).clamp(8, 24);
+    let history_scores: BTreeMap<&str, usize> = history_index
+        .paths
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry.score.max(entry.commits)))
+        .collect();
+    let mut remaining_scan_bytes = TASK_SOURCE_SCAN_TOTAL_BYTES;
+    let mut sources: BTreeMap<String, usize> = BTreeMap::new();
+    let mut tests: BTreeMap<String, usize> = BTreeMap::new();
+    let mut scan_queue: Vec<(String, PathBuf, usize)> = Vec::new();
+
+    for entry in Walk::new(root).filter_map(|entry| entry.ok()) {
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let path = entry.path();
+        if !is_indexable_text_path(path) {
+            continue;
+        }
+        let Some(relative) = repo_relative_string(root, path) else {
+            continue;
+        };
+        if is_task_ignored_path(&relative) {
+            continue;
+        }
+
+        let mut score = task_file_path_score(&relative, task_tokens);
+        score += history_scores
+            .get(relative.as_str())
+            .copied()
+            .unwrap_or_default()
+            .min(500);
+
+        if looks_like_test_path(&relative) {
+            if score > 0 {
+                tests.insert(relative, score);
+            }
+            continue;
+        }
+        if !anchor::parser::language::is_source_path(path) {
+            continue;
+        }
+
+        scan_queue.push((relative, path.to_path_buf(), score));
+    }
+
+    // Path-scored files spend the content-scan budget first so unrelated
+    // files in a large repo cannot starve out the likely ones, but files with
+    // no path signal still get scanned with leftover budget: the task terms
+    // may only appear in the code itself.
+    scan_queue.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+    for (relative, path, mut score) in scan_queue {
+        if remaining_scan_bytes > 0 {
+            if let Ok(metadata) = std::fs::metadata(&path) {
+                let bytes_to_scan = (metadata.len() as usize)
+                    .min(TASK_SOURCE_SCAN_BYTES)
+                    .min(remaining_scan_bytes);
+                if bytes_to_scan > 0 {
+                    if let Ok(file) = std::fs::File::open(&path) {
+                        let mut bytes = Vec::new();
+                        let mut limited = file.take(bytes_to_scan as u64);
+                        let _ = limited.read_to_end(&mut bytes);
+                        let prefix = String::from_utf8_lossy(&bytes);
+                        score += task_source_rank(&prefix, task_tokens).max(0) as usize * 2;
+                        remaining_scan_bytes = remaining_scan_bytes.saturating_sub(bytes_to_scan);
+                    }
+                }
+            }
+        }
+
+        if score > 0 {
+            sources.insert(relative, score);
+        }
+    }
+
+    let source_paths: Vec<String> = top_scored_owned_paths(&sources, source_limit)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+
+    for source_path in &source_paths {
+        for (test_path, score) in tests.iter_mut() {
+            *score += source_test_affinity_score(source_path, test_path);
+        }
+        if let Some(neighbors) = history_index.adjacency.get(source_path) {
+            for neighbor in neighbors {
+                if neighbor.is_test {
+                    let score = tests.entry(neighbor.related_path.clone()).or_default();
+                    *score += neighbor.score.max(neighbor.commits).min(500);
+                }
+            }
+        }
+    }
+
+    let test_paths: Vec<String> = top_scored_owned_paths(&tests, test_limit)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+
+    Ok(TaskFileCandidates {
+        source_paths,
+        test_paths,
+    })
+}
+
+fn refresh_task_scoped_indexes(
+    root: &Path,
+    store: &AnchorStore,
+    candidates: &TaskFileCandidates,
+) -> Result<usize> {
+    const TASK_PARSE_FILE_BYTES_MAX: u64 = 512 * 1024;
+
+    let mut call_index = store.load_call_index();
+    let mut scoped_files = 0usize;
+
+    for relative in &candidates.source_paths {
+        let source_path = root.join(relative);
+        if std::fs::metadata(&source_path)
+            .map(|metadata| metadata.len() > TASK_PARSE_FILE_BYTES_MAX)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let old_symbols = store
+            .load_symbol_index()?
+            .symbols
+            .into_iter()
+            .filter(|symbol| symbol.path == *relative)
+            .collect::<Vec<_>>();
+        for symbol in old_symbols {
+            call_index.calls.remove(&symbol.name);
+        }
+
+        let (_, symbols, _) = match store.upsert_symbols_for_path(&source_path) {
+            Ok(result) => result,
+            Err(_) => continue,
+        };
+        if symbols.is_empty() {
+            continue;
+        }
+        if let Ok(source) = std::fs::read_to_string(&source_path) {
+            if let Ok(extraction) = anchor::parser::extract_file(&source_path, &source) {
+                for (caller, callee) in extracted_calls(&extraction) {
+                    let callees = call_index.calls.entry(caller).or_default();
+                    if !callees.contains(&callee) {
+                        callees.push(callee);
+                    }
+                }
+            }
+        }
+        scoped_files += 1;
+    }
+
+    for relative in &candidates.test_paths {
+        let test_path = root.join(relative);
+        if store.upsert_path(&test_path).is_ok() {
+            scoped_files += 1;
+        }
+    }
+
+    for callees in call_index.calls.values_mut() {
+        callees.sort();
+        callees.dedup();
+    }
+    store.save_call_index(&call_index)?;
+
+    Ok(scoped_files)
+}
+
+fn extracted_calls(extraction: &anchor::parser::FileExtractions) -> Vec<(String, String)> {
+    use std::collections::HashMap;
+
+    let mut name_count: HashMap<String, usize> = HashMap::new();
+    for symbol in &extraction.symbols {
+        *name_count.entry(symbol.name.clone()).or_default() += 1;
+    }
+    let qualified: HashMap<String, String> = extraction
+        .symbols
+        .iter()
+        .filter(|symbol| name_count[&symbol.name] == 1)
+        .filter_map(|symbol| {
+            symbol
+                .parent
+                .as_ref()
+                .map(|parent| (symbol.name.clone(), format!("{}::{}", parent, symbol.name)))
+        })
+        .collect();
+
+    extraction
+        .calls
+        .iter()
+        .map(|call| {
+            let caller = qualified
+                .get(&call.caller)
+                .cloned()
+                .unwrap_or_else(|| call.caller.clone());
+            (caller, call.callee.clone())
+        })
+        .collect()
+}
+
+fn repo_relative_string(root: &Path, path: &Path) -> Option<String> {
+    Some(
+        path.strip_prefix(root)
+            .ok()?
+            .to_string_lossy()
+            .replace('\\', "/"),
+    )
+}
+
+fn is_task_ignored_path(path: &str) -> bool {
+    path.starts_with(".anchor/")
+        || path.starts_with(".git/")
+        || path.contains("/.anchor/")
+        || path.contains("/.git/")
+        || path.contains("/node_modules/")
+        || path.contains("/target/")
+        || path.contains("/dist/")
+        || path.contains("/build/")
+        || path.contains("/vendor/")
+        || path.contains("/__pycache__/")
+}
+
+fn task_file_path_score(path: &str, tokens: &std::collections::BTreeSet<String>) -> usize {
+    let lower_path = path.to_ascii_lowercase();
+    let path_tokens = path_signal_tokens(path);
+    let mut score = 0usize;
+    let mut matched_terms = 0usize;
+
+    for token in tokens {
+        let mut matched = false;
+        if lower_path.contains(token) {
+            score += 80;
+            matched = true;
+        }
+        if path_tokens
+            .iter()
+            .any(|path_token| soft_token_match(token, path_token))
+        {
+            score += 120;
+            matched = true;
+        }
+        if matched {
+            matched_terms += 1;
+        }
+    }
+
+    if matched_terms >= 2 {
+        score += matched_terms.min(8) * matched_terms.min(8) * 20;
+    }
+    if looks_like_test_path(path) {
+        score += 30;
+    }
+
+    score
+}
+
+fn top_scored_owned_paths(
+    scores: &std::collections::BTreeMap<String, usize>,
+    limit: usize,
+) -> Vec<(String, usize)> {
+    let mut items: Vec<_> = scores
+        .iter()
+        .map(|(path, score)| (path.clone(), *score))
+        .collect();
+    items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    items.truncate(limit);
+    items
+}
+
 fn is_git_history_path_indexable(path: &str) -> bool {
     if path.starts_with(".anchor/")
         || path.starts_with(".git/")
@@ -552,8 +886,12 @@ fn looks_like_test_path(path: &str) -> bool {
         || lower.contains("test_")
         || lower.ends_with(".spec.ts")
         || lower.ends_with(".test.ts")
+        || lower.ends_with(".spec.tsx")
+        || lower.ends_with(".test.tsx")
         || lower.ends_with(".spec.js")
         || lower.ends_with(".test.js")
+        || lower.ends_with(".spec.jsx")
+        || lower.ends_with(".test.jsx")
 }
 
 fn record_context_read(
@@ -574,6 +912,80 @@ fn record_context_read(
         message,
         meta,
     );
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskWorkspace {
+    schema: String,
+    intent: String,
+    active_paths: Vec<TaskPath>,
+    exact_slices: Vec<TaskSlice>,
+    related_files: Vec<TaskRelatedFile>,
+    likely_tests: Vec<TaskTest>,
+    verification_plan: TaskVerificationPlan,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskPath {
+    path: String,
+    source_hash: String,
+    score: i32,
+    role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskSlice {
+    path: String,
+    source_hash: String,
+    symbol: String,
+    kind: String,
+    line_start: usize,
+    line_end: usize,
+    score: i32,
+    reasons: Vec<String>,
+    code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskTest {
+    path: String,
+    score: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskRelatedFile {
+    path: String,
+    score: usize,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskVerificationPlan {
+    steps: Vec<String>,
+    preferred_check: Option<String>,
+    check_hints: Vec<TaskCheckHint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TaskCheckHint {
+    kind: String,
+    command: String,
+}
+
+fn task_workspace_path(store: &AnchorStore) -> PathBuf {
+    store
+        .anchor_root()
+        .join("tasks")
+        .join(TASK_WORKSPACE_CURRENT)
+}
+
+fn save_task_workspace(store: &AnchorStore, workspace: &TaskWorkspace) -> Result<()> {
+    let path = task_workspace_path(store);
+    std::fs::create_dir_all(path.parent().ok_or_else(|| {
+        anyhow::anyhow!("task workspace path has no parent: {}", path.display())
+    })?)?;
+    std::fs::write(path, serde_json::to_vec_pretty(workspace)?)?;
+    Ok(())
 }
 
 fn cmd_search(root: &Path, queries: &[String], _pattern: Option<&str>, limit: usize) -> Result<()> {
@@ -802,12 +1214,14 @@ fn cmd_task(
         bail!("task requires an intent");
     }
 
-    let store = ensure_indexed_store(root)?;
-    let symbol_index = store.load_symbol_index()?;
-    let call_index = store.load_call_index();
-    let path_index = store.load_path_index()?;
-    let history_index = store.load_history_index();
     let task_tokens = task_intent_tokens(&intent);
+    let task_state =
+        prepare_task_index_state(root, &task_tokens, limit.max(context_limit).clamp(8, 16))?;
+    let store = task_state.store;
+    let symbol_index = task_state.symbol_index;
+    let call_index = task_state.call_index;
+    let path_index = task_state.path_index;
+    let history_index = task_state.history_index;
     let task_query = if task_tokens.is_empty() {
         intent.clone()
     } else {
@@ -844,7 +1258,6 @@ fn cmd_task(
             .then_with(|| a.name.cmp(&b.name))
     });
     candidates.truncate(limit.max(context_limit));
-    let intent_tokens: HashSet<String> = task_tokens.iter().cloned().collect();
     let current_paths: HashSet<String> = path_index
         .files
         .iter()
@@ -853,7 +1266,6 @@ fn cmd_task(
 
     let mut shown_paths = BTreeSet::new();
     let mut related_files = BTreeSet::new();
-    let mut test_files: BTreeMap<String, usize> = BTreeMap::new();
     let mut historical_files: BTreeMap<String, usize> = BTreeMap::new();
     let mut historical_tests: BTreeMap<String, usize> = BTreeMap::new();
 
@@ -921,50 +1333,37 @@ fn cmd_task(
     for path in historical_files.keys() {
         related_files.insert(path.clone());
     }
-    for path in historical_tests.keys() {
-        add_path_score(&mut test_files, path.clone(), 200);
-    }
-
-    let mut related_path_tokens = BTreeSet::new();
-    for path in &source_seed_paths {
-        related_path_tokens.extend(path_signal_tokens(path));
-    }
-
-    for file in &path_index.files {
-        let path_lower = file.path.to_lowercase();
-        let looks_like_test = path_lower.contains("/test")
-            || path_lower.starts_with("test")
-            || path_lower.contains("_test.")
-            || path_lower.contains("tests/");
-        if !looks_like_test {
-            continue;
-        }
-        let mut score = 0usize;
-        if intent_tokens.is_empty() {
-            score += 10;
-        }
-        for token in &intent_tokens {
-            if path_lower.contains(token.as_str()) {
-                score += 60;
-            }
-        }
-        for token in &related_path_tokens {
-            if path_lower.contains(token.as_str()) {
-                score += 100;
-            }
-        }
-        for source_path in &source_seed_paths {
-            score += source_test_affinity_score(source_path, &file.path);
-        }
-        for sym in &candidates {
-            if path_lower.contains(&sym.name.to_lowercase()) {
-                score += 35;
-            }
-        }
-        if score > 0 {
-            add_path_score(&mut test_files, file.path.clone(), score);
-        }
-    }
+    let task_slices = rank_task_slices(
+        &store,
+        &symbol_index.symbols,
+        &call_index,
+        &task_tokens,
+        &candidates,
+        limit.max(context_limit).saturating_mul(2).clamp(8, 24),
+    );
+    let likely_tests_owned = rank_task_tests(
+        &path_index.files,
+        &task_tokens,
+        &candidates,
+        &task_slices,
+        &source_seed_paths,
+        &historical_tests,
+        12,
+    );
+    let likely_tests: Vec<(&String, usize)> = likely_tests_owned
+        .iter()
+        .map(|test| (&test.path, test.score))
+        .collect();
+    let verification_plan = build_task_verification_plan(&likely_tests);
+    let workspace = build_task_workspace(
+        &intent,
+        &task_slices,
+        &related_files,
+        &historical_files,
+        &likely_tests,
+        &verification_plan,
+    );
+    save_task_workspace(&store, &workspace)?;
 
     events::record(
         store.anchor_root(),
@@ -973,12 +1372,13 @@ fn cmd_task(
         None,
         "ok",
         Some(format!(
-            "intent={} symbols={} context_symbols={} related_files={} tests={} historical_files={} historical_tests={}",
+            "intent={} scoped_files={} symbols={} context_symbols={} related_files={} tests={} historical_files={} historical_tests={}",
             intent,
+            task_state.scoped_files,
             candidates.len(),
             context_limit.min(candidates.len()),
             related_files.len(),
-            test_files.len(),
+            likely_tests_owned.len(),
             historical_files.len(),
             historical_tests.len()
         )),
@@ -988,9 +1388,13 @@ fn cmd_task(
     println!("<intent>{}</intent>", escape_xml_text(&intent));
     println!("<strategy>");
     println!("  <step>Use this intake as the first context read.</step>");
-    println!("  <step>Drill down with anchor context only when a needed symbol is missing.</step>");
+    println!("  <step>Start inside task_workspace active_paths and exact_slices.</step>");
+    println!(
+        "  <step>Drill down with anchor context only when a needed symbol is missing from the workspace.</step>"
+    );
     println!("  <step>Edit through anchor edit/write when possible; run verification through anchor check before handoff.</step>");
     println!("</strategy>");
+    println!("<scoped_files>{}</scoped_files>", task_state.scoped_files);
 
     println!(
         "<ranked_symbols count=\"{}\" shown=\"{}\">",
@@ -1007,6 +1411,8 @@ fn cmd_task(
         );
     }
     println!("</ranked_symbols>");
+
+    print_task_workspace(&workspace, &task_workspace_path(&store));
 
     println!("<context>");
     let mut emitted = 0usize;
@@ -1053,17 +1459,26 @@ fn cmd_task(
                 )
             );
         }
-        println!("<code>");
-        if sliced.was_sliced {
+        if workspace_has_exact_slice(&workspace, sym) {
             println!(
-                "[{}/{} lines, {} calls]",
-                sliced.shown_lines, sliced.total_lines, sliced.call_count
+                "<workspace_slice_ref file=\"{}\" symbol=\"{}\" line=\"{}\"/>",
+                escape_xml_text(&sym.path),
+                escape_xml_text(&sym.name),
+                sym.line_start
             );
-            print_bounded_numbered_code(&sliced.code, false);
         } else {
-            print_bounded_plain_code(&sliced.code, sym.line_start, false);
+            println!("<code>");
+            if sliced.was_sliced {
+                println!(
+                    "[{}/{} lines, {} calls]",
+                    sliced.shown_lines, sliced.total_lines, sliced.call_count
+                );
+                print_bounded_numbered_code(&sliced.code, false);
+            } else {
+                print_bounded_plain_code(&sliced.code, sym.line_start, false);
+            }
+            println!("</code>");
         }
-        println!("</code>");
         print_constructor_child_context(&store, &symbol_index.symbols, sym)?;
         println!("</symbol>");
         record_context_read(&store, sym, "ok", Some("task_intake".to_string()));
@@ -1095,8 +1510,7 @@ fn cmd_task(
     }
     println!("</historical_files>");
 
-    let likely_tests = top_scored_paths(&test_files, 12);
-    println!("<likely_tests count=\"{}\">", test_files.len());
+    println!("<likely_tests count=\"{}\">", likely_tests_owned.len());
     for (path, score) in &likely_tests {
         println!(
             "  <file score=\"{}\">{}</file>",
@@ -1105,7 +1519,6 @@ fn cmd_task(
         );
     }
     println!("</likely_tests>");
-    print_verification_plan(&likely_tests);
     println!("<historical_tests count=\"{}\">", historical_tests.len());
     for (path, score) in top_scored_paths(&historical_tests, 8) {
         println!(
@@ -1964,17 +2377,29 @@ fn tokenize_intent(intent: &str) -> impl Iterator<Item = String> + '_ {
 fn task_intent_tokens(intent: &str) -> std::collections::BTreeSet<String> {
     const STOPWORDS: &[&str] = &[
         "add",
+        "adds",
         "change",
+        "changes",
         "create",
+        "creates",
         "delete",
+        "deletes",
         "fix",
+        "fixes",
         "handle",
+        "handles",
         "implement",
+        "implements",
         "make",
+        "makes",
         "patch",
+        "patches",
         "remove",
+        "removes",
         "support",
+        "supports",
         "update",
+        "updates",
         "work",
         "works",
     ];
@@ -1985,6 +2410,11 @@ fn task_intent_tokens(intent: &str) -> std::collections::BTreeSet<String> {
             continue;
         }
         tokens.insert(token.clone());
+        for part in split_camel_token(&token) {
+            if part.len() >= 3 && !STOPWORDS.contains(&part.as_str()) {
+                tokens.insert(part);
+            }
+        }
         if let Some(stripped) = token.strip_suffix("ing") {
             if stripped.len() >= 3 {
                 tokens.insert(stripped.to_string());
@@ -2000,22 +2430,15 @@ fn task_intent_tokens(intent: &str) -> std::collections::BTreeSet<String> {
                 tokens.insert(stripped.to_string());
             }
         }
-        match token.as_str() {
-            "lifecycle" => {
-                tokens.extend(
-                    ["engine", "enter", "entry", "exit", "init", "start", "stop"]
-                        .into_iter()
-                        .map(String::from),
-                );
-            }
-            "scope" | "scoped" | "scoping" | "ownership" => {
-                tokens.extend(
-                    ["config", "configuration", "owner", "state"]
-                        .into_iter()
-                        .map(String::from),
-                );
-            }
-            _ => {}
+        if token == "lifecycle" {
+            tokens.extend(
+                [
+                    "close", "enter", "entry", "exit", "init", "open", "run", "setup", "start",
+                    "stop", "teardown",
+                ]
+                .into_iter()
+                .map(String::from),
+            );
         }
     }
     tokens
@@ -2029,6 +2452,7 @@ fn task_symbol_rank(
     let path = symbol.path.to_ascii_lowercase();
     let kind = symbol.kind.as_str();
     let mut score = 0i32;
+    let mut matched_terms = 0usize;
 
     if matches!(
         kind,
@@ -2041,55 +2465,30 @@ fn task_symbol_rank(
     }
 
     for token in tokens {
+        let mut matched = false;
         if name == *token {
             score += 160;
+            matched = true;
         } else if name.contains(token) {
             score += 80;
+            matched = true;
         }
         if path.contains(token) {
             score += 45;
+            matched = true;
         }
         if symbol.features.iter().any(|feature| feature == token) {
             score += 20;
+            matched = true;
+        }
+        if matched {
+            matched_terms += 1;
         }
     }
 
-    if tokens.contains("lifecycle") || tokens.contains("life") {
-        for marker in ["init", "enter", "entry", "exit", "start", "stop", "engine"] {
-            if name.contains(marker) || path.contains(marker) {
-                score += 35;
-            }
-        }
-    }
-    if tokens.contains("scope") || tokens.contains("scop") || tokens.contains("ownership") {
-        for marker in ["scope", "state", "config", "owner"] {
-            if name.contains(marker) || path.contains(marker) {
-                score += 30;
-            }
-        }
-    }
-    if tokens.contains("state") && tokens.contains("data") {
-        if matches!(
-            symbol.kind.as_str(),
-            "Class" | "Struct" | "Enum" | "Interface" | "Trait"
-        ) && (name == "state" || name.ends_with("state"))
-        {
-            score += 320;
-            if path.ends_with("/state.py")
-                || path == "state.py"
-                || path.ends_with("/state.rs")
-                || path == "state.rs"
-            {
-                score += 180;
-            }
-        }
-        if name.contains("state_data") || path.contains("state_data") || path.contains("state-data")
-        {
-            score += 260;
-        }
-        if name == "datavar" || name == "data_var" {
-            score += 240;
-        }
+    if matched_terms >= 2 {
+        let coverage_terms = matched_terms.min(8);
+        score += (coverage_terms * coverage_terms * 12) as i32;
     }
 
     if matches!(
@@ -2123,6 +2522,14 @@ fn source_backed_task_candidates(
 
     let mut scored = Vec::new();
     for (path, path_symbols) in by_path {
+        let path_has_signal = task_path_has_signal(path, tokens);
+        let symbol_has_signal = path_symbols
+            .iter()
+            .any(|symbol| task_symbol_has_name_or_feature_signal(symbol, tokens));
+        if !path_has_signal && !symbol_has_signal {
+            continue;
+        }
+
         let full_path = root.join(path);
         if !anchor::parser::language::is_source_path(&full_path) {
             continue;
@@ -2154,7 +2561,7 @@ fn source_backed_task_candidates(
                 0
             };
             scored.push((
-                file_score + owner_bonus + task_symbol_rank(symbol, tokens),
+                file_score.saturating_mul(2) + owner_bonus + task_symbol_rank(symbol, tokens),
                 (*symbol).clone(),
             ));
         }
@@ -2168,6 +2575,27 @@ fn source_backed_task_candidates(
     });
     scored.truncate(limit);
     scored.into_iter().map(|(_, symbol)| symbol).collect()
+}
+
+fn task_path_has_signal(path: &str, tokens: &std::collections::BTreeSet<String>) -> bool {
+    let lower_path = path.to_ascii_lowercase();
+    let path_tokens = path_signal_tokens(path);
+    tokens.iter().any(|token| {
+        lower_path.contains(token)
+            || path_tokens
+                .iter()
+                .any(|path_token| soft_token_match(token, path_token))
+    })
+}
+
+fn task_symbol_has_name_or_feature_signal(
+    symbol: &anchor::storage::SymbolEntry,
+    tokens: &std::collections::BTreeSet<String>,
+) -> bool {
+    let lower_name = symbol.name.to_ascii_lowercase();
+    tokens.iter().any(|token| {
+        lower_name.contains(token) || symbol.features.iter().any(|feature| feature == token)
+    })
 }
 
 fn dedupe_symbols(symbols: &mut Vec<anchor::storage::SymbolEntry>) {
@@ -2196,7 +2624,7 @@ fn task_symbol_total_rank(
         0
     };
 
-    task_symbol_rank(symbol, tokens) + source_score + owner_bonus
+    task_symbol_rank(symbol, tokens) + source_score.saturating_mul(2) + owner_bonus
 }
 
 fn task_symbol_key(symbol: &anchor::storage::SymbolEntry) -> String {
@@ -2206,35 +2634,643 @@ fn task_symbol_key(symbol: &anchor::storage::SymbolEntry) -> String {
 fn task_source_rank(source: &str, tokens: &std::collections::BTreeSet<String>) -> i32 {
     let source = source.to_ascii_lowercase();
     let mut score = 0;
+    let mut matched_terms = 0usize;
 
     for token in tokens {
         if source.contains(token) {
-            score += 8;
+            matched_terms += 1;
+            score += 28;
         }
     }
 
-    for phrase in [
-        "state data",
-        "state_data",
-        "datavar",
-        "data var",
-        "callback",
-        "snapshot",
-        "default",
-    ] {
-        if source.contains(phrase) {
-            score += 35;
-        }
-    }
-
-    if (tokens.contains("state") || tokens.contains("scope") || tokens.contains("scoped"))
-        && tokens.contains("data")
-        && (source.contains("data") || source.contains("state_data"))
-    {
-        score += 80;
+    if matched_terms >= 2 {
+        let coverage_terms = matched_terms.min(10);
+        score += (coverage_terms * coverage_terms * 10) as i32;
     }
 
     score
+}
+
+fn rank_task_slices(
+    store: &AnchorStore,
+    symbols: &[anchor::storage::SymbolEntry],
+    call_index: &anchor::storage::CallIndex,
+    tokens: &std::collections::BTreeSet<String>,
+    candidates: &[anchor::storage::SymbolEntry],
+    limit: usize,
+) -> Vec<TaskSlice> {
+    use std::collections::BTreeSet;
+
+    let candidate_keys: BTreeSet<String> = candidates.iter().map(task_symbol_key).collect();
+    let candidate_names: BTreeSet<String> = candidates
+        .iter()
+        .map(|symbol| symbol.name.to_ascii_lowercase())
+        .collect();
+    let candidate_paths: BTreeSet<&str> = candidates
+        .iter()
+        .map(|symbol| symbol.path.as_str())
+        .collect();
+
+    let mut scored = Vec::new();
+    for symbol in symbols {
+        if looks_like_test_path(&symbol.path) || !is_context_owner_symbol(symbol) {
+            continue;
+        }
+        if is_large_owner_symbol(symbol) {
+            continue;
+        }
+        let is_ranked_candidate = candidate_keys.contains(&task_symbol_key(symbol));
+        let callers = call_index.callers_of(&symbol.name);
+        let callees = call_index.callees_of(&symbol.name);
+        let neighbor_hit = callers
+            .iter()
+            .chain(callees.iter())
+            .any(|name| candidate_names.contains(&name.to_ascii_lowercase()));
+        let is_candidate_path = candidate_paths.contains(symbol.path.as_str());
+        let direct_signal = task_symbol_has_name_or_feature_signal(symbol, tokens);
+        if !is_ranked_candidate && !neighbor_hit && !(is_candidate_path && direct_signal) {
+            continue;
+        }
+
+        let Ok(projection) = store.create_projection(symbol) else {
+            continue;
+        };
+
+        let mut reasons = Vec::new();
+        let mut score = task_symbol_rank(symbol, tokens);
+
+        let source_score = task_source_rank(&projection.text, tokens);
+        if source_score > 0 {
+            reasons.push("content".to_string());
+            score += source_score;
+        }
+
+        let chunk_score = task_chunk_rank(&projection.text, symbol, tokens, &mut reasons);
+        score += chunk_score;
+
+        if is_ranked_candidate {
+            reasons.push("ranked_symbol".to_string());
+            score += 220;
+        }
+
+        if neighbor_hit {
+            reasons.push("call_neighbor".to_string());
+            score += 80;
+        }
+
+        if reasons.is_empty() && !is_ranked_candidate && !neighbor_hit {
+            continue;
+        }
+
+        score += task_path_prior(&symbol.path);
+
+        if score <= 0 {
+            continue;
+        }
+
+        dedupe_strings(&mut reasons);
+        let call_lines = store.call_lines_for_symbol(symbol);
+        let sliced = slice_code(&projection.text, &call_lines, symbol.line_start);
+        let code = if sliced.was_sliced {
+            sliced.code
+        } else {
+            numbered_code(&projection.text, symbol.line_start)
+        };
+
+        scored.push(TaskSlice {
+            path: symbol.path.clone(),
+            source_hash: symbol.source_hash.clone(),
+            symbol: symbol.name.clone(),
+            kind: symbol.kind.clone(),
+            line_start: symbol.line_start,
+            line_end: symbol.line_end,
+            score,
+            reasons,
+            code,
+        });
+    }
+
+    scored.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.path.cmp(&b.path))
+            .then_with(|| a.line_start.cmp(&b.line_start))
+            .then_with(|| a.symbol.cmp(&b.symbol))
+    });
+    scored.truncate(limit);
+    scored
+}
+
+fn is_context_owner_symbol(symbol: &anchor::storage::SymbolEntry) -> bool {
+    matches!(
+        symbol.kind.as_str(),
+        "Class" | "Struct" | "Enum" | "Interface" | "Trait" | "Function" | "Method" | "Impl"
+    )
+}
+
+fn task_chunk_rank(
+    text: &str,
+    symbol: &anchor::storage::SymbolEntry,
+    query_tokens: &std::collections::BTreeSet<String>,
+    reasons: &mut Vec<String>,
+) -> i32 {
+    if query_tokens.is_empty() {
+        return 0;
+    }
+
+    let mut score = 0;
+    let lower_text = text.to_ascii_lowercase();
+    let lower_path = symbol.path.to_ascii_lowercase();
+    let lower_name = symbol.name.to_ascii_lowercase();
+    let file_stem_tokens = Path::new(&lower_path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(task_search_tokens)
+        .unwrap_or_default();
+    let chunk_tokens = task_search_tokens(&format!("{} {} {}", symbol.name, symbol.path, text));
+    let mut matched_query_terms = 0usize;
+
+    for token in query_tokens {
+        let mut token_matched = false;
+        if lower_name == *token {
+            reasons.push("symbol_exact".to_string());
+            score += 180;
+            token_matched = true;
+        } else if lower_name.contains(token) {
+            reasons.push("symbol_match".to_string());
+            score += 90;
+            token_matched = true;
+        }
+
+        if file_stem_tokens
+            .iter()
+            .any(|stem_token| soft_token_match(token, stem_token))
+        {
+            reasons.push("file_stem_match".to_string());
+            score += 220;
+            token_matched = true;
+        } else if lower_path.contains(token) {
+            reasons.push("path_match".to_string());
+            score += 65;
+            token_matched = true;
+        }
+
+        if lower_text.contains(token) {
+            reasons.push("literal_match".to_string());
+            score += 28;
+            token_matched = true;
+        } else if chunk_tokens
+            .iter()
+            .any(|chunk_token| soft_token_match(token, chunk_token))
+        {
+            reasons.push("soft_token_match".to_string());
+            score += 14;
+            token_matched = true;
+        }
+
+        if symbol.features.iter().any(|feature| feature == token) {
+            reasons.push("feature_match".to_string());
+            score += 35;
+            token_matched = true;
+        }
+
+        if token_matched {
+            matched_query_terms += 1;
+        }
+    }
+
+    if matched_query_terms >= 2 {
+        let coverage_terms = matched_query_terms.min(8);
+        reasons.push("query_coverage".to_string());
+        score += (coverage_terms * coverage_terms * 8) as i32;
+    }
+
+    score
+}
+
+fn is_large_owner_symbol(symbol: &anchor::storage::SymbolEntry) -> bool {
+    let lines = symbol.line_end.saturating_sub(symbol.line_start) + 1;
+    if is_class_like_symbol(symbol) {
+        return lines > 80;
+    }
+    matches!(symbol.kind.as_str(), "Function" | "Method") && lines > 120
+}
+
+fn task_path_prior(path: &str) -> i32 {
+    let normalised = path.replace('\\', "/").to_ascii_lowercase();
+    let file_name = Path::new(&normalised)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    let mut score = 0;
+
+    if file_name == "__init__.py" || file_name == "mod.rs" {
+        score -= 35;
+    }
+    if normalised.contains("/examples/") || normalised.starts_with("examples/") {
+        score -= 80;
+    }
+    if normalised.contains("/docs/") || normalised.starts_with("docs/") {
+        score -= 60;
+    }
+    if normalised.contains("/legacy/") || normalised.contains("/compat/") {
+        score -= 45;
+    }
+
+    score
+}
+
+fn task_search_tokens(text: &str) -> std::collections::BTreeSet<String> {
+    let mut tokens = std::collections::BTreeSet::new();
+    for token in tokenize_intent(text).filter(|token| token.len() >= 3) {
+        tokens.insert(token.clone());
+        for part in split_camel_token(&token) {
+            if part.len() >= 3 {
+                tokens.insert(part);
+            }
+        }
+    }
+    tokens
+}
+
+fn split_camel_token(token: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    for ch in token.chars() {
+        if ch.is_ascii_uppercase() && !current.is_empty() {
+            out.push(current.to_ascii_lowercase());
+            current.clear();
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        out.push(current.to_ascii_lowercase());
+    }
+    out
+}
+
+fn soft_token_match(query: &str, candidate: &str) -> bool {
+    if query == candidate {
+        return true;
+    }
+    if query.len() < 4 || candidate.len() < 4 {
+        return false;
+    }
+    if query.starts_with(candidate) || candidate.starts_with(query) {
+        return true;
+    }
+    common_prefix_len(query, candidate) >= 4
+}
+
+fn common_prefix_len(a: &str, b: &str) -> usize {
+    a.chars()
+        .zip(b.chars())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn numbered_code(code: &str, start_line: usize) -> String {
+    let mut output = String::new();
+    for (offset, line) in code.lines().take(DEFAULT_CONTEXT_LINE_BUDGET).enumerate() {
+        output.push_str(&format!(" {:>3}: {}\n", start_line + offset, line));
+    }
+    if code.lines().count() > DEFAULT_CONTEXT_LINE_BUDGET {
+        output.push_str(&format!(
+            "    ... [context truncated at {DEFAULT_CONTEXT_LINE_BUDGET} lines]\n"
+        ));
+    }
+    output
+}
+
+fn dedupe_strings(values: &mut Vec<String>) {
+    let mut seen = std::collections::BTreeSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
+
+fn build_task_workspace(
+    intent: &str,
+    slices: &[TaskSlice],
+    related_files: &std::collections::BTreeSet<String>,
+    historical_files: &std::collections::BTreeMap<String, usize>,
+    likely_tests: &[(&String, usize)],
+    verification_plan: &TaskVerificationPlan,
+) -> TaskWorkspace {
+    let mut path_scores: std::collections::BTreeMap<String, (i32, String)> =
+        std::collections::BTreeMap::new();
+    let mut path_hashes: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let mut slice_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+
+    let mut selected_slices = select_diverse_task_slices(slices, 12);
+
+    for slice in &selected_slices {
+        path_hashes.insert(slice.path.clone(), slice.source_hash.clone());
+        let selected_count = slice_counts.entry(slice.path.clone()).or_default();
+        let contribution = match *selected_count {
+            0 => slice.score.max(0),
+            1 => slice.score.max(0) / 2,
+            _ => slice.score.max(0) / 4,
+        };
+        *selected_count += 1;
+        let entry = path_scores
+            .entry(slice.path.clone())
+            .or_insert((0, "source".to_string()));
+        entry.0 += contribution;
+    }
+
+    for path in related_files {
+        if let Some(entry) = path_scores.get_mut(path) {
+            entry.0 += 40;
+            if entry.1 == "source" {
+                entry.1 = "source+related".to_string();
+            }
+        }
+    }
+
+    for (path, score) in historical_files {
+        if let Some(entry) = path_scores.get_mut(path) {
+            entry.0 += (*score).min(500) as i32;
+            entry.1 = format!("{}+history", entry.1);
+        }
+    }
+
+    let mut active_paths: Vec<TaskPath> = path_scores
+        .into_iter()
+        .filter_map(|(path, (score, role))| {
+            path_hashes.get(&path).map(|source_hash| TaskPath {
+                path,
+                source_hash: source_hash.clone(),
+                score,
+                role,
+            })
+        })
+        .collect();
+    active_paths.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    active_paths.truncate(8);
+    let active_path_set: std::collections::BTreeSet<&str> =
+        active_paths.iter().map(|path| path.path.as_str()).collect();
+
+    let mut workspace_related_files: Vec<TaskRelatedFile> = related_files
+        .iter()
+        .filter(|path| !looks_like_test_path(path))
+        .filter(|path| !active_path_set.contains(path.as_str()))
+        .map(|path| {
+            let history_score = historical_files.get(path).copied().unwrap_or_default();
+            TaskRelatedFile {
+                path: path.clone(),
+                score: 40 + history_score.min(500),
+                reason: if history_score > 0 {
+                    "related+history".to_string()
+                } else {
+                    "related".to_string()
+                },
+            }
+        })
+        .collect();
+    workspace_related_files.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    workspace_related_files.truncate(12);
+
+    TaskWorkspace {
+        schema: TASK_WORKSPACE_SCHEMA.to_string(),
+        intent: intent.to_string(),
+        active_paths,
+        exact_slices: {
+            selected_slices.truncate(12);
+            selected_slices
+        },
+        related_files: workspace_related_files,
+        likely_tests: likely_tests
+            .iter()
+            .take(6)
+            .map(|(path, score)| TaskTest {
+                path: (*path).clone(),
+                score: *score,
+            })
+            .collect(),
+        verification_plan: verification_plan.clone(),
+    }
+}
+
+fn select_diverse_task_slices(slices: &[TaskSlice], limit: usize) -> Vec<TaskSlice> {
+    let mut selected = Vec::new();
+    let mut per_file: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let mut remaining: Vec<&TaskSlice> = slices.iter().collect();
+
+    while selected.len() < limit && !remaining.is_empty() {
+        let best = remaining
+            .iter()
+            .enumerate()
+            .map(|(idx, slice)| {
+                let selected_for_file = per_file.get(slice.path.as_str()).copied().unwrap_or(0);
+                let divisor = match selected_for_file {
+                    0 => 1,
+                    1 => 2,
+                    _ => 4,
+                };
+                (idx, slice.score / divisor)
+            })
+            .max_by(|left, right| {
+                left.1
+                    .cmp(&right.1)
+                    .then_with(|| remaining[right.0].path.cmp(&remaining[left.0].path))
+                    .then_with(|| {
+                        remaining[right.0]
+                            .line_start
+                            .cmp(&remaining[left.0].line_start)
+                    })
+            });
+
+        let Some((idx, effective_score)) = best else {
+            break;
+        };
+        if effective_score <= 0 {
+            break;
+        }
+        let slice = remaining.swap_remove(idx);
+        *per_file.entry(slice.path.as_str()).or_default() += 1;
+        selected.push(slice.clone());
+    }
+
+    selected
+}
+
+fn rank_task_tests(
+    files: &[anchor::storage::PathEntry],
+    task_tokens: &std::collections::BTreeSet<String>,
+    candidates: &[anchor::storage::SymbolEntry],
+    slices: &[TaskSlice],
+    source_seed_paths: &std::collections::BTreeSet<String>,
+    historical_tests: &std::collections::BTreeMap<String, usize>,
+    limit: usize,
+) -> Vec<TaskTest> {
+    let exact_slices = select_diverse_task_slices(slices, 12);
+    let mut active_source_weights: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
+    for (idx, slice) in exact_slices.iter().enumerate() {
+        let rank_weight = 12usize.saturating_sub(idx.min(11));
+        let score_weight = (slice.score.max(0) as usize / 500).clamp(1, 8);
+        let entry = active_source_weights.entry(slice.path.clone()).or_default();
+        *entry += rank_weight + score_weight;
+    }
+    if active_source_weights.is_empty() {
+        for source_path in source_seed_paths.iter().take(8) {
+            active_source_weights.insert(source_path.clone(), 2);
+        }
+    }
+
+    let mut active_path_tokens = std::collections::BTreeSet::new();
+    for source_path in active_source_weights.keys() {
+        active_path_tokens.extend(path_signal_tokens(source_path));
+    }
+
+    let mut active_symbol_tokens = std::collections::BTreeSet::new();
+    for slice in &exact_slices {
+        active_symbol_tokens.extend(task_search_tokens(&slice.symbol));
+    }
+    for symbol in candidates.iter().take(8) {
+        active_symbol_tokens.extend(task_search_tokens(&symbol.name));
+    }
+
+    let mut scored = std::collections::BTreeMap::new();
+    for file in files {
+        if !looks_like_test_path(&file.path) || is_test_helper_path(&file.path) {
+            continue;
+        }
+        let path_lower = file.path.to_ascii_lowercase();
+        let mut score = historical_tests
+            .get(&file.path)
+            .copied()
+            .unwrap_or_default()
+            .saturating_mul(4);
+
+        for (source_path, weight) in &active_source_weights {
+            score += source_test_affinity_score(source_path, &file.path) * *weight;
+        }
+        let test_path_tokens = path_signal_tokens(&file.path);
+        for token in &active_path_tokens {
+            if path_lower.contains(token.as_str())
+                || test_path_tokens
+                    .iter()
+                    .any(|test_token| soft_token_match(token, test_token))
+            {
+                score += 180;
+            }
+        }
+        for token in &active_symbol_tokens {
+            if token.len() >= 4 && path_lower.contains(token.as_str()) {
+                score += 60;
+            }
+        }
+        for token in task_tokens {
+            if path_lower.contains(token.as_str()) {
+                score += 20;
+            }
+        }
+        if score > 0 {
+            scored.insert(file.path.clone(), score);
+        }
+    }
+
+    top_scored_paths(&scored, limit)
+        .into_iter()
+        .map(|(path, score)| TaskTest {
+            path: path.clone(),
+            score,
+        })
+        .collect()
+}
+
+fn is_test_helper_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    let file_name = Path::new(&lower)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    file_name == "conftest.py"
+        || file_name == "__init__.py"
+        || file_name.contains("helper")
+        || file_name.contains("fixture")
+        || lower.contains("/examples/")
+        || lower.starts_with("examples/")
+}
+
+fn print_task_workspace(workspace: &TaskWorkspace, path: &Path) {
+    println!(
+        "<task_workspace schema=\"{}\" file=\"{}\">",
+        escape_xml_text(&workspace.schema),
+        escape_xml_text(&path.display().to_string())
+    );
+    println!("<active_paths count=\"{}\">", workspace.active_paths.len());
+    for active in workspace.active_paths.iter().take(6) {
+        println!(
+            "  <file path=\"{}\" score=\"{}\" role=\"{}\" hash=\"{}\"/>",
+            escape_xml_text(&active.path),
+            active.score,
+            escape_xml_text(&active.role),
+            escape_xml_text(&active.source_hash)
+        );
+    }
+    println!("</active_paths>");
+
+    println!("<exact_slices count=\"{}\">", workspace.exact_slices.len());
+    for slice in workspace.exact_slices.iter().take(5) {
+        println!(
+            "<slice file=\"{}\" symbol=\"{}\" kind=\"{}\" lines=\"{}-{}\" score=\"{}\" reasons=\"{}\">",
+            escape_xml_text(&slice.path),
+            escape_xml_text(&slice.symbol),
+            escape_xml_text(&slice.kind),
+            slice.line_start,
+            slice.line_end,
+            slice.score,
+            escape_xml_text(&slice.reasons.join(","))
+        );
+        println!("<code>");
+        print_bounded_numbered_code(&slice.code, false);
+        println!("</code>");
+        println!("</slice>");
+    }
+    println!("</exact_slices>");
+
+    println!(
+        "<workspace_related_files count=\"{}\">",
+        workspace.related_files.len()
+    );
+    for related in workspace.related_files.iter().take(6) {
+        println!(
+            "  <file path=\"{}\" score=\"{}\" reason=\"{}\"/>",
+            escape_xml_text(&related.path),
+            related.score,
+            escape_xml_text(&related.reason)
+        );
+    }
+    println!("</workspace_related_files>");
+
+    println!(
+        "<workspace_tests count=\"{}\">",
+        workspace.likely_tests.len()
+    );
+    for test in &workspace.likely_tests {
+        println!(
+            "  <file path=\"{}\" score=\"{}\"/>",
+            escape_xml_text(&test.path),
+            test.score
+        );
+    }
+    println!("</workspace_tests>");
+    print_verification_plan(&workspace.verification_plan);
+    println!("</task_workspace>");
+}
+
+fn workspace_has_exact_slice(
+    workspace: &TaskWorkspace,
+    symbol: &anchor::storage::SymbolEntry,
+) -> bool {
+    workspace.exact_slices.iter().any(|slice| {
+        slice.path == symbol.path
+            && slice.symbol == symbol.name
+            && slice.line_start == symbol.line_start
+    })
 }
 
 fn top_scored_paths(
@@ -2250,43 +3286,197 @@ fn top_scored_paths(
 fn source_test_affinity_score(source_path: &str, test_path: &str) -> usize {
     let source_tokens = path_signal_tokens(source_path);
     let test_tokens = path_signal_tokens(test_path);
-    let shared = source_tokens.intersection(&test_tokens).count();
-    shared * 600
+    let shared = source_tokens
+        .iter()
+        .filter(|source_token| {
+            test_tokens
+                .iter()
+                .any(|test_token| soft_token_match(source_token, test_token))
+        })
+        .count();
+    let mut score = shared * 600;
+
+    if let (Some(source_stem), Some(test_stem)) = (
+        normalised_file_stem(source_path),
+        normalised_file_stem(test_path),
+    ) {
+        if source_stem == test_stem {
+            score += 2400;
+        }
+    }
+
+    if let (Some(source_parent), Some(test_parent)) = (
+        Path::new(source_path).parent(),
+        Path::new(test_path).parent(),
+    ) {
+        if source_parent == test_parent {
+            score += 1200;
+        }
+    }
+
+    score
 }
 
-fn print_verification_plan(likely_tests: &[(&String, usize)]) {
-    let python_tests: Vec<&str> = likely_tests
-        .iter()
-        .map(|(path, _)| path.as_str())
-        .filter(|path| path.ends_with(".py") && is_runnable_test_path(path))
-        .take(4)
-        .collect();
+fn normalised_file_stem(path: &str) -> Option<String> {
+    let stem = Path::new(path).file_stem()?.to_str()?.to_ascii_lowercase();
+    Some(
+        stem.strip_prefix("test_")
+            .unwrap_or(&stem)
+            .strip_suffix("_test")
+            .unwrap_or_else(|| stem.strip_suffix(".test").unwrap_or(&stem))
+            .to_string(),
+    )
+}
 
+fn build_task_verification_plan(likely_tests: &[(&String, usize)]) -> TaskVerificationPlan {
+    let mut hints_with_rank: Vec<(usize, TaskCheckHint)> = Vec::new();
+
+    if let Some((rank, command)) = python_test_command(likely_tests) {
+        hints_with_rank.push((
+            rank,
+            TaskCheckHint {
+                kind: "python_tests".to_string(),
+                command,
+            },
+        ));
+    }
+    if let Some((rank, command)) = go_test_command(likely_tests) {
+        hints_with_rank.push((
+            rank,
+            TaskCheckHint {
+                kind: "go_tests".to_string(),
+                command,
+            },
+        ));
+    }
+    if let Some((rank, command)) = rust_test_command(likely_tests) {
+        hints_with_rank.push((
+            rank,
+            TaskCheckHint {
+                kind: "rust_tests".to_string(),
+                command,
+            },
+        ));
+    }
+    if let Some((rank, command)) = js_test_command(likely_tests) {
+        hints_with_rank.push((
+            rank,
+            TaskCheckHint {
+                kind: "javascript_tests".to_string(),
+                command,
+            },
+        ));
+    }
+
+    hints_with_rank.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.kind.cmp(&b.1.kind)));
+    let preferred_check = hints_with_rank
+        .first()
+        .map(|(_, hint)| hint.command.clone());
+    let check_hints = hints_with_rank.into_iter().map(|(_, hint)| hint).collect();
+
+    TaskVerificationPlan {
+        steps: vec![
+            "Run at least one focused test-like command through anchor check before handoff."
+                .to_string(),
+            "If a check fails, fix the cause and rerun that same command successfully.".to_string(),
+        ],
+        preferred_check,
+        check_hints,
+    }
+}
+
+fn python_test_command(likely_tests: &[(&String, usize)]) -> Option<(usize, String)> {
+    likely_tests
+        .iter()
+        .enumerate()
+        .find_map(|(rank, (path, _))| {
+            let path = path.as_str();
+            if path.ends_with(".py") && is_runnable_python_test_path(path) {
+                Some((rank, format!("python -m pytest {path}")))
+            } else {
+                None
+            }
+        })
+}
+
+fn go_test_command(likely_tests: &[(&String, usize)]) -> Option<(usize, String)> {
+    likely_tests
+        .iter()
+        .enumerate()
+        .find_map(|(rank, (path, _))| {
+            if path.ends_with("_test.go") {
+                Some((rank, format!("go test {}", test_package_arg(path))))
+            } else {
+                None
+            }
+        })
+}
+
+fn rust_test_command(likely_tests: &[(&String, usize)]) -> Option<(usize, String)> {
+    likely_tests
+        .iter()
+        .enumerate()
+        .find_map(|(rank, (path, _))| {
+            if !path.starts_with("tests/") || !path.ends_with(".rs") {
+                return None;
+            }
+            let Some(stem) = Path::new(path).file_stem().and_then(|stem| stem.to_str()) else {
+                return None;
+            };
+            Some((rank, format!("cargo test --test {stem}")))
+        })
+}
+
+fn js_test_command(likely_tests: &[(&String, usize)]) -> Option<(usize, String)> {
+    likely_tests
+        .iter()
+        .enumerate()
+        .find_map(|(rank, (path, _))| {
+            let lower = path.to_ascii_lowercase();
+            if is_runnable_javascript_test_path(&lower) {
+                Some((rank, format!("npm test -- {}", path.as_str())))
+            } else {
+                None
+            }
+        })
+}
+
+fn test_package_arg(path: &str) -> String {
+    let parent = Path::new(path)
+        .parent()
+        .and_then(|parent| parent.to_str())
+        .unwrap_or("");
+    if parent.is_empty() {
+        ".".to_string()
+    } else {
+        format!("./{}", parent.replace('\\', "/"))
+    }
+}
+
+fn print_verification_plan(plan: &TaskVerificationPlan) {
     println!("<verification_plan>");
-    println!(
-        "  <step>Run at least one focused test-like command through anchor check before handoff.</step>"
-    );
-    println!(
-        "  <step>If a check fails, fix the cause and rerun that same command successfully.</step>"
-    );
-    if !python_tests.is_empty() {
+    for step in &plan.steps {
+        println!("  <step>{}</step>", escape_xml_text(step));
+    }
+    if let Some(command) = &plan.preferred_check {
         println!(
-            "  <preferred_check command=\"python -m pytest {}\"/>",
-            escape_xml_text(&python_tests.join(" "))
+            "  <preferred_check command=\"{}\"/>",
+            escape_xml_text(command)
         );
     }
     println!("</verification_plan>");
     println!("<check_hints>");
-    if !python_tests.is_empty() {
+    for hint in &plan.check_hints {
         println!(
-            "  <hint kind=\"python_tests\" command=\"python -m pytest {}\"/>",
-            escape_xml_text(&python_tests.join(" "))
+            "  <hint kind=\"{}\" command=\"{}\"/>",
+            escape_xml_text(&hint.kind),
+            escape_xml_text(&hint.command)
         );
     }
     println!("</check_hints>");
 }
 
-fn is_runnable_test_path(path: &str) -> bool {
+fn is_runnable_python_test_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     let file_name = Path::new(&lower)
         .file_name()
@@ -2295,12 +3485,18 @@ fn is_runnable_test_path(path: &str) -> bool {
     if file_name == "conftest.py" || file_name == "__init__.py" {
         return false;
     }
-    file_name.starts_with("test_")
-        || file_name.ends_with("_test.py")
-        || lower.ends_with(".test.ts")
-        || lower.ends_with(".spec.ts")
-        || lower.ends_with(".test.js")
-        || lower.ends_with(".spec.js")
+    file_name.starts_with("test_") || file_name.ends_with("_test.py")
+}
+
+fn is_runnable_javascript_test_path(lower_path: &str) -> bool {
+    lower_path.ends_with(".test.ts")
+        || lower_path.ends_with(".spec.ts")
+        || lower_path.ends_with(".test.tsx")
+        || lower_path.ends_with(".spec.tsx")
+        || lower_path.ends_with(".test.js")
+        || lower_path.ends_with(".spec.js")
+        || lower_path.ends_with(".test.jsx")
+        || lower_path.ends_with(".spec.jsx")
 }
 
 fn add_path_score(
@@ -2314,19 +3510,7 @@ fn add_path_score(
 
 fn path_signal_tokens(path: &str) -> std::collections::BTreeSet<String> {
     const GENERIC_PATH_TOKENS: &[&str] = &[
-        "app",
-        "bin",
-        "core",
-        "lib",
-        "main",
-        "mod",
-        "package",
-        "packages",
-        "python",
-        "src",
-        "state",
-        "statemachine",
-        "test",
+        "app", "bin", "core", "lib", "main", "mod", "package", "packages", "python", "src", "test",
         "tests",
     ];
 
