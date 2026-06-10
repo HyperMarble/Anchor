@@ -1355,6 +1355,11 @@ fn cmd_task(
         .map(|test| (&test.path, test.score))
         .collect();
     let verification_plan = build_task_verification_plan(&likely_tests);
+    let file_hashes: std::collections::BTreeMap<&str, &str> = path_index
+        .files
+        .iter()
+        .map(|file| (file.path.as_str(), file.source_hash.as_str()))
+        .collect();
     let workspace = build_task_workspace(
         &intent,
         &task_slices,
@@ -1362,6 +1367,7 @@ fn cmd_task(
         &historical_files,
         &likely_tests,
         &verification_plan,
+        &file_hashes,
     );
     save_task_workspace(&store, &workspace)?;
 
@@ -2954,6 +2960,7 @@ fn build_task_workspace(
     historical_files: &std::collections::BTreeMap<String, usize>,
     likely_tests: &[(&String, usize)],
     verification_plan: &TaskVerificationPlan,
+    file_hashes: &std::collections::BTreeMap<&str, &str>,
 ) -> TaskWorkspace {
     let mut path_scores: std::collections::BTreeMap<String, (i32, String)> =
         std::collections::BTreeMap::new();
@@ -2964,19 +2971,23 @@ fn build_task_workspace(
 
     let mut selected_slices = select_diverse_task_slices(slices, 12);
 
+    // Rank a file by its single best slice, with only a small bonus for
+    // additional matches. Summing slice scores lets a file with several
+    // mediocre matches outrank the file holding the one symbol the task is
+    // actually about.
     for slice in &selected_slices {
         path_hashes.insert(slice.path.clone(), slice.source_hash.clone());
         let selected_count = slice_counts.entry(slice.path.clone()).or_default();
-        let contribution = match *selected_count {
-            0 => slice.score.max(0),
-            1 => slice.score.max(0) / 2,
-            _ => slice.score.max(0) / 4,
-        };
-        *selected_count += 1;
+        let score = slice.score.max(0);
         let entry = path_scores
             .entry(slice.path.clone())
             .or_insert((0, "source".to_string()));
-        entry.0 += contribution;
+        if *selected_count == 0 {
+            entry.0 = entry.0.max(score);
+        } else {
+            entry.0 = entry.0.max(score) + (score / 10).min(60);
+        }
+        *selected_count += 1;
     }
 
     for path in related_files {
@@ -2992,6 +3003,18 @@ fn build_task_workspace(
         if let Some(entry) = path_scores.get_mut(path) {
             entry.0 += (*score).min(500) as i32;
             entry.1 = format!("{}+history", entry.1);
+        } else if *score >= 50 && !looks_like_test_path(path) {
+            // Files that historically co-change with the seed files belong in
+            // the working set even when no slice matched the intent: registry
+            // and wiring files rarely contain the task's keywords but are
+            // edited in almost every related commit.
+            if let Some(hash) = file_hashes.get(path.as_str()) {
+                path_hashes.insert(path.clone(), (*hash).to_string());
+                path_scores.insert(
+                    path.clone(),
+                    ((*score).min(500) as i32, "history".to_string()),
+                );
+            }
         }
     }
 
