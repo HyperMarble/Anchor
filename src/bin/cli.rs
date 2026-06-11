@@ -137,7 +137,7 @@ fn run(cli: Cli) -> Result<()> {
 
         Commands::Receipt => cmd_receipt(&root),
 
-        Commands::Gate { min_score, require_receipts } => cmd_gate(&root, min_score, require_receipts),
+        Commands::Gate { min_score } => cmd_gate(&root, min_score),
 
         Commands::Check { command } => cmd_check(&root, &command),
 
@@ -1946,7 +1946,7 @@ fn handoff_state(summary: &events::EventSummary) -> HandoffState {
     }
 }
 
-fn cmd_gate(root: &Path, min_score: u8, require_receipts: bool) -> Result<()> {
+fn cmd_gate(root: &Path, min_score: u8) -> Result<()> {
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
     let summary = execution_summary(root, &events);
@@ -1986,7 +1986,7 @@ fn cmd_gate(root: &Path, min_score: u8, require_receipts: bool) -> Result<()> {
 
     // No receipt, no merge: every changed file must have a recorded Anchor
     // write event, or the change is untracked work the receipt cannot vouch for.
-    if require_receipts && summary.unrecorded_changed_files > 0 {
+    if summary.unrecorded_changed_files > 0 {
         println!("<unreceipted_files>{}</unreceipted_files>", summary.unrecorded_changed_files);
         for path in &summary.unrecorded_changed_file_list {
             println!("  <unreceipted_file>{}</unreceipted_file>", escape_xml_text(path));

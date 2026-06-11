@@ -237,7 +237,7 @@ fn cli_gate_passes_after_test_like_check() {
 }
 
 #[test]
-fn cli_gate_require_receipts_flags_raw_write_but_not_anchor_edit() {
+fn cli_gate_flags_raw_write_but_not_anchor_edit() {
     let dir = tempfile::tempdir().unwrap();
     let anchor = env!("CARGO_BIN_EXE_anchor");
     std::fs::create_dir_all(dir.path().join("src")).unwrap();
@@ -253,7 +253,7 @@ fn cli_gate_require_receipts_flags_raw_write_but_not_anchor_edit() {
     std::fs::write(dir.path().join("src/a.py"), "def f():\n    return 2\n").unwrap();
     let raw = Command::new(anchor)
         .arg("--root").arg(dir.path())
-        .arg("gate").arg("--require-receipts")
+        .arg("gate")
         .output().unwrap();
     let raw_out = String::from_utf8_lossy(&raw.stdout);
     assert!(!raw.status.success(), "receipt gate must fail on raw write: {raw_out}");
@@ -272,7 +272,7 @@ fn cli_gate_require_receipts_flags_raw_write_but_not_anchor_edit() {
         .output().unwrap();
     let governed = Command::new(anchor)
         .arg("--root").arg(dir.path())
-        .arg("gate").arg("--require-receipts")
+        .arg("gate")
         .output().unwrap();
     let gov_out = String::from_utf8_lossy(&governed.stdout);
     assert!(!gov_out.contains("<unreceipted_file>"),
