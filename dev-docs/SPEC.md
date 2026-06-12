@@ -224,3 +224,34 @@ different repo).
 
 W6 jumps the queue whenever codex access is available: graded proof is the
 scarcest resource.
+
+---
+
+## Cloud shape — decided, not scheduled
+
+Decision (2026-06-12): Anchor Cloud is the GitHub move applied to Anchor's
+own data — local CLI stays the product, the cloud hosts the *shared* half of
+`.anchor/`. It is not a runtime: no hosted agents, no environments, no
+inference, no code hosting. Agents keep running wherever they already run
+(Claude Code, Cursor, Ona, codex) and push state to the remote.
+
+Three components, in adoption order:
+
+1. **Gate as a GitHub App** — CI check verifying PR receipts (every changed
+   file has a write event, checks ran, score over threshold), posts the
+   receipt summary as a PR comment, blocks merge otherwise. The "no receipt,
+   no merge" enforcement made mandatory. Smallest piece, the wedge.
+2. **Shared lockd** — the existing lockd protocol served across machines:
+   cross-developer/cross-agent claims and blocks, visible.
+3. **Receipt sync + team dashboard** — sessions push event logs; team sees
+   active sessions, claimed symbols, quality scores, surprises.
+
+Business boundary matches the value boundary: local CLI free forever
+(single-player wedge), team cloud paid (open-core).
+
+Design obligations this decision creates *now* (cheap, do during normal
+work): lockd's persistence format and the receipt/event schema must remain
+serializable and versioned, assuming a remote will read them someday.
+
+Build trigger: pillars proven (W2/W3/W6 done) AND a real team asking for
+multiplayer. Until both, this section is a decision, not a workstream.
