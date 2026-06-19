@@ -9,6 +9,38 @@ Current goal:
 - avoid writing Docker/Colima data to the main disk
 - measure only the transaction/provenance signals that exist in the current CLI
 
+## Prompt Repair Benchmark
+
+`benchmark/prompt_improvement.py` tests the project-aware prompt-repair idea
+with local Ollama. It compares a raw human prompt against an Anchor-repaired
+prompt that includes verified project facts, likely files, risky assumptions,
+and checks to run.
+
+For product design and the planned Rust CLI, see
+[Project-Aware Prompt Repair](../docs/prompt-repair.md).
+
+The benchmark reports two early signals:
+
+- `brief_quality`: whether the repaired prompt adds useful repo-grounded
+  targets, warnings, and checks without too much bloat.
+- downstream score: whether the local model's plan mentions expected project
+  facts, avoids wrong tools/frameworks, and does not hallucinate nonexistent
+  paths.
+
+Run a small one-case smoke benchmark against the local Anchor repo:
+
+```bash
+python3 benchmark/prompt_improvement.py \
+  --model qwen2.5-coder:7b \
+  --cases benchmark/prompt_cases.example.jsonl \
+  --out benchmark/results.prompt_smoke.jsonl
+```
+
+The default is intentionally small for early iteration. Use `--limit 0` to run
+all prompt cases once the prompt improver is more stable.
+
+Use `--dry-run` to inspect generated prompts without calling Ollama.
+
 ## Scripts
 
 ### `run_deepswe_task_colima.sh`
