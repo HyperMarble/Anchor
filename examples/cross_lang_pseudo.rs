@@ -150,7 +150,12 @@ struct Emitter<'a> {
 
 impl<'a> Emitter<'a> {
     fn new(src: &'a str, lang: SupportedLanguage) -> Self {
-        Self { src: src.as_bytes(), lang, out: String::new(), indent: 0 }
+        Self {
+            src: src.as_bytes(),
+            lang,
+            out: String::new(),
+            indent: 0,
+        }
     }
 
     fn text(&self, node: Node) -> &str {
@@ -328,8 +333,8 @@ impl<'a> Emitter<'a> {
         for ch in node.children(&mut c) {
             match ch.kind() {
                 "identifier" | "simple_identifier" | "def" | "end" | "parameters"
-                | "type_annotation" | "type_identifier" | "->" | "func"
-                | "(" | ")" | "[" | "]" | "optional_type" | "user_type" => {}
+                | "type_annotation" | "type_identifier" | "->" | "func" | "(" | ")" | "[" | "]"
+                | "optional_type" | "user_type" => {}
                 _ => self.emit_node(ch),
             }
         }
@@ -361,7 +366,8 @@ impl<'a> Emitter<'a> {
 
     fn has_else(&self, node: Node) -> bool {
         let mut c = node.walk();
-        let result = node.children(&mut c)
+        let result = node
+            .children(&mut c)
             .any(|ch| ch.kind() == "else_clause" || ch.kind() == "else");
         result
     }
@@ -412,8 +418,11 @@ impl<'a> Emitter<'a> {
         let mut c = node.walk();
         for ch in node.children(&mut c) {
             match ch.kind() {
-                "parameters" | "formal_parameters" | "parameter_list"
-                | "function_value_parameters" | "method_parameters" => {
+                "parameters"
+                | "formal_parameters"
+                | "parameter_list"
+                | "function_value_parameters"
+                | "method_parameters" => {
                     return self.extract_param_names(ch);
                 }
                 _ => {}
@@ -445,8 +454,7 @@ impl<'a> Emitter<'a> {
                 // Go: parameter_declaration contains identifier then type
                 "parameter_declaration" => {
                     let mut c2 = ch.walk();
-                    let found = ch.children(&mut c2)
-                        .find(|n| n.kind() == "identifier");
+                    let found = ch.children(&mut c2).find(|n| n.kind() == "identifier");
                     if let Some(n) = found {
                         let name = self.text(n).to_string();
                         if !name.is_empty() {
@@ -457,7 +465,8 @@ impl<'a> Emitter<'a> {
                 // Java/C#: formal_parameter, required_parameter
                 "formal_parameter" | "required_parameter" | "optional_parameter" => {
                     let mut c2 = ch.walk();
-                    let found = ch.children(&mut c2)
+                    let found = ch
+                        .children(&mut c2)
                         .find(|n| n.kind() == "identifier" || n.kind() == "simple_identifier");
                     if let Some(n) = found {
                         let name = self.text(n).to_string();
@@ -469,7 +478,8 @@ impl<'a> Emitter<'a> {
                 // Swift: parameter
                 "parameter" => {
                     let mut c2 = ch.walk();
-                    let found = ch.children(&mut c2)
+                    let found = ch
+                        .children(&mut c2)
                         .find(|n| n.kind() == "identifier" || n.kind() == "simple_identifier");
                     if let Some(n) = found {
                         let name = self.text(n).to_string();
@@ -495,8 +505,8 @@ impl<'a> Emitter<'a> {
         for ch in node.children(&mut c) {
             match ch.kind() {
                 "if" | "(" | ")" => continue,
-                "block" | "statement_block" | "compound_statement"
-                | "else_clause" | "else" | "then" => break,
+                "block" | "statement_block" | "compound_statement" | "else_clause" | "else"
+                | "then" => break,
                 _ => return self.normalize_condition(self.text(ch)),
             }
         }
@@ -540,7 +550,9 @@ impl<'a> Emitter<'a> {
                 "nil" | "null_literal" => return "null".to_string(),
                 _ => {
                     let raw = self.text(ch).trim().to_string();
-                    if raw.is_empty() { continue; }
+                    if raw.is_empty() {
+                        continue;
+                    }
                     return raw
                         .replace("None", "null")
                         .replace("nil", "null")
@@ -574,16 +586,22 @@ impl<'a> Emitter<'a> {
         // property_declaration: value_binding_pattern, pattern(simple_identifier), =, value
         let mut c = node.walk();
         let children: Vec<_> = node.children(&mut c).collect();
-        let name = children.iter()
+        let name = children
+            .iter()
             .find(|n| n.kind() == "pattern")
             .and_then(|n| {
                 let mut c2 = n.walk();
-                let found = n.children(&mut c2).find(|ch| ch.kind() == "simple_identifier")
+                let found = n
+                    .children(&mut c2)
+                    .find(|ch| ch.kind() == "simple_identifier")
                     .map(|ch| self.text(ch).to_string());
                 found
             })?;
-        let value = children.iter()
-            .filter(|n| n.kind() != "value_binding_pattern" && n.kind() != "pattern" && n.kind() != "=")
+        let value = children
+            .iter()
+            .filter(|n| {
+                n.kind() != "value_binding_pattern" && n.kind() != "pattern" && n.kind() != "="
+            })
             .map(|n| self.text(*n).trim().to_string())
             .find(|s| !s.is_empty())?;
         Some(format!("{} = {}", name, value))
@@ -596,11 +614,15 @@ impl<'a> Emitter<'a> {
             if ch.kind() == "variable_declarator" {
                 let mut c2 = ch.walk();
                 let children: Vec<_> = ch.children(&mut c2).collect();
-                let name = children.iter()
+                let name = children
+                    .iter()
                     .find(|n| n.kind() == "identifier")
                     .map(|n| self.text(*n).to_string())?;
-                let value = children.iter()
-                    .find(|n| n.kind() != "identifier" && n.kind() != "=" && !n.kind().starts_with('"'))
+                let value = children
+                    .iter()
+                    .find(|n| {
+                        n.kind() != "identifier" && n.kind() != "=" && !n.kind().starts_with('"')
+                    })
                     .map(|n| self.text(*n).trim().to_string())
                     .unwrap_or_default();
                 return Some(format!("{} = {}", name, value));
@@ -612,14 +634,13 @@ impl<'a> Emitter<'a> {
     fn extract_assignment(&self, node: Node) -> Option<String> {
         let text = self.text(node);
         // Simple: strip type annotations and language keywords
-        let clean = text
-            .trim()
-            .trim_end_matches(';')
-            .trim()
-            .to_string();
+        let clean = text.trim().trim_end_matches(';').trim().to_string();
 
         // Strip leading keywords: let, const, var, final, auto
-        let clean = strip_leading(&clean, &["let mut ", "let ", "const ", "var ", "final ", "auto "]);
+        let clean = strip_leading(
+            &clean,
+            &["let mut ", "let ", "const ", "var ", "final ", "auto "],
+        );
 
         // Strip type annotations: `: Type` before `=`
         let clean = strip_type_annotation(&clean);
@@ -649,14 +670,18 @@ fn strip_type_annotation(s: &str) -> String {
     // "User* user = ..." → "user = ..."
     if let Some(eq) = s.find('=') {
         let lhs = &s[..eq];
-        let rhs = &s[eq+1..];
+        let rhs = &s[eq + 1..];
         // if lhs has ':', strip after ':'
         let lhs = if let Some(colon) = lhs.find(':') {
             lhs[..colon].trim().to_string()
         } else {
             // C-style: "User* user" → "user" (last word)
             let parts: Vec<&str> = lhs.split_whitespace().collect();
-            parts.last().unwrap_or(&lhs).trim_start_matches('*').to_string()
+            parts
+                .last()
+                .unwrap_or(&lhs)
+                .trim_start_matches('*')
+                .to_string()
         };
         format!("{} = {}", lhs.trim(), rhs.trim())
     } else {
@@ -680,7 +705,8 @@ fn emit_pseudo(src: &str, lang: SupportedLanguage) -> String {
     }
 
     // Clean up blank lines
-    emitter.out
+    emitter
+        .out
         .lines()
         .filter(|l| !l.trim().is_empty())
         .collect::<Vec<_>>()
@@ -707,16 +733,16 @@ fn debug_ast(src: &str, lang: SupportedLanguage) {
 
 fn main() {
     let cases: &[(&str, SupportedLanguage, &str)] = &[
-        ("Rust",       SupportedLanguage::Rust,       RUST),
-        ("Python",     SupportedLanguage::Python,     PYTHON),
-        ("Go",         SupportedLanguage::Go,         GO),
+        ("Rust", SupportedLanguage::Rust, RUST),
+        ("Python", SupportedLanguage::Python, PYTHON),
+        ("Go", SupportedLanguage::Go, GO),
         ("JavaScript", SupportedLanguage::JavaScript, JAVASCRIPT),
         ("TypeScript", SupportedLanguage::TypeScript, TYPESCRIPT),
-        ("Java",       SupportedLanguage::Java,       JAVA),
-        ("C#",         SupportedLanguage::CSharp,     CSHARP),
-        ("Ruby",       SupportedLanguage::Ruby,       RUBY),
-        ("C++",        SupportedLanguage::Cpp,        CPP),
-        ("Swift",      SupportedLanguage::Swift,      SWIFT),
+        ("Java", SupportedLanguage::Java, JAVA),
+        ("C#", SupportedLanguage::CSharp, CSHARP),
+        ("Ruby", SupportedLanguage::Ruby, RUBY),
+        ("C++", SupportedLanguage::Cpp, CPP),
+        ("Swift", SupportedLanguage::Swift, SWIFT),
     ];
 
     println!("=== Cross-Language Pseudocode Test ===");
