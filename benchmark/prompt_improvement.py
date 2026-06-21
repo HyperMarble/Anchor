@@ -84,6 +84,34 @@ PROMPT_CONTROL_PATTERNS = [
     (re.compile(r"\b(delete|remove|rewrite)\b.*\b(everything|all|whole)\b", re.I), "Prompt may be too destructive or broad."),
     (re.compile(r"\bquick\s*fix\b|\blol\b|\bthing\b", re.I), "Prompt is vague or casual enough to invite wrong assumptions."),
 ]
+CASE_LIST_FIELDS = ("expected_terms", "avoid_terms")
+PATH_LIKE_EXTENSIONS = set(LANG_BY_EXT) | {
+    ".lock",
+    ".yaml",
+    ".yml",
+    ".txt",
+    ".sql",
+    ".ini",
+}
+PATH_LIKE_PREFIXES = (
+    "src",
+    "test",
+    "tests",
+    "doc",
+    "docs",
+    "benchmark",
+    "bench",
+    "benches",
+    "example",
+    "examples",
+    "script",
+    "scripts",
+    "crate",
+    "crates",
+    "package",
+    "packages",
+    "lockd",
+)
 
 
 @dataclass
@@ -127,13 +155,43 @@ class BriefQuality:
     bloat_penalty: int
 
 
+def validate_case(raw: Any, path: Path, line_no: int) -> dict[str, Any]:
+    source = f"{path}:{line_no}"
+    if not isinstance(raw, dict):
+        raise ValueError(f"{source}: expected a JSON object, got {type(raw).__name__}")
+
+    case = dict(raw)
+    for field in ("id", "human_prompt"):
+        value = case.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{source}: field {field!r} must be a non-empty string")
+
+    for field in CASE_LIST_FIELDS:
+        value = case.get(field, [])
+        if value is None:
+            value = []
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{source}: field {field!r} must be a list of strings")
+        case[field] = value
+
+    notes = case.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        raise ValueError(f"{source}: field 'notes' must be a string when provided")
+
+    return case
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for line_no, line in enumerate(f, start=1):
             line = line.strip()
             if line:
-                rows.append(json.loads(line))
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{path}:{line_no}: invalid JSON: {exc.msg}") from exc
+                rows.append(validate_case(raw, path, line_no))
     return rows
 
 
@@ -285,6 +343,28 @@ def build_profile(root: Path) -> ProjectProfile:
     )
 
 
+def repo_path_exists(profile: ProjectProfile, path: str) -> bool:
+    normalized = path.strip().rstrip("/")
+    return bool(normalized) and (Path(profile.root) / normalized).exists()
+
+
+def add_existing_target(
+    hits: list[TargetHint], profile: ProjectProfile, path: str, reason: str
+) -> None:
+    if repo_path_exists(profile, path):
+        hits.append(TargetHint(path, f"verified: {reason}"))
+
+
+def existing_repo_paths(profile: ProjectProfile, paths: Iterable[str]) -> list[str]:
+    return [path for path in paths if repo_path_exists(profile, path)]
+
+
+def human_join(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
 def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[TargetHint]:
     text = prompt.lower()
     hits: list[TargetHint] = []
@@ -307,31 +387,31 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
         if len(name) > 3 and name in text:
             hits.append(TargetHint(symbol, f"prompt mentions symbol-like term {name!r}"))
     if any(word in text for word in ["lock", "locks", "agent", "agents", "same file"]):
-        hits.extend(
-            [
-                TargetHint("src/cli/write.rs", "write path acquires file/symbol locks"),
-                TargetHint("src/lock/lockd.rs", "Rust client talks to anchor-lockd"),
-                TargetHint("tests/test_cli_multi_agent_conflict.rs", "regression tests cover multi-agent write conflicts"),
-                TargetHint("lockd/", "Go daemon owns cross-process lock state"),
-            ]
-        )
+        for path, reason in [
+            ("src/cli/write.rs", "write path acquires file/symbol locks"),
+            ("src/lock/lockd.rs", "Rust client talks to anchor-lockd"),
+            (
+                "tests/test_cli_multi_agent_conflict.rs",
+                "regression tests cover multi-agent write conflicts",
+            ),
+            ("lockd/", "Go daemon owns cross-process lock state"),
+        ]:
+            add_existing_target(hits, profile, path, reason)
     if any(word in text for word in ["search", "cache", "smarter", "read whole"]):
-        hits.extend(
-            [
-                TargetHint("src/storage/bm25.rs", "hybrid symbol search scoring lives here"),
-                TargetHint("src/storage/anchor.rs", "symbol index and projection retrieval live here"),
-                TargetHint("src/cache.rs", "persistent context cache lives here"),
-                TargetHint("tests/test_search_regression.rs", "search ranking regression tests live here"),
-            ]
-        )
+        for path, reason in [
+            ("src/storage/bm25.rs", "hybrid symbol search scoring lives here"),
+            ("src/storage/anchor.rs", "symbol index and projection retrieval live here"),
+            ("src/cache.rs", "persistent context cache lives here"),
+            ("tests/test_search_regression.rs", "search ranking regression tests live here"),
+        ]:
+            add_existing_target(hits, profile, path, reason)
     if any(word in text for word in ["install", "github", "docs", "rules", "bossy"]):
-        hits.extend(
-            [
-                TargetHint("README.md", "public install and quick-start docs"),
-                TargetHint("Cargo.toml", "crate repository metadata"),
-                TargetHint("docs/install.sh", "release installer and optional agent rules"),
-            ]
-        )
+        for path, reason in [
+            ("README.md", "public install and quick-start docs"),
+            ("Cargo.toml", "crate repository metadata"),
+            ("docs/install.sh", "release installer and optional agent rules"),
+        ]:
+            add_existing_target(hits, profile, path, reason)
 
     deduped: dict[str, TargetHint] = {}
     for hit in hits:
@@ -353,6 +433,21 @@ def incorrect_assumptions(prompt: str, profile: ProjectProfile) -> list[str]:
 
 def prompt_risks(prompt: str) -> list[str]:
     return [message for pattern, message in PROMPT_CONTROL_PATTERNS if pattern.search(prompt)]
+
+
+def project_description(profile: ProjectProfile) -> str:
+    facts: list[str] = []
+    if "Cargo.toml" in profile.manifest_files:
+        facts.append("Rust crate or workspace")
+    if "lockd/go.mod" in profile.manifest_files:
+        facts.append("Go module under lockd/")
+    if repo_path_exists(profile, "src/bin/cli.rs"):
+        facts.append("CLI entrypoint at src/bin/cli.rs")
+    if repo_path_exists(profile, "README.md"):
+        facts.append("README-driven public documentation")
+    if facts:
+        return human_join(facts)
+    return f"repository named {Path(profile.root).name} with detected files listed below"
 
 
 def brief_quality(
@@ -405,20 +500,43 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
     prompt_lower = prompt.lower()
     guidance: list[str] = []
     if any(word in prompt_lower for word in ["lock", "locks", "agent", "agents", "same file"]):
-        guidance.append(
-            "Existing lock code is present: Rust CLI writes use src/cli/write.rs, "
-            "the Rust lockd client lives in src/lock/lockd.rs, and the Go daemon "
-            "lives under lockd/. Do not invent Python agent modules or pytest-based tests."
+        lock_paths = existing_repo_paths(
+            profile,
+            [
+                "src/cli/write.rs",
+                "src/lock/lockd.rs",
+                "tests/test_cli_multi_agent_conflict.rs",
+                "lockd/",
+            ],
         )
+        if lock_paths:
+            guidance.append(
+                f"Existing lock-related code is present in {human_join(lock_paths)}. "
+                "Do not invent agent modules or test tools that are not present in this repo."
+            )
     if any(word in prompt_lower for word in ["search", "cache", "smarter", "read whole"]):
-        guidance.append(
-            "Existing search/cache code is present: BM25 search is in src/storage/bm25.rs "
-            "and persistent context caching is in src/cache.rs."
+        search_paths = existing_repo_paths(
+            profile,
+            [
+                "src/storage/bm25.rs",
+                "src/storage/anchor.rs",
+                "src/cache.rs",
+                "tests/test_search_regression.rs",
+            ],
         )
+        if search_paths:
+            guidance.append(
+                f"Existing search/cache code is present in {human_join(search_paths)}."
+            )
     if any(word in prompt_lower for word in ["install", "github", "docs", "rules", "bossy"]):
-        guidance.append(
-            "Install/docs changes should stay in README.md, Cargo.toml, and docs/install.sh."
+        install_paths = existing_repo_paths(
+            profile,
+            ["README.md", "Cargo.toml", "docs/install.sh"],
         )
+        if install_paths:
+            guidance.append(
+                f"Install/docs changes should stay in the verified files: {human_join(install_paths)}."
+            )
 
     target_text = "\n".join(
         f"- {item.path} ({item.reason})" for item in targets
@@ -432,7 +550,8 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
     guidance_text = "\n".join(f"- {item}" for item in guidance) or "- No extra project-specific guidance inferred."
     language_text = ", ".join(profile.languages) or "unknown"
     key_file_text = "\n".join(f"- {file}" for file in profile.key_files[:10])
-    manifest_text = "\n".join(f"- {file}" for file in profile.manifest_files) or "- No package/build manifests detected."
+    manifest_text = "\n".join(f"- {file}" for file in profile.manifest_files) or "- No package or build manifests detected."
+    project_text = project_description(profile)
 
     return f"""Task Brief
 
@@ -443,7 +562,7 @@ What Anchor changed:
 {changes_text}
 
 Project facts verified from this repository:
-- Project type: Anchor, a repo-local execution harness for coding agents.
+- Project profile: {project_text}.
 - Main languages detected: {language_text}.
 - Build/package manifests:
 {manifest_text}
@@ -547,7 +666,7 @@ def extract_path_mentions(text: str) -> list[str]:
         raw = match.group(1) or match.group(2)
         if not raw:
             continue
-        raw = raw.strip().strip(".,:;")
+        raw = raw.strip().strip(".,:;)")
         if raw.startswith(("http://", "https://")):
             continue
         if raw in {"go test ./...", "./..."}:
@@ -557,15 +676,40 @@ def extract_path_mentions(text: str) -> list[str]:
     return sorted(set(paths))
 
 
+def normalize_path_mention(path: str) -> str:
+    normalized = path.strip().strip("`").strip(".,:;)")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    normalized = re.sub(r":\d+(?::\d+)?$", "", normalized)
+    return normalized.rstrip("/")
+
+
+def looks_like_repo_path(path: str, top_dirs: set[str]) -> bool:
+    normalized = normalize_path_mention(path)
+    if not normalized or normalized.startswith("/"):
+        return False
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", normalized):
+        return False
+    if any(char.isspace() for char in normalized) or any(
+        token in normalized for token in ("&&", "|", ";")
+    ):
+        return False
+
+    first = normalized.split("/", 1)[0]
+    suffix = Path(normalized).suffix.lower()
+    if first in top_dirs:
+        return True
+    if suffix in PATH_LIKE_EXTENSIONS:
+        return True
+    return any(first.lower().startswith(prefix) for prefix in PATH_LIKE_PREFIXES)
+
+
 def hallucinated_paths(output: str, repo: Path) -> list[str]:
     bad: list[str] = []
     top_dirs = {path.name for path in repo.iterdir() if path.is_dir()}
     for path in extract_path_mentions(output):
-        normalized = path.rstrip("/")
-        if normalized.startswith("/"):
-            continue
-        first = normalized.split("/", 1)[0]
-        if first not in top_dirs:
+        normalized = normalize_path_mention(path)
+        if not looks_like_repo_path(path, top_dirs):
             continue
         if not (repo / normalized).exists():
             bad.append(path)
