@@ -186,7 +186,11 @@ fn collect_repo_files(root: &Path, store: Option<&AnchorStore>) -> Vec<String> {
         if files.len() >= MAX_SCAN_FILES {
             break;
         }
-        if !entry.file_type().map(|kind| kind.is_file()).unwrap_or(false) {
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
             continue;
         }
         let Ok(relative) = entry.path().strip_prefix(root) else {
@@ -489,7 +493,10 @@ fn normalize_path_mention(word: &str, root: &Path) -> Option<String> {
     if !(trimmed.contains('/') || trimmed.contains('.')) {
         return None;
     }
-    let normalized = trimmed.strip_prefix("./").unwrap_or(trimmed).trim_end_matches('/');
+    let normalized = trimmed
+        .strip_prefix("./")
+        .unwrap_or(trimmed)
+        .trim_end_matches('/');
     if normalized.is_empty() || normalized.starts_with('/') {
         return None;
     }
@@ -528,11 +535,20 @@ fn assumption_warnings(prompt: &str, profile: &ProjectProfile) -> Vec<String> {
     )
     .to_lowercase();
     let checks = [
-        ("express", "No Express evidence was detected in this repository."),
+        (
+            "express",
+            "No Express evidence was detected in this repository.",
+        ),
         ("jest", "No Jest evidence was detected in this repository."),
-        ("react", "No React evidence was detected in this repository."),
+        (
+            "react",
+            "No React evidence was detected in this repository.",
+        ),
         ("npm", "No package.json/npm workflow was detected."),
-        ("postgres", "No PostgreSQL evidence was detected in this repository."),
+        (
+            "postgres",
+            "No PostgreSQL evidence was detected in this repository.",
+        ),
         (
             "elasticsearch",
             "No Elasticsearch evidence was detected in this repository.",
@@ -547,8 +563,8 @@ fn assumption_warnings(prompt: &str, profile: &ProjectProfile) -> Vec<String> {
             (prompt_lower.contains("next.js")
                 || prompt_lower.contains("nextjs")
                 || prompt_lower.contains("next js"))
-                .then(|| "No Next.js evidence was detected in this repository.".to_string())
-                .filter(|_| !present.contains("next")),
+            .then(|| "No Next.js evidence was detected in this repository.".to_string())
+            .filter(|_| !present.contains("next")),
         )
         .collect()
 }
@@ -617,7 +633,10 @@ fn change_summary(
         changes.push(format!("Flagged {} prompt-quality risk(s).", risks.len()));
     }
     if !checks.is_empty() {
-        changes.push(format!("Added {} repo-local check command(s).", checks.len()));
+        changes.push(format!(
+            "Added {} repo-local check command(s).",
+            checks.len()
+        ));
     }
     if changes.is_empty() {
         changes.push("Kept the original task mostly intact; no strong corrections found.".into());
@@ -688,11 +707,16 @@ fn render_targets(report: &PromptReport) -> String {
         lines.push(line);
     }
     for path in &report.not_found_paths {
-        lines.push(format!("- `{path}` [not_found] prompt mentions a missing path"));
+        lines.push(format!(
+            "- `{path}` [not_found] prompt mentions a missing path"
+        ));
     }
     format!(
         "## Likely Targets\n{}",
-        bullet_list(&lines, "- No likely target found; run `anchor build` or `anchor search` for more context.")
+        bullet_list(
+            &lines,
+            "- No likely target found; run `anchor build` or `anchor search` for more context."
+        )
     )
 }
 
@@ -706,7 +730,10 @@ fn render_warnings(report: &PromptReport) -> String {
     }
     format!(
         "## Assumptions And Risks\n{}",
-        bullet_list(&lines, "- No obvious wrong framework/tool assumptions detected.")
+        bullet_list(
+            &lines,
+            "- No obvious wrong framework/tool assumptions detected."
+        )
     )
 }
 

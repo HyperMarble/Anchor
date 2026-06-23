@@ -46,7 +46,10 @@ fn cli_prompt_repair_returns_repo_grounded_task_brief() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Anchor Prompt Repair"), "{stdout}");
     assert!(stdout.contains("src/lock/lockd.rs"), "{stdout}");
-    assert!(stdout.contains("LockManager") || stdout.contains("acquire_lock"), "{stdout}");
+    assert!(
+        stdout.contains("LockManager") || stdout.contains("acquire_lock"),
+        "{stdout}"
+    );
     assert!(stdout.contains("cargo test"), "{stdout}");
     assert!(stdout.contains("Prompt discourages validation"), "{stdout}");
 }
