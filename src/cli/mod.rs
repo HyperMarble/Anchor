@@ -5,6 +5,7 @@
 //  Created by hak (tharun)
 //
 
+pub mod prompt;
 pub mod write;
 
 use clap::{Parser, Subcommand};
@@ -35,6 +36,7 @@ const HELP_TEXT: &str = "
 Start here:
   context <sym> [sym2…]  Code + callers + callees
   search <q> [q2…]      Find symbols
+  prompt repair <text>   Repair a prompt into a repo-grounded task brief
   map [scope]           Codebase map / zoom into module
   write <path> <content> Create/overwrite file
   edit <path> ...        Insert/replace/delete text
@@ -81,6 +83,12 @@ pub enum Commands {
     Map {
         /// Optional scope: zoom into specific module/directory
         scope: Option<String>,
+    },
+
+    /// Check, repair, or explain project-aware prompts
+    Prompt {
+        #[command(subcommand)]
+        command: prompt::PromptCommands,
     },
 
     /// Create or overwrite a file

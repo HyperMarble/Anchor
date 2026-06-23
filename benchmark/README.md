@@ -22,9 +22,11 @@ Then it computes profile-vs-profile win rates by metric.
 
 ## Files
 
-- `benchmark/run_benchmark.py`: executes tasks and stores run artifacts/results.
+- `benchmark/run.py`: executes tasks and stores run artifacts/results.
 - `benchmark/score_results.py`: compares profiles and prints win rates.
-- `benchmark/import_swebench.py`: imports official SWE-bench issues into task format.
+- `benchmark/swebench.py`: imports official SWE-bench issues into task format.
+- `benchmark/prompt_improvement.py`: local prompt repair smoke benchmark.
+- `benchmark/prompt_cases.example.jsonl`: example human prompts for prompt repair.
 - `benchmark/config.example.json`: benchmark-level config.
 - `benchmark/profiles.example.json`: agent profile templates.
 - `benchmark/tasks.example.jsonl`: task templates.
@@ -47,7 +49,7 @@ cp benchmark/tasks.example.jsonl benchmark/tasks.jsonl
 3. Run benchmark:
 
 ```bash
-python3 benchmark/run_benchmark.py \
+python3 benchmark/run.py \
   --config benchmark/config.json \
   --profiles benchmark/profiles.json \
   --tasks benchmark/tasks.jsonl \
@@ -69,6 +71,38 @@ python3 benchmark/score_results.py \
 - `token_usage` and `tool_calls` are optional and depend on your agent output format.
 - Keep eval checks deterministic (`pytest`, `cargo test`, smoke script, etc.).
 
+## Prompt Repair Benchmark
+
+`benchmark/prompt_improvement.py` tests the project-aware prompt-repair idea with
+local Ollama. It compares a raw human prompt against an Anchor-repaired prompt
+that includes verified project facts, likely files, risky assumptions, and checks
+to run.
+
+For product design and the planned Rust CLI, see
+[Project-Aware Prompt Repair](../docs/prompt-repair.md).
+
+The benchmark reports two early signals:
+
+- `brief_quality`: whether the repaired prompt adds useful repo-grounded targets,
+  warnings, and checks without too much bloat.
+- downstream score: whether the local model's plan mentions expected project
+  facts, avoids wrong tools/frameworks, and does not hallucinate nonexistent
+  paths.
+
+Run a small one-case smoke benchmark against the local Anchor repo:
+
+```bash
+python3 benchmark/prompt_improvement.py \
+  --model qwen2.5-coder:7b \
+  --cases benchmark/prompt_cases.example.jsonl \
+  --out benchmark/results.prompt_smoke.jsonl
+```
+
+The default is intentionally small for early iteration. Use `--limit 0` to run
+all prompt cases once the prompt improver is more stable.
+
+Use `--dry-run` to inspect generated prompts without calling Ollama.
+
 ## Official SWE-bench Import
 
 Generate tasks directly from official SWE-bench dataset issues:
@@ -76,7 +110,7 @@ Generate tasks directly from official SWE-bench dataset issues:
 ```bash
 pip install datasets
 
-python3 benchmark/import_swebench.py \
+python3 benchmark/swebench.py \
   --dataset princeton-nlp/SWE-bench_Verified \
   --split test \
   --limit 20 \
@@ -87,7 +121,7 @@ python3 benchmark/import_swebench.py \
 Then run benchmark with the generated tasks file:
 
 ```bash
-python3 benchmark/run_benchmark.py \
+python3 benchmark/run.py \
   --config benchmark/config.json \
   --profiles benchmark/profiles.json \
   --tasks benchmark/tasks.swebench.jsonl \

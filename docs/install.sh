@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="Tharun-10Dragneel/Anchor"
+REPO="HyperMarble/Anchor"
 
 if [ -z "${INSTALL_DIR:-}" ]; then
   if echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
@@ -89,11 +89,11 @@ echo "  cd your-project"
 echo "  anchor build"
 echo "  anchor map"
 echo ""
-echo "Update:    anchor update"
-echo "Uninstall: curl -fsSL https://tharun-10dragneel.github.io/Anchor/uninstall.sh | bash"
+echo "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/docs/uninstall.sh | bash"
 echo ""
 
-# Setup global agent rules for ALL AI agents
+# Optionally set up OpenCode global agent rules. Disabled by default because
+# installing a binary should not silently change agent behavior.
 setup_global_agent_rules() {
   local config_dir="$HOME/.config/opencode"
   mkdir -p "$config_dir"
@@ -113,20 +113,17 @@ setup_global_agent_rules() {
 
 When working in codebases with `anchor` installed (check for `.anchor/` directory):
 
-**ALWAYS use anchor commands instead of shell commands:**
+Prefer Anchor when you need symbol-level code context:
 
 - `anchor context <query>` - Get symbol code + callers + callees (USE THIS FIRST)
 - `anchor search <query>` - Find symbols by name  
 - `anchor context <symbol> --full` - Single symbol full detail
 - `anchor map` - Codebase structure overview
 
-**NEVER use these shell commands for code exploration when anchor is available:**
-- `grep`, `rg` - use `anchor search` or `anchor context` instead
-- `cat`, `head`, `tail` - use `anchor context` instead
-- `find`, `fd` - use `anchor search` or `anchor map` instead
-- `sed`, `awk` - not needed for code exploration
+Use normal shell tools when they are cheaper or clearer:
 
-**Shell commands are still allowed for:**
+- `rg`, `grep`, `fd`, `find` for quick literal searches
+- `cat`, `sed`, `awk`, `head`, `tail` for small file reads or text processing
 - Git operations (`git status`, `git diff`, etc.)
 - Package managers (`npm`, `cargo`, `pip`, etc.)
 - Docker, file system operations (`mkdir`, `rm`, `mv`, `cp`)
@@ -173,7 +170,11 @@ EOF
   fi
 }
 
-setup_global_agent_rules
+if [ "${ANCHOR_INSTALL_AGENT_RULES:-0}" = "1" ]; then
+  setup_global_agent_rules
+else
+  echo "Skipped OpenCode agent rules. Set ANCHOR_INSTALL_AGENT_RULES=1 to install them."
+fi
 
 # PATH hint
 if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then

@@ -218,6 +218,9 @@ success_metrics.md
 # Anchor cache
 .anchor/
 
+# Benchmark run outputs
+benchmark/results.prompt*.jsonl
+
 # Runtime artifacts
 jobs/
 *.zip
