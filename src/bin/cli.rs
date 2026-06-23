@@ -64,6 +64,8 @@ fn run(cli: Cli) -> Result<()> {
 
         Commands::Map { scope } => cmd_map(&root, scope.as_deref()),
 
+        Commands::Prompt { command } => cli::prompt::run(&root, command),
+
         Commands::Write { path, content } => cli_write::create(&root, &path, &content),
 
         Commands::Edit {

@@ -60,7 +60,16 @@ fix the agent locks thing so two ais dont mess up the same file lol
 Anchor can repair that into a task brief that points at the actual Rust/Go lock
 paths, warns against invented tools, and suggests the right checks.
 
-This feature is experimental and lives in the benchmark harness today:
+This feature is experimental. The fast local CLI path is available today:
+
+```bash
+anchor prompt check "fix the lock thing"
+anchor prompt repair "fix the lock thing"
+anchor prompt explain "fix the lock thing"
+anchor prompt check --format json "fix the express middleware with jest"
+```
+
+The benchmark harness compares raw prompts against Anchor-repaired prompts:
 
 ```bash
 python3 benchmark/prompt_improvement.py --dry-run
@@ -76,6 +85,9 @@ anchor build
 anchor search <query> [query2 ...]
 anchor context <symbol> [symbol2 ...]
 anchor context <symbol> --bundle
+anchor prompt check <prompt>
+anchor prompt repair <prompt>
+anchor prompt explain <prompt>
 anchor map [scope]
 anchor write <path> <content>
 anchor edit <path> --action replace --pattern <old> --content <new>
