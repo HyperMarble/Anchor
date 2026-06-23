@@ -233,7 +233,10 @@ fn build_profile(
         }
     }
 
-    let languages = sorted_counts(language_counts);
+    let languages = sorted_counts(language_counts)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
     let top_dirs = sorted_counts(dir_counts);
     let manifests = existing_paths(
         root,
