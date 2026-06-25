@@ -1,634 +1,588 @@
 # Anchor Explained
 
-Anchor is an execution harness for AI coding agents.
+Anchor is an AI-aware execution layer for coding agents.
 
-The final version is not just a local CLI and not just a code index. Anchor is
-the control plane between agents and real codebases. It gives agents a governed
-way to read code, claim work, write changes, coordinate with other sessions,
-produce evidence, and hand results back to humans or teams.
+The important correction is this: source code is already a filesystem. Anchor
+does not win by turning code into files. Anchor wins by making normal code
+reads and writes transactional, fresh, scoped, quality-checked, and safe for
+one agent or many agents.
 
-Anchor can run locally for a single developer, and it can run as a cloud/team
-service for multiple developers and multiple agent sessions working on the same
-repository.
-
-## The Final Shape
-
-The intended product looks like this:
+Anchor should feel simple to use:
 
 ```text
-Human / team
-    |
-    v
-Anchor workspace
-    |
-    |-- code understanding
-    |-- context serving
-    |-- session ownership
-    |-- symbol/file locks
-    |-- checked writes
-    |-- test gates
-    |-- provenance log
-    |-- replay / audit / rollback
-    |
-    v
-Agents: Codex, Claude Code, Cursor, OpenCode, custom agents
-    |
-    v
-Official source repository
+brew install anchor
 ```
 
-The important idea is delegation. A human should be able to give work to one
-agent or many agents without losing control of the repository. Anchor owns the
-state around the work: what was read, what was claimed, what changed, what tests
-ran, what failed, what passed, and who or what is responsible.
+After that, the developer should keep using Codex, Claude Code, Cursor, JCode,
+OpenCode, or another coding agent. Anchor sits around the workspace and makes
+agent execution better without forcing the user to move into a new agent.
 
-## Why Anchor Exists
+## The Core Idea
 
-AI coding agents can already write code. The hard part is not typing code. The
-hard part is letting agents act inside real repositories without chaos.
-
-Real agent work needs answers to questions like:
-
-- Which code did the agent read?
-- Was that context stale?
-- Which symbol or file did the agent claim?
-- Did another agent touch the same area?
-- What exactly changed?
-- What tests or checks ran?
-- Can we replay or inspect the work later?
-- Who approved it?
-- How do we know this was not a blind overwrite?
-
-Normal Git answers some historical questions after the fact. Anchor sits before
-and during the work. It coordinates the execution itself.
-
-## The Core Thesis
-
-Anchor turns agent coding from opaque chat into governed execution.
-
-Instead of:
+Normal agent execution looks like this:
 
 ```text
-agent reads random files
-agent edits files directly
-human checks a diff later
+agent searches with rg
+agent reads with cat/sed
+agent edits files
+agent runs tests
+human reads a diff later
 ```
 
-Anchor aims for:
+That is cheap to start, but weak for real software work:
+
+- searches are blind
+- reads are not remembered as proof
+- writes do not prove fresh context
+- multiple agents can collide
+- tests are often guessed or repeated
+- ugly code can still pass visible tests
+- the final diff does not explain the execution path
+
+Anchor changes the path:
 
 ```text
-agent requests context
-Anchor returns focused, hashed context
-agent claims a symbol or file
-Anchor locks that work unit
-agent submits a write
-Anchor verifies, applies, reindexes, and records it
-tests/checks run as gates
-the whole session becomes replayable provenance
+agent asks for code context
+Anchor returns fresh handles and focused code
+agent writes through Anchor
+Anchor checks freshness, scope, locks, rules, and verification
+Anchor accepts or rejects the write
+Anchor records a machine-checkable receipt
 ```
 
-That is why Anchor should be understood as an execution harness, not only a
-navigation tool.
-
-## Local And Cloud
-
-Anchor has two deployment shapes.
-
-### Local Anchor
-
-Local Anchor runs inside one developer's workspace. It gives the local agent a
-structured way to inspect and mutate the repo.
-
-Local Anchor is useful for:
-
-- single-developer agent sessions
-- local CLI workflows
-- fast context lookup
-- local symbol locks
-- local write safety
-- local provenance logs
-
-### Anchor Cloud / Team Anchor
-
-Cloud/team Anchor is the shared coordination layer.
-
-In that mode, multiple humans can run their own agents against the same project,
-and Anchor coordinates the work:
+The one-line version:
 
 ```text
-Developer A -> agent session A1, A2, A3
-Developer B -> agent session B1
-CI / review bot -> verification session
-
-All sessions -> shared Anchor coordination state
+Anchor is a transactional worktree for AI coding agents.
 ```
 
-Team Anchor is for:
+## What Anchor Is Not
 
-- shared lock state
-- shared session state
-- multi-agent work ownership
-- cloud-managed workspaces
-- team-visible traces
-- review/audit artifacts
-- controlled handoff from agent output to official repository
+Anchor is not just a security product.
 
-The cloud version is not a replacement for GitHub. Git remains the source-control
-system. Anchor manages agent execution before changes become commits or pull
-requests.
+Security matters, but it is one part of execution quality. Anchor is trying to
+make coding agents better across three connected pillars:
 
-## The Two Moats
+- efficiency: less blind searching, rereading, and repeated verification
+- quality: cleaner, smaller, maintainable code with less AI slop
+- safety: fresh-context writes, conflict control, and proof before acceptance
 
-Anchor has two strategic moats.
+Anchor is not a replacement for Git.
 
-### 1. Governed Agent Execution
+Git records accepted source history. Anchor controls agent execution before and
+around accepted source history.
 
-Anchor's first moat is controlling the agent work loop.
+Anchor is not a new programming language.
 
-The loop is:
+Zev may later change the representation agents read and write, but Anchor must
+work on normal source repositories first.
+
+Anchor is not a static source graph.
+
+Parser facts, symbols, chunks, imports, and call relations are useful derived
+data. They are not the product. The source repo stays the source of truth.
+
+## The Store Model
+
+`.anchor` should be closer to `.git` than to a search index.
+
+The source tree remains normal:
 
 ```text
-intent -> context -> claim -> lock -> write -> verify -> record -> handoff
+repo/
+  src/
+  tests/
+  docs/
+  pyproject.toml
 ```
 
-This is the transaction kernel for coding agents. Every meaningful action should
-be represented as an event with inputs, outputs, hashes, ownership, and status.
-
-The final system should make agent work:
-
-- attributable
-- inspectable
-- replayable
-- resumable
-- auditable
-- rollback-aware
-- safe for parallel sessions
-
-This is Anchor's main product layer.
-
-### 2. Zev Later
-
-Zev is the second moat, but it comes after Anchor.
-
-Anchor first controls how agents operate on a codebase. Zev then changes the
-representation agents read and write.
-
-Without Zev:
-
-```text
-source code -> Anchor context -> agent writes source edits
-```
-
-With Zev:
-
-```text
-source code -> Zev representation -> Anchor context -> agent writes Zev edits
--> source code
-```
-
-Zev is covered later in this document because Anchor must make sense without it.
-
-## Anchor As A Transaction Kernel
-
-The best analogy is not Git. The better analogy is a database transaction log or
-a control plane.
-
-An agent write should not be just "text changed." It should become a controlled
-transaction:
-
-```text
-begin task
-  read context A
-  claim symbol B
-  acquire lock C
-  apply patch D
-  run check E
-  record result F
-commit or abort
-```
-
-The final Anchor transaction should record:
-
-- session id
-- agent id
-- model/tool identity where available
-- requested task
-- context hashes
-- target symbols/files
-- locks acquired
-- before/after hashes
-- patch content
-- commands/tests run
-- outputs
-- final status
-- approval or rejection
-
-This gives teams a way to answer: what did the agent do, why did it do it, and
-can we trust the result?
-
-## Git-Native Behavioral Index
-
-Anchor should use Git as more than final source control.
-
-Git can act as a behavioral parser for the repository. It cannot fully replace
-language-aware parsing for exact symbol ranges or call resolution, but it can
-show how the project actually changes over time.
-
-Each commit is a concrete tree plus an accepted patch. Across many commits, Git
-can reveal patterns that a static source graph cannot:
-
-- files that usually change together
-- tests that move with a feature
-- paths that are repeatedly involved in similar fixes
-- files that were touched and later reverted
-- high-churn or high-risk areas
-- patch shapes that solved similar work before
-
-A normal code graph might say:
-
-```text
-refund_payment calls payment_lock
-```
-
-A Git-native behavioral index should also say:
-
-```text
-past refund fixes usually changed refund_payment and payment_lock
-tests/test_refund.py was the useful check
-invoice_email.py was touched once and reverted as unrelated
-editing refund_payment alone failed in a previous attempt
-```
-
-That last line requires execution awareness. Git records accepted work history.
-Anchor records attempted work history:
-
-```text
-task intent
-context reads
-locks acquired
-edits attempted
-checks failed
-checks passed
-reverts
-final receipt
-```
-
-Together:
-
-```text
-Git history = accepted work history
-Anchor provenance = attempted work history
-```
-
-This is the stronger direction than "Anchor is a source graph." The source graph
-is only a derived working view. The product direction is:
-
-```text
-Git-derived behavioral facts
-+ parser-derived code facts
-+ execution provenance
-+ locks and checked writes
-= governed agent execution
-```
-
-The parser/indexer is still needed for exact current-code facts. Git provides
-the historical behavior layer. Anchor uses both to guide and control agent work.
-
-## Agent Flight Recorder
-
-The second name for this layer is the agent flight recorder.
-
-Agents fail in ways that are hard to debug. A chat transcript is not enough. A
-diff is not enough. A commit is not enough.
-
-Anchor should record the execution path:
-
-```text
-context read
-search query
-symbol projection
-lock acquired
-write requested
-write applied
-index refreshed
-test command
-test output
-human approval
-handoff
-```
-
-This creates a timeline that can be inspected after a bad edit, resumed after an
-interrupted session, or attached to a review.
-
-The final product should support:
-
-- `anchor trace <session>`
-- `anchor replay <session>`
-- `anchor attest <session>`
-- cloud session timelines
-- signed provenance for important changes
-
-The honest goal is not perfect deterministic replay of model behavior. The goal
-is reproducible boundaries: restore the workspace state, replay Anchor-applied
-edits, rerun recorded checks where possible, and show exact recorded inputs and
-outputs.
-
-## Code Understanding
-
-Anchor needs code understanding because agents should not read whole repositories
-blindly.
-
-Anchor indexes the repository into:
-
-- paths
-- symbols
-- calls
-- source hashes
-- symbol hashes
-- projected slices
-- search features
-
-The point is not to build a giant graph for its own sake. The point is to serve
-the right code at the right time and to know what a write touches.
-
-The final context system should answer:
-
-- "show me this symbol"
-- "show me callers and callees"
-- "show me related tests"
-- "show me the stale/fresh state"
-- "show me what another agent is already editing"
-- "show me only what changed since I last read"
-
-## Checked Writes
-
-In Anchor, agents should not treat the file system as a raw scratchpad.
-
-The final write path should be:
-
-```text
-agent proposes change
-Anchor validates target
-Anchor checks source freshness
-Anchor checks lock ownership
-Anchor applies change
-Anchor reindexes affected files
-Anchor records the event
-Anchor returns structured result
-```
-
-This creates a narrow waist between agents and the repo. Different agents can
-have different frontends, but the write path remains controlled.
-
-## Multi-Agent Coordination
-
-Anchor is built for more than one agent.
-
-A single developer may run multiple agents. A team may have several developers,
-each with their own agent sessions. Without coordination, agents can overwrite
-each other or waste work by solving the same task.
-
-Anchor coordination is based on:
-
-- unique agent/session owner IDs
-- symbol and file locks
-- shared task/session state
-- stale-context detection
-- write ordering
-- conflict reporting
-
-The final team version should make this visible:
-
-```text
-agent-a owns src/auth.rs:login
-agent-b owns src/billing.rs:create_invoice
-agent-c is blocked on src/auth.rs:login
-CI session is verifying agent-b output
-```
-
-This is one of the places where Anchor becomes more than local tooling. It
-becomes the coordination layer for parallel AI labor.
-
-## Git-Like, But Not Git
-
-Anchor uses Git-like thinking:
-
-- content-addressed objects
-- hashes for source and slices
-- indexes
-- append-only event records
-- projections
-- safe handoff points
-
-But Anchor does not need to copy Git's user model:
-
-- no separate commit history inside Anchor
-- no branch/merge replacement
-- no trying to be source control
-
-Git stores accepted project history. Anchor manages agent execution before and
-around that history.
-
-The relationship is:
-
-```text
-Anchor governs agent work
-Git records accepted source history
-```
-
-## Store Model
-
-The final `.anchor/` store should contain:
+Anchor keeps execution state beside it:
 
 ```text
 .anchor/
   objects/
     contexts/
-    slices/
+    chunks/
     patches/
-    commands/
-    test-logs/
-  index/
-    paths.json
-    symbols.json
-    calls.json
-  sessions/
+    checks/
+    receipts/
+  refs/
+    sessions/
+    workspaces/
   locks/
-  writes/
-  events/
-    events.jsonl
-  attestations/
+  rules/
+  context/
+    resources/
+    memories/
+    skills/
+  cache/
 ```
 
-Content-addressed storage matters because unchanged context, patches, and logs
-should not be duplicated. It also makes provenance stronger: each event can point
-to immutable content hashes.
-
-## Read Flow
-
-Final read flow:
+The distinction matters:
 
 ```text
-agent asks for context
-Anchor resolves query through index
-Anchor checks cache and freshness
-Anchor returns focused symbol/context bundle
-Anchor records what was shown
+source files = truth
+objects/receipts = durable execution evidence
+cache = disposable derived data
 ```
 
-This gives the agent enough code to reason without forcing it to scan large
-files. It also lets Anchor later explain what information the agent had before a
-write.
+If `.anchor/cache` is deleted, Anchor should be able to rebuild it lazily. If
+receipts are deleted, execution proof is lost.
 
-## Write Flow
+## No Build-First Mental Model
 
-Final write flow:
+`anchor build` should not be the center of the product.
+
+A big upfront build makes Anchor feel like a graph/index product. The better
+model is lazy and transactional:
 
 ```text
-agent submits write request
-Anchor checks target symbol/file
-Anchor checks source hash
-Anchor acquires lock
-Anchor applies change
-Anchor updates index
-Anchor records event
-Anchor releases or transfers lock
+anchor query "deprecation headers"
 ```
 
-In cloud/team mode, this can become a reviewable transaction rather than an
-immediate local write:
+should inspect the live repo state, Git state, existing `.anchor` facts, and
+cheap local candidates. Then it should parse or expand only the files/chunks it
+needs.
+
+`anchor build` can exist as an optional prewarm command, similar to:
 
 ```text
-agent proposed patch -> Anchor verification -> human/team approval -> apply
+git gc
+git update-index
 ```
 
-## Verification Flow
+Useful for speed, but not required for the core workflow.
 
-Anchor should know what was changed and what should be checked.
+## Query
 
-Verification can include:
+`anchor query` is the read/navigation surface.
 
-- formatting
-- unit tests
-- type checks
-- targeted tests
-- dependency impact checks
-- security/policy checks
-- full fallback checks when impact is unknown
+It should not verify writes. It should not be a separate planning ceremony. It
+should answer: "where should the agent look next, and what exact handles can it
+act on?"
 
-Anchor should not pretend impact analysis is perfect. The safe rule is:
+Query still verifies its own reads. If Anchor uses cached metadata, it must
+check that the cache still matches the live repo. If a handle, file hash, chunk
+hash, or derived fact is stale, Anchor should refresh it or block the result and
+say the context is stale. The agent should not have to manually notice this.
+
+Example:
 
 ```text
-known impact -> targeted checks
-unknown impact -> broader checks
+anchor query "deprecation response headers"
 ```
 
-## Cloud / Team Flow
-
-Final cloud/team Anchor:
+Expected shape:
 
 ```text
-team connects repo
-Anchor builds index
-developers start agent sessions
-sessions claim work
-Anchor coordinates locks and context
-agents submit writes
-Anchor records provenance
-checks run
-team reviews
-accepted changes land in Git
+intent: deprecation response headers
+
+likely_files:
+  - fastapi/routing.py
+    why: runtime response construction and route handling
+  - fastapi/applications.py
+    why: public API configuration surface
+  - tests/test_response_headers.py
+    why: response header assertions
+
+handles:
+  - file:fastapi/routing.py
+  - chunk:fastapi/routing.py#APIRoute.get_route_handler
+  - test:tests/test_response_headers.py
+
+next:
+  - anchor view <handle>
+  - anchor patch <handle>
 ```
 
-The cloud version should make the invisible parts visible:
+No token budget should be part of this output. Efficiency is measured by Anchor,
+but the agent-facing result should focus on handles, current code facts, likely
+tests, and valid next actions.
 
-- active sessions
-- claimed symbols/files
-- blocked agents
-- changed areas
-- test status
-- risk status
-- provenance timeline
-- handoff to PR/commit
+How query finds candidates:
+
+- cheap text and filename search
+- import and package metadata
+- Git change history
+- previous Anchor receipts and failures
+- local project memories
+- lightweight parsing of candidate files
+- test names and test imports
+- optional semantic search as a helper, not the whole system
+
+The query result should be useful even when the repo was never prebuilt.
+
+## View
+
+`anchor view` is the current-code surface.
+
+It should show the exact code around a handle with source hashes and ownership
+metadata:
+
+```text
+anchor view chunk:fastapi/routing.py#APIRoute.get_route_handler
+```
+
+The agent should get:
+
+- current source text
+- file hash
+- chunk hash
+- owner path
+- parent context when needed
+- related tests when known
+
+View must also verify freshness automatically:
+
+```text
+agent asks for handle H
+Anchor checks H against the live file
+Anchor refreshes derived metadata if needed
+Anchor returns current code only if the handle still matches
+Anchor blocks with stale-context if the handle no longer points to the same code
+```
+
+So the read path is not passive. It is a verified read. The agent sees normal
+code context, but Anchor has already checked whether that context is current.
+
+This is how Anchor replaces repeated `sed`, `cat`, and broad file reads with a
+smaller, fresher code surface.
+
+## Patch
+
+`anchor patch` is the write surface.
+
+This is where Zero-lang's lesson matters: query is read-only; patch is where
+validation happens automatically.
+
+The normal flow should not be:
+
+```text
+anchor query
+anchor view
+anchor patch
+anchor verify
+```
+
+The normal flow should be:
+
+```text
+anchor query/view
+anchor patch  # write + automatic verification before accept
+```
+
+Patch must be a transaction:
+
+```text
+agent submits patch against handle
+Anchor checks the handle exists
+Anchor checks the old hash is still fresh
+Anchor checks locks and ownership
+Anchor checks patch scope
+Anchor checks project quality rules
+Anchor runs or requires the focused verification path
+Anchor accepts or rejects the write
+Anchor records a receipt
+```
+
+Example result:
+
+```text
+patch: accepted
+fresh-context: ok
+lock: ok
+scope: ok
+quality-rules: ok
+verification: ok
+receipt: .anchor/objects/receipts/...
+```
+
+Verification is automatic in the write path. A separate `anchor check` can
+exist for humans, debugging, CI, or broad verification, but agents should not
+need to call it after every accepted patch just to prove the patch applied.
+
+## Quality Rules
+
+Anchor should treat AI slop as a write-time problem, not only a review problem.
+
+The quality layer should combine Ponytail-style rules with project-local rules:
+
+- no broad rewrite for a narrow behavior change
+- no random abstraction without repeated local need
+- no unused helper layer
+- no duplicated logic when an existing owner exists
+- no hidden behavior change outside the requested scope
+- no passing test with fragile or unreadable implementation
+- code must match project naming, error style, and test style
+
+This does not mean Anchor can perfectly judge all code. It means the write path
+should reject or flag obvious low-quality execution before it lands.
+
+## Upper Anchor: Prompt And Context Repair
+
+OpenViking's filesystem paradigm fits here, not in lower code execution.
+
+Memory, resources, and skills are not naturally a filesystem. OpenViking turns
+agent context into navigable paths. Anchor can use the same idea for prompt
+repair and task framing:
+
+```text
+.anchor/context/
+  resources/
+    architecture.md
+    dependencies.md
+    testing.md
+    style.md
+  memories/
+    successful_fixes/
+    failed_runs/
+    recurring_agent_mistakes/
+  skills/
+    add_api_endpoint.md
+    debug_failing_test.md
+    refactor_function.md
+```
+
+When the user says:
+
+```text
+fix deprecation headers
+```
+
+Upper Anchor can attach:
+
+- relevant project resources
+- prior failures on similar tasks
+- known test locations
+- reusable workflow skills
+- constraints from project rules
+
+This makes the prompt better before the agent starts acting.
+
+## Lower Anchor: Execution Transactions
+
+Lower Anchor controls what happens when the agent touches code.
+
+This is where the mounted workspace or file-boundary idea belongs:
+
+```text
+agent
+  -> normal code operations
+  -> Anchor transaction layer
+  -> real repo
+```
+
+A filesystem mount is not the invention. Mounts, FUSE, overlayfs, bind mounts,
+and Docker workspaces already exist.
+
+The invention is making the boundary agent-aware:
+
+```text
+read(path)
+  -> check live source against cached facts
+  -> refresh or block stale handles
+  -> record fresh context hash
+  -> return handle-aware current code view
+
+write(path, patch)
+  -> require fresh read
+  -> check lock/conflict
+  -> check scope and quality rules
+  -> run focused verification
+  -> accept or reject
+```
+
+This is the difference between a plain filesystem and Anchor. A normal
+filesystem serves bytes. Anchor serves current, checked context and refuses to
+pretend stale context is safe.
+
+## Multi-Agent Execution
+
+Anchor should support many agents working on the same repo or related workspaces.
+
+The important units are not only files. They can be:
+
+- path locks
+- chunk locks
+- symbol locks
+- test locks
+- session locks
+- behavior locks
+
+Example:
+
+```text
+agent-a owns chunk:src/auth.py#login
+agent-b owns chunk:src/billing.py#create_invoice
+agent-c is blocked from writing src/auth.py#login until agent-a releases
+```
+
+The goal is not only to prevent conflicts. The goal is to let parallel agents
+work safely without broad file-level blocking when their work is actually
+independent.
+
+## Receipts
+
+Anchor logs are not enough.
+
+The receipt should be machine-checkable proof:
+
+```text
+read this handle at this hash
+patched this handle from old hash to new hash
+held this lock
+followed these project rules
+ran these checks
+accepted or rejected for these reasons
+```
+
+This gives humans and teams a way to inspect the execution, not just the final
+diff.
+
+## Difference From OpenViking
+
+OpenViking is a context database for agent memory, resources, and skills.
+
+Anchor can borrow the path-based context idea for upper prompt repair:
+
+```text
+resources / memories / skills
+```
+
+But code is already a filesystem. Anchor should not claim it invented code
+navigation as files.
+
+The difference:
+
+```text
+OpenViking = filesystem-like memory/context for agents
+Anchor = transactional execution layer for code changes
+```
+
+## Difference From Zero
+
+Zero makes a programming language where the graph is the source of truth and
+`.0` is the human projection.
+
+Anchor must not do that to normal repositories.
+
+Anchor's source of truth is still the repo source:
+
+```text
+source repo -> Anchor execution database -> checked reads/writes
+```
+
+The useful lesson from Zero is the query/patch split:
+
+```text
+query/view = read facts and handles
+patch = checked write with automatic validation
+```
+
+Anchor should copy that discipline, not Zero's source-of-truth model.
+
+## Difference From JCode And Agent Runtimes
+
+JCode, Codex, Claude Code, Cursor, and similar tools own the agent runtime or
+developer experience.
+
+Anchor should own the workspace execution substrate.
+
+```text
+agent runtime = thinks, chats, plans, calls tools
+Anchor substrate = controls how code reads/writes reach the repo
+```
+
+That is why Anchor can be neutral. It does not need to be the best agent. It
+needs to make every agent's code execution safer, cheaper, and cleaner.
+
+## Difference From Git
+
+Git stores accepted history.
+
+Anchor stores and governs attempted execution.
+
+```text
+Git:
+  what changed after acceptance
+
+Anchor:
+  what was read
+  what was attempted
+  what was blocked
+  what was verified
+  why the write was accepted or rejected
+```
+
+Git remains the source control system. Anchor is the execution control layer
+before Git commits and pull requests.
+
+## Local And Cloud
+
+Local Anchor:
+
+- runs in one developer workspace
+- improves one agent session or many local sessions
+- stores `.anchor` state locally
+- enforces fresh reads, checked writes, locks, and receipts
+
+Cloud/team Anchor:
+
+- coordinates many developers and many agent sessions
+- shares locks and receipts
+- stores team-visible timelines
+- connects to CI/review systems
+- gives a central view of agent execution quality
+
+The cloud version is not a GitHub replacement. It is the shared execution layer
+for AI agents before changes become PRs or commits.
 
 ## Where Zev Fits
 
-Zev is not Anchor itself.
+Zev is separate from Anchor.
 
-Anchor controls execution. Zev changes the representation inside that execution.
-
-The Zev layer should eventually sit here:
+Anchor controls execution on normal code. Zev may later change the representation
+agents read and write:
 
 ```text
-source code
-  -> source-to-Zev
-  -> Anchor context/session/write flow
-  -> Zev-to-source
-  -> official source code
+normal source
+  -> Zev representation
+  -> Anchor read/write transaction
+  -> normal source
 ```
 
-The intended effect:
-
-- fewer tokens per symbol
-- more context in the model window
-- cleaner writes from agents
-- language-neutral reasoning
-- easier training data for smaller coding models
-
-Anchor does not depend on Zev to be useful. Zev makes Anchor stronger.
-
-## Current Implementation Status
-
-The current codebase implements the local CLI foundation:
-
-- `anchor build`
-- `anchor search`
-- `anchor context`
-- `anchor context --bundle`
-- `anchor status`
-- `anchor write`
-- `anchor edit`
-- `anchor edit --symbol`
-- content hashes
-- path/symbol/call indexes
-- projections with source-hash validation
-- persistent context cache
-- lockd client
-- automatic reindex after writes
-- initial execution event log for context, write/edit, and locks
-- compact status signals from the event log
-- multi-agent conflict regression tests
-
-The current codebase does not yet implement:
-
-- cloud/team service
-- session dashboard
-- full production provenance receipts
-- `anchor trace`
-- `anchor replay`
-- `anchor attest`
-- production fail-closed agent mode
-- Zev
-
-The current local foundation is enough to prove the product direction: Anchor can
-sit in the agent read/write path and control context, locks, writes, and index
-freshness.
+Anchor must be useful without Zev. Zev can make the code surface more compact
+and agent-native later.
 
 ## Contributor Mental Model
 
 When adding to Anchor, ask:
 
-1. Does this help agents read less but understand more?
-2. Does this make writes safer or more controlled?
-3. Does this improve multi-agent coordination?
-4. Does this leave evidence for review, replay, or audit?
-5. Does this fit the future cloud/team execution harness?
+1. Does this reduce blind agent search/read/write work?
+2. Does this force fresh context before writes?
+3. Does this make the patch smaller, cleaner, and easier to review?
+4. Does this prevent stale or conflicting multi-agent changes?
+5. Does verification happen automatically at the write boundary?
+6. Does the result create useful execution proof?
 
-If the answer is no, it may be ordinary code tooling, but it may not belong in
-Anchor.
+If not, it may be normal developer tooling, but it may not belong in Anchor.
 
-## One-Line Vision
+## Final Vision
 
-Anchor is the execution control plane for AI coding agents: it coordinates
-context, locks, writes, verification, provenance, and team handoff so humans can
-delegate real repository work to agents without losing control.
+Anchor is an AI-aware transaction layer for software work.
+
+It keeps the source repo normal, keeps agents flexible, and adds the missing
+execution rules around code:
+
+```text
+better prompt context
+focused query/view
+fresh checked patch
+automatic verification
+quality rules
+multi-agent locks
+machine-checkable receipts
+```
+
+That is how Anchor improves efficiency, quality, and safety without becoming a
+new programming language, a Git replacement, or just another code search tool.
