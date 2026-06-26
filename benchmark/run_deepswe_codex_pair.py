@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from execroot_mode import apply_execroot_patch, prepare_execroot
 from execution_spec import execution_spec_requirement, parse_execution_spec_metrics
 
 try:
@@ -845,6 +846,11 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     clean_copy_from_image(task["docker_image"], repo_dir)
+    agent_repo_dir = repo_dir
+    execroot_artifacts = None
+    if mode == "execroot":
+        agent_repo_dir = prepare_execroot(repo_dir, run_dir, progress)
+
     prompt = (
         anchor_prompt(task["instruction"], args.anchor_bin)
         if mode == "anchor"
@@ -860,7 +866,7 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
     try:
         agent = run_codex(
             mode,
-            repo_dir,
+            agent_repo_dir,
             prompt,
             run_dir / "codex.jsonl",
             args.agent_timeout_sec,
@@ -870,6 +876,8 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
         if protection_enabled:
             anchor_protect(args.anchor_bin, repo_dir, "off")
     agent["log"] = classify_agent_log(run_dir / "codex.jsonl", agent["exit_code"])
+    if mode == "execroot":
+        execroot_artifacts = apply_execroot_patch(agent_repo_dir, repo_dir, logs_dir, progress)
     metrics = git_metrics(repo_dir)
     if metrics["patch_bytes"] == 0 and agent["exit_code"] != 0:
         verify = {
@@ -893,6 +901,7 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
         "execution_spec": parse_execution_spec_metrics(run_dir / "codex.jsonl"),
         "agent_log_bytes": file_size(run_dir / "codex.jsonl"),
         "anchor": anchor_artifacts(repo_dir, args.anchor_bin) if mode == "anchor" else None,
+        "execroot": execroot_artifacts,
     }
     result["product_metrics"] = product_metrics(result)
     (run_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
@@ -904,7 +913,7 @@ def main() -> int:
     parser.add_argument("task_id", nargs="?", default="python-statemachine-state-data-scoping")
     parser.add_argument("--deepswe-root", type=Path, default=DEFAULT_DEEPSWE_ROOT)
     parser.add_argument("--work-root", type=Path, default=DEFAULT_WORK_ROOT)
-    parser.add_argument("--mode", choices=["both", "baseline", "anchor"], default="both")
+    parser.add_argument("--mode", choices=["both", "baseline", "anchor", "execroot"], default="both")
     parser.add_argument("--agent-timeout-sec", type=int, default=5400)
     parser.add_argument("--anchor-bin", type=Path, default=ANCHOR_ROOT / "target" / "debug" / "anchor")
     parser.add_argument("--codex-model", default=None)
