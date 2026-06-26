@@ -6,16 +6,22 @@ This is the agreed plan from the June 10-11 working sessions. It is the only
 roadmap. Anything not in this file is out of scope until the items here are
 done and measured.
 
+Current focus note: see `dev-docs/current-focus-vals.md`. Anchor is being
+positioned as an agent-neutral execution harness and systems layer for AI
+coding agents: closer to a kernel/runtime optimizer for software-task execution
+than to a new coding-agent app. Separate model-architecture work is paused
+while Anchor v1 and the Vals benchmark proposal are the active priorities.
+
 ## North star
 
 Three numbers, measured by `benchmark/bench_pillars.py` (the 100-task replay
-eval) and, for end-to-end proof, the DeepSWE pair runner:
+eval), the execution benchmark, and, for end-to-end proof, paired agent runs:
 
-| Pillar     | Target | Current (100 tasks, 5 repos)              |
-|------------|--------|-------------------------------------------|
-| Efficiency | 70%+   | +80% on real repos (negative on tiny Mux) |
-| Quality    | 70%+   | recall 0.82, top1 0.45, top3 0.66         |
-| Safety     | ~100%  | 5/5 mechanisms, receipts now gate default |
+| Pillar     | Target | Meaning |
+|------------|--------|---------|
+| Efficiency | 80% better | Less wasted context/tool use/log cost for the same software task |
+| Quality    | 100% no accepted AI slop | Final accepted code is correct, scoped, maintainable, verified, and project-style consistent |
+| Safety     | 100% for controlled invariants | No stale writes, unrecorded writes, or silent multi-agent code corruption where Anchor controls the path |
 
 Every change in this spec must either move one of these numbers or reduce
 code. A change that does neither does not ship.

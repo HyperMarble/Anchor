@@ -1,20 +1,33 @@
 # Anchor
 
-Execution harness and infrastructure layer for AI agents.
+Agent-neutral execution harness and systems layer for AI coding agents.
 
 AI agents are already capable enough to do serious work. The problem is the
-execution environment around them: they search blindly, reread noisy context,
-waste tokens, lose track of changes, and quality drops as the session context
-fills up.
+execution environment around them: raw terminal and file access makes them
+search blindly, reread noisy context, waste tokens, lose track of changes, edit
+against stale state, and let quality drop as the session context fills up.
 
-Anchor sits around the agent and gives it a smaller, sharper execution path. It
-turns a task into a compact working set, keeps the important context outside the
-model window, routes reads/writes/checks through explicit operations, records
-what happened, and coordinates work across agent sessions.
+Anchor sits around any coding agent and gives it a better execution path for
+software tasks. It is closer to a kernel/runtime optimizer for agents than to a
+new agent: the model still reasons, but Anchor optimizes how the agent searches,
+reads, writes, verifies, records, and coordinates code work.
+
+Instead of:
+
+```text
+random grep -> huge read -> blind edit -> random test -> hope
+```
+
+Anchor pushes the agent toward:
+
+```text
+intent -> focused context -> scoped read -> checked write -> targeted verify -> receipt
+```
 
 Status: early prototype. The first implementation targets source-code
-workspaces, but the product shape is broader: Anchor is the execution layer that
-helps agents work with higher efficiency, quality, and safety.
+workspaces, but the product shape is broader: Anchor is the software-task
+execution harness that makes coding agents run with higher efficiency, quality,
+and safety.
 
 ## Install
 
@@ -85,12 +98,14 @@ file is touched — if the event log cannot be written, the write is refused.
 
 ## What It Provides
 
-- task-scoped working sets instead of whole-workspace context
-- compact code slices, likely files, related files, likely tests, and verification plans
-- explicit read, write, edit, run, and check operations
+- focused code context instead of whole-workspace or repeated raw reads
+- code-unit aware search/read/write paths over files, chunks, symbols, and tests
+- checked writes against fresh source state instead of blind file mutation
+- verification proof tied to the changed code, not just a final test transcript
 - provenance logs for what the agent read, changed, ran, and verified
 - coordination across local or cloud-backed agent sessions
-- quality and safety signals from the actual execution trace
+- quality signals for broad edits, weak verification, unresolved failures, and AI-slop-style changes
+- safety signals for stale context, unrecorded writes, and multi-agent collisions
 - tree-sitter based source understanding across common languages
 - experimental project-aware prompt repair for safer agent task briefs
 

@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn no_match_returns_zero() {
         let sym = make_sym("Foo", &["foo", "bar"]);
-        let idx = Bm25Index::build(&[sym.clone()]);
+        let idx = Bm25Index::build(std::slice::from_ref(&sym));
         let query = tokenize("unrelated");
         assert_eq!(idx.score(&sym, &query), 0.0);
     }

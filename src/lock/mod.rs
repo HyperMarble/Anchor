@@ -5,11 +5,9 @@
 //  Created by hak (tharun)
 //
 
-pub mod guard;
 pub mod lockd;
 pub mod manager;
 pub mod types;
 
-pub use guard::LockGuard;
 pub use manager::LockManager;
 pub use types::{LockInfo, LockResult, LockStatus, SymbolKey};

@@ -91,10 +91,6 @@ pub enum Commands {
         /// Symbol names to search for (supports multiple)
         queries: Vec<String>,
 
-        /// Regex pattern (Brzozowski derivatives - ReDoS safe)
-        #[arg(short, long)]
-        pattern: Option<String>,
-
         /// Max results
         #[arg(short, long, default_value = "20")]
         limit: usize,
