@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from execution_spec import execution_spec_requirement, parse_execution_spec_metrics
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
@@ -222,8 +224,10 @@ Source files are protected before your session starts. Raw source edits will fai
 Anchor command:
 {anchor_bin}
 
+{execution_spec_requirement()}
+
 Required workflow:
-1. Start with one Anchor task intake: `{anchor_bin} task "<short task summary>" --limit 8 --context-limit 4`. Anchor prepares the index automatically.
+1. After the ExecutionSpec, start with one Anchor task intake: `{anchor_bin} task "<short task summary>" --limit 8 --context-limit 4`. Anchor prepares the index automatically.
 2. Use `{anchor_bin} context <symbol> --limit 1` only when the intake is missing a specific symbol you need.
 3. Do not run `{anchor_bin} build` unless Anchor reports a stale/missing index error. If you manually run it, run it at most once.
 4. Do not use broad raw source reads (`cat`, `sed`, `nl`, large `rg` dumps) as primary exploration. If Anchor returns zero results or errors, use the narrowest raw read possible and keep going.
@@ -886,6 +890,7 @@ def run_mode(args: argparse.Namespace, task: dict[str, Any], mode: str, out_root
         "verify": verify,
         "tool_counts": tools,
         "command_metrics": parse_command_metrics(run_dir / "codex.jsonl", args.anchor_bin),
+        "execution_spec": parse_execution_spec_metrics(run_dir / "codex.jsonl"),
         "agent_log_bytes": file_size(run_dir / "codex.jsonl"),
         "anchor": anchor_artifacts(repo_dir, args.anchor_bin) if mode == "anchor" else None,
     }
