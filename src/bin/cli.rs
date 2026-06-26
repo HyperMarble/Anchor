@@ -65,6 +65,15 @@ fn run(cli: Cli) -> Result<()> {
             context_limit,
         } => cmd_task(&root, &intent, limit, context_limit),
 
+        Commands::Query { query, limit, json } => cmd_query(&root, &query, limit, json),
+
+        Commands::View {
+            handle,
+            around,
+            full,
+            json,
+        } => cmd_view(&root, &handle, around.as_deref(), full, json),
+
         Commands::Context {
             queries,
             limit,
@@ -165,3 +174,7 @@ include!("cli_parts/task_packet.rs");
 include!("cli_parts/task_selection.rs");
 include!("cli_parts/task_print.rs");
 include!("cli_parts/verification_plan.rs");
+include!("cli_parts/query_handles.rs");
+include!("cli_parts/query_command.rs");
+include!("cli_parts/query_view_io.rs");
+include!("cli_parts/query_print.rs");

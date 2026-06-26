@@ -35,6 +35,8 @@ const HELP_TEXT: &str = "
 
 Start here:
   task <intent>           One-shot task intake for agent work
+  query <intent>          Return likely files/chunks/tests with stable handles
+  view <handle>           Verified current-code view for a query handle
   context <sym> [sym2…]  Code + callers + callees
   status                  Session quality/provenance signals
   trace                   Recent execution events
@@ -66,6 +68,38 @@ pub enum Commands {
         /// Max symbols to include with code in the packet
         #[arg(short = 'c', long, default_value = "4")]
         context_limit: usize,
+    },
+
+    /// Return likely files, chunks, tests, and exact handles for an agent intent
+    Query {
+        /// Natural-language search or task intent
+        query: Vec<String>,
+
+        /// Max owner chunks to return
+        #[arg(short, long, default_value = "8")]
+        limit: usize,
+
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show verified current code for a handle returned by `anchor query`
+    View {
+        /// Handle: file:<path>, test:<path>, or chunk:<path>#<symbol>@<start>-<end>
+        handle: String,
+
+        /// Scope output to blocks around this text
+        #[arg(long)]
+        around: Option<String>,
+
+        /// Show full output without line budget truncation
+        #[arg(short = 'F', long)]
+        full: bool,
+
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Get symbol context (code + callers + callees)
