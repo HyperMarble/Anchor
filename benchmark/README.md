@@ -295,6 +295,18 @@ Pin a Codex model:
 python3 benchmark/run_deepswe_codex_pair.py python-statemachine-state-data-scoping --codex-model gpt-5
 ```
 
+Run the execroot apply path:
+
+```bash
+python3 benchmark/run_deepswe_codex_pair.py python-statemachine-state-data-scoping --mode execroot
+```
+
+Execroot mode gives Codex a disposable copy of the repo under `run_dir/execroot`,
+then applies the resulting patch back onto the clean verifier repo with
+`git apply`. Use this when you want agent writes isolated from benchmark logs,
+Anchor artifacts, and verifier setup files, while still measuring the final
+patch against the same task image.
+
 Output goes under:
 
 ```text
@@ -310,6 +322,45 @@ The summary records:
 - patch bytes
 - Codex JSONL tool counts when present
 - Anchor event count and receipt quality for the Anchor run
+- execroot patch/apply artifacts for the execroot run
+
+The runner writes `summary.json` at the run root. In execroot mode it also
+writes:
+
+- `logs/execroot.patch`
+- `logs/execroot-apply.stdout`
+- `logs/execroot-apply.stderr`
+
+### `run_deepswe_codex_batch.py`
+
+Runs the Codex pair runner multiple times in parallel and aggregates the
+results into one batch summary.
+
+Run:
+
+```bash
+python3 benchmark/run_deepswe_codex_batch.py python-statemachine-state-data-scoping
+```
+
+Control sample size or concurrency:
+
+```bash
+python3 benchmark/run_deepswe_codex_batch.py \
+  python-statemachine-state-data-scoping \
+  --runs 3 \
+  --concurrency 2 \
+  --codex-model gpt-5
+```
+
+Output goes under:
+
+```text
+/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe-codex-batch
+```
+
+Each batch directory contains one `run-N/` folder per sample plus a top-level
+`summary.json` with per-run outcomes and aggregate efficiency/quality/safety
+deltas.
 
 ### `run_deepswe_pi_pair.py`
 
