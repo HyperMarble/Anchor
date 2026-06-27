@@ -14,6 +14,10 @@ Prompt Repair is experimental.
 
 What exists today:
 
+- compiled `anchor prompt check`, `anchor prompt repair`, and
+  `anchor prompt explain` commands
+- markdown, JSON, and concise `agent` output for humans and downstream agents
+- prompt input from argv, `--input` files, or stdin
 - a local benchmark harness in `benchmark/prompt_improvement.py`
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
@@ -22,7 +26,6 @@ What exists today:
 
 What is not implemented yet:
 
-- no compiled `anchor prompt` CLI command yet
 - no persistent `.anchor/project_profile.json` yet
 - no LLM call in the default repair path
 - no patch-level benchmark yet
@@ -95,23 +98,32 @@ anchor prompt repair "..."        # instant deterministic repair
 anchor prompt repair --llm "..."  # optional slower rewrite/polish
 ```
 
-## Planned CLI
+## CLI
 
 ```bash
 anchor prompt check "fix the lock thing"
 anchor prompt repair "fix the lock thing"
 anchor prompt repair --format markdown "fix the lock thing"
 anchor prompt repair --format json "fix the lock thing"
+anchor prompt repair --input prompt.txt --format agent
 anchor prompt explain "fix the lock thing"
 ```
 
-Suggested command behavior:
+Current command behavior:
 
 - `check`: report assumptions, missing context, risky wording, and likely targets.
 - `repair`: print the repaired task brief.
 - `explain`: show why Anchor changed the prompt.
-- `--format json`: machine-readable output for Codex, Claude Code, Cursor, and
-  custom agents.
+- `--format json`: machine-readable output with `schema_version` for wrappers
+  around Codex, Claude Code, Cursor, and custom agents.
+- `--format agent`: concise handoff text for copy/paste into a downstream agent.
+- `--input prompt.txt`: read prompt text from a file instead of argv.
+
+If no prompt argument is provided, Anchor reads prompt text from stdin:
+
+```bash
+cat prompt.txt | anchor prompt repair
+```
 
 ## Project Profile
 
@@ -262,8 +274,8 @@ evidence before any coding agent begins.
    - `repair.rs`
    - `render.rs`
 3. Generate `.anchor/project_profile.json` during `anchor build`.
-4. Add `anchor prompt check` and `anchor prompt repair`.
-5. Add JSON output for agent integrations.
+4. Extend the current `anchor prompt` surface instead of replacing it.
+5. Keep the JSON schema stable for agent integrations.
 6. Add patch-level benchmark once the prompt repair is stable.
 
 ## Design Rules

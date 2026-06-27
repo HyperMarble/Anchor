@@ -48,6 +48,9 @@ cargo build --release
 ```bash
 anchor build                 # index the workspace
 anchor task "<intent>"       # get task intake: symbols, slices, related files, likely tests
+anchor prompt check <prompt>
+anchor prompt repair <prompt>
+anchor prompt explain <prompt>
 anchor context <name>        # load focused code context
 anchor write <path> <text>   # create or overwrite a file
 anchor edit <path> --action replace --pattern <old> --content <new>
@@ -74,14 +77,22 @@ fix the agent locks thing so two ais dont mess up the same file lol
 Anchor can repair that into a task brief that points at the actual lock paths,
 warns against invented tools, and suggests checks to run.
 
-This feature is experimental and lives in the benchmark harness today:
+Use `--format agent` when you want concise handoff text for Codex, Claude Code,
+Cursor, or another coding-agent wrapper.
+
+This feature is experimental, but the fast local CLI path is available today:
 
 ```bash
+anchor build
+anchor prompt check "fix the lock thing"
+anchor prompt repair "fix the lock thing"
+anchor prompt repair --input prompt.txt --format agent
+anchor prompt check --format json "fix the express middleware with jest"
 python3 benchmark/prompt_improvement.py --dry-run
 ```
 
 See [Project-Aware Prompt Repair](docs/prompt-repair.md) for the workflow,
-planned CLI, and benchmark strategy.
+CLI details, benchmark strategy, and product framing.
 
 ## Strict Mode
 
