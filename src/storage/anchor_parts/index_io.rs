@@ -116,4 +116,30 @@ impl AnchorStore {
         };
         serde_json::from_slice(&bytes).unwrap_or_default()
     }
+
+    pub fn project_profile_path(&self) -> PathBuf {
+        self.anchor_root.join("project_profile.json")
+    }
+
+    pub fn save_project_profile(&self, profile: &ProjectProfile) -> Result<()> {
+        let path = self.project_profile_path();
+        fs::create_dir_all(path.parent().ok_or_else(|| {
+            AnchorError::InvalidStructure(format!(
+                "project profile has no parent: {}",
+                path.display()
+            ))
+        })?)?;
+        fs::write(path, serde_json::to_vec_pretty(profile)?)?;
+        Ok(())
+    }
+
+    pub fn load_project_profile(&self) -> Result<Option<ProjectProfile>> {
+        let path = self.project_profile_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = fs::read(path)?;
+        Ok(Some(serde_json::from_slice(&bytes)?))
+    }
 }

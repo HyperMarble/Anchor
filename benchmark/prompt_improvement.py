@@ -272,6 +272,31 @@ def load_anchor_index(root: Path) -> tuple[list[str], list[str]]:
     return sorted(indexed_files), symbols[:120]
 
 
+def load_cached_profile(root: Path) -> ProjectProfile | None:
+    path = root / ".anchor" / "project_profile.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    indexed_files, indexed_symbols = load_anchor_index(root)
+    cached_files = data.get("indexed_files")
+    profile_files = [Path(item) for item in cached_files] if isinstance(cached_files, list) else []
+    files = profile_files or repo_files(root)
+    return ProjectProfile(
+        root=str(root),
+        languages=[item for item in data.get("languages", []) if isinstance(item, str)],
+        top_dirs=[item for item in data.get("top_dirs", []) if isinstance(item, str)],
+        key_files=[item for item in data.get("key_files", []) if isinstance(item, str)],
+        indexed_files=[item for item in data.get("indexed_files", indexed_files) if isinstance(item, str)],
+        manifest_files=[item for item in data.get("manifests", []) if isinstance(item, str)],
+        test_commands=[item for item in data.get("test_commands", []) if isinstance(item, str)],
+        symbols=indexed_symbols or extract_symbols(root, files),
+    )
+
+
 def extract_symbols(root: Path, files: list[Path], limit: int = 120) -> list[str]:
     patterns = [
         re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"),
@@ -310,6 +335,10 @@ def split_tokens(text: str) -> set[str]:
 
 
 def build_profile(root: Path) -> ProjectProfile:
+    cached = load_cached_profile(root)
+    if cached is not None:
+        return cached
+
     files = repo_files(root)
     indexed_files, indexed_symbols = load_anchor_index(root)
     language_counts = Counter(
