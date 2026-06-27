@@ -18,12 +18,12 @@ What exists today:
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
   indexes when available
+- cached `.anchor/project_profile.json` snapshots generated during `anchor build`
 - local Ollama smoke testing for raw prompt vs repaired prompt
 
 What is not implemented yet:
 
 - no compiled `anchor prompt` CLI command yet
-- no persistent `.anchor/project_profile.json` yet
 - no LLM call in the default repair path
 - no patch-level benchmark yet
 
@@ -140,8 +140,10 @@ Suggested fields:
 }
 ```
 
-The profile should be rebuilt only when relevant inputs change. Prompt-time work
-should be limited to reading this profile plus the existing symbol index.
+The profile should be rebuilt only when relevant inputs change. `anchor build`
+now writes this snapshot, and the prompt benchmark reuses it when present.
+Prompt-time work should stay limited to reading this profile plus the existing
+symbol index.
 
 ## Repair Pipeline
 

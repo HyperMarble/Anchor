@@ -12,7 +12,8 @@ use anchor::lock::lockd;
 use anchor::parser::language::is_indexable_text_path;
 use anchor::query::slice::slice_code;
 use anchor::storage::{
-    content_hash, AnchorStore, CallIndex, HistoryIndex, PathIndex, SymbolEntry, SymbolIndex,
+    content_hash, AnchorStore, CallIndex, HistoryIndex, PathIndex, ProjectProfile, SymbolEntry,
+    SymbolIndex,
 };
 use anyhow::{bail, Result};
 use clap::Parser;
