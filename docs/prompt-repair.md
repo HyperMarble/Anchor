@@ -141,7 +141,8 @@ Suggested fields:
 ```
 
 The profile should be rebuilt only when relevant inputs change. `anchor build`
-now writes this snapshot, and the prompt benchmark reuses it when present.
+now writes this snapshot, and the prompt benchmark reuses it when present,
+including explicit framework-presence signals.
 Prompt-time work should stay limited to reading this profile plus the existing
 symbol index.
 
