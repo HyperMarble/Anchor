@@ -311,6 +311,56 @@ The summary records:
 - Codex JSONL tool counts when present
 - Anchor event count and receipt quality for the Anchor run
 
+### `run_deepswe_codex_batch.py`
+
+Runs the Codex pair runner multiple times in parallel for the same DeepSWE task.
+
+Use this when one pair run is too noisy and you want a small sample before
+claiming an Anchor win or loss.
+
+If `task_id` is omitted, it defaults to:
+
+```text
+python-statemachine-state-data-scoping
+```
+
+Run five samples with up to three workers:
+
+```bash
+python3 benchmark/run_deepswe_codex_batch.py \
+  python-statemachine-state-data-scoping \
+  --runs 5 \
+  --concurrency 3
+```
+
+Pin a Codex model or Docker host:
+
+```bash
+python3 benchmark/run_deepswe_codex_batch.py \
+  python-statemachine-state-data-scoping \
+  --codex-model gpt-5 \
+  --docker-host unix:///Users/$USER/.colima/default/docker.sock
+```
+
+Output goes under:
+
+```text
+/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe-codex-batch
+```
+
+Each timestamped batch directory contains:
+
+- `run-*/stdout.log`: full output from each `run_deepswe_codex_pair.py` child process
+- `run-*/work`: per-run work root passed through to the pair runner
+- `summary.json`: aggregate batch summary
+
+`summary.json` records:
+
+- per-run exit codes, logs, pair-run output directories, and `read_this_first` notes
+- average efficiency deltas for log bytes, patch bytes, diff lines, and raw read-like commands
+- quality totals for baseline/Anchor pass counts plus recorded rewards and quality scores
+- safety signals such as raw terminal writes, unrecorded changed files, guarded writes, and stale write blocks
+
 ### `run_deepswe_pi_pair.py`
 
 Runs one DeepSWE task twice with local Pi:
