@@ -51,6 +51,34 @@ class ExecrootModeTests(unittest.TestCase):
             self.assertIn("+new", patch)
             self.assertIn("+created", patch)
 
+    def test_prepare_execroot_writes_spec_ranker_action_packet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            run_dir = root / "run"
+            repo.mkdir()
+            (repo / "app.py").write_text("def route():\n    return 1\n")
+            init_git(repo)
+            fake_anchor = root / "anchor"
+            fake_anchor.write_text(
+                "#!/usr/bin/env python3\n"
+                "raise SystemExit('prepare_execroot must not pre-query raw task text')\n"
+            )
+            fake_anchor.chmod(0o755)
+
+            execroot = prepare_execroot(
+                repo,
+                run_dir,
+                instruction="fix route behavior",
+                anchor_bin=fake_anchor,
+            )
+
+            self.assertTrue((execroot / "ANCHOR_ACTION.md").exists())
+            self.assertTrue((execroot / ".anchor" / "action" / "spec-query.md").exists())
+            self.assertFalse((execroot / ".anchor" / "action" / "query.json").exists())
+            self.assertIn("fix route behavior", (execroot / "ANCHOR_ACTION.md").read_text())
+            self.assertIn("ExecutionSpec", (execroot / "ANCHOR_ACTION.md").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
