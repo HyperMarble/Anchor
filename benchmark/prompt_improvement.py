@@ -84,7 +84,7 @@ PROMPT_CONTROL_PATTERNS = [
     (re.compile(r"\b(delete|remove|rewrite)\b.*\b(everything|all|whole)\b", re.I), "Prompt may be too destructive or broad."),
     (re.compile(r"\bquick\s*fix\b|\blol\b|\bthing\b", re.I), "Prompt is vague or casual enough to invite wrong assumptions."),
 ]
-CASE_LIST_FIELDS = ("expected_terms", "avoid_terms")
+CASE_LIST_FIELDS = ("expected_targets", "expected_checks", "avoid_terms")
 PATH_LIKE_EXTENSIONS = set(LANG_BY_EXT) | {
     ".lock",
     ".yaml",
@@ -131,11 +131,18 @@ class RunScore:
     case_id: str
     mode: str
     score: int
-    expected_hits: list[str]
-    missing_expected: list[str]
+    expected_target_hits: list[str]
+    missing_expected_targets: list[str]
+    expected_check_hits: list[str]
+    missing_expected_checks: list[str]
     avoid_hits: list[str]
+    grounded_repo_paths: list[str]
+    grounded_check_hits: list[str]
     hallucinated_paths: list[str]
+    copied_prompt_terms: list[str]
+    copied_prompt_lines: list[str]
     duration_sec: float
+    prompt_chars: int
     output_chars: int
 
 
@@ -166,6 +173,22 @@ def validate_case(raw: Any, path: Path, line_no: int) -> dict[str, Any]:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{source}: field {field!r} must be a non-empty string")
 
+    legacy_expected_terms = case.pop("expected_terms", None)
+    if legacy_expected_terms is not None:
+        if case.get("expected_targets") is None:
+            case["expected_targets"] = []
+        if case.get("expected_checks") is None:
+            case["expected_checks"] = []
+        if not isinstance(legacy_expected_terms, list) or not all(
+            isinstance(item, str) for item in legacy_expected_terms
+        ):
+            raise ValueError(f"{source}: field 'expected_terms' must be a list of strings")
+        for item in legacy_expected_terms:
+            if "test" in item or "build" in item or "diff --check" in item:
+                case["expected_checks"].append(item)
+            else:
+                case["expected_targets"].append(item)
+
     for field in CASE_LIST_FIELDS:
         value = case.get(field, [])
         if value is None:
@@ -177,6 +200,23 @@ def validate_case(raw: Any, path: Path, line_no: int) -> dict[str, Any]:
     notes = case.get("notes")
     if notes is not None and not isinstance(notes, str):
         raise ValueError(f"{source}: field 'notes' must be a string when provided")
+
+    provenance = case.get("provenance")
+    if provenance is not None:
+        if not isinstance(provenance, dict):
+            raise ValueError(f"{source}: field 'provenance' must be an object when provided")
+        for field in ("kind", "source_url", "license", "repo"):
+            value = provenance.get(field)
+            if value is not None and not isinstance(value, str):
+                raise ValueError(
+                    f"{source}: provenance field {field!r} must be a string when provided"
+                )
+        issue = provenance.get("issue")
+        if issue is not None and not isinstance(issue, int):
+            raise ValueError(f"{source}: provenance field 'issue' must be an integer")
+        summary = provenance.get("summary")
+        if summary is not None and not isinstance(summary, str):
+            raise ValueError(f"{source}: provenance field 'summary' must be a string")
 
     return case
 
@@ -684,6 +724,14 @@ def normalize_path_mention(path: str) -> str:
     return normalized.rstrip("/")
 
 
+def normalize_text_snippet(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def normalize_command(text: str) -> str:
+    return normalize_text_snippet(text.strip("`"))
+
+
 def looks_like_repo_path(path: str, top_dirs: set[str]) -> bool:
     normalized = normalize_path_mention(path)
     if not normalized or normalized.startswith("/"):
@@ -704,6 +752,18 @@ def looks_like_repo_path(path: str, top_dirs: set[str]) -> bool:
     return any(first.lower().startswith(prefix) for prefix in PATH_LIKE_PREFIXES)
 
 
+def existing_repo_paths_mentioned(output: str, repo: Path) -> list[str]:
+    hits: list[str] = []
+    top_dirs = {path.name for path in repo.iterdir() if path.is_dir()}
+    for path in extract_path_mentions(output):
+        normalized = normalize_path_mention(path)
+        if not looks_like_repo_path(path, top_dirs):
+            continue
+        if (repo / normalized).exists():
+            hits.append(normalized)
+    return sorted(set(hits))
+
+
 def hallucinated_paths(output: str, repo: Path) -> list[str]:
     bad: list[str] = []
     top_dirs = {path.name for path in repo.iterdir() if path.is_dir()}
@@ -716,28 +776,94 @@ def hallucinated_paths(output: str, repo: Path) -> list[str]:
     return bad
 
 
+def command_hits(output: str, commands: Iterable[str]) -> list[str]:
+    text = normalize_command(output)
+    hits = [cmd for cmd in commands if normalize_command(cmd) in text]
+    return sorted(set(hits))
+
+
+def copied_prompt_terms(prompt: str, output: str, terms: Iterable[str]) -> list[str]:
+    prompt_text = prompt.lower()
+    output_text = output.lower()
+    hits = [term for term in terms if term.lower() in prompt_text and term.lower() in output_text]
+    return sorted(set(hits))
+
+
+def copied_prompt_lines(prompt: str, output: str) -> list[str]:
+    output_lines = {
+        normalize_text_snippet(line)
+        for line in output.splitlines()
+        if len(normalize_text_snippet(line)) >= 24
+    }
+    copied: list[str] = []
+    for line in prompt.splitlines():
+        normalized = normalize_text_snippet(line)
+        if normalized and len(normalized) >= 24 and normalized in output_lines:
+            copied.append(line.strip())
+    return copied[:8]
+
+
 def score_output(
-    case: dict[str, Any], mode: str, output: str, duration: float, repo: Path
+    case: dict[str, Any],
+    mode: str,
+    prompt: str,
+    output: str,
+    duration: float,
+    repo: Path,
+    profile: ProjectProfile,
 ) -> RunScore:
     text = output.lower()
-    expected = [term.lower() for term in case.get("expected_terms", [])]
+    expected_targets = [term.lower() for term in case.get("expected_targets", [])]
+    expected_checks = [term.lower() for term in case.get("expected_checks", [])]
     avoid = [term.lower() for term in case.get("avoid_terms", [])]
-    expected_hits = [term for term in expected if term in text]
-    missing_expected = [term for term in expected if term not in text]
+    target_hits = [term for term in expected_targets if term in text]
+    missing_targets = [term for term in expected_targets if term not in text]
+    check_hits = [term for term in expected_checks if term in text]
+    missing_checks = [term for term in expected_checks if term not in text]
     avoid_hits = [term for term in avoid if term in text]
+    grounded_paths = existing_repo_paths_mentioned(output, repo)
+    grounded_checks = command_hits(output, profile.test_commands)
     bad_paths = hallucinated_paths(output, repo)
-    score = len(expected_hits) * 2 - len(avoid_hits) * 3 - len(bad_paths) * 2
+    leaked_terms = copied_prompt_terms(
+        prompt,
+        output,
+        list(case.get("expected_targets", [])) + list(case.get("expected_checks", [])),
+    )
+    leaked_lines = copied_prompt_lines(prompt, output)
+    score = (
+        len(target_hits) * 2
+        + len(check_hits) * 2
+        + min(len(grounded_paths), 3)
+        + min(len(grounded_checks), 2)
+        - len(avoid_hits) * 3
+        - len(bad_paths) * 2
+        - min(len(leaked_lines), 2)
+    )
     return RunScore(
         case_id=case["id"],
         mode=mode,
         score=score,
-        expected_hits=expected_hits,
-        missing_expected=missing_expected,
+        expected_target_hits=target_hits,
+        missing_expected_targets=missing_targets,
+        expected_check_hits=check_hits,
+        missing_expected_checks=missing_checks,
         avoid_hits=avoid_hits,
+        grounded_repo_paths=grounded_paths,
+        grounded_check_hits=grounded_checks,
         hallucinated_paths=bad_paths,
+        copied_prompt_terms=leaked_terms,
+        copied_prompt_lines=leaked_lines,
         duration_sec=duration,
+        prompt_chars=len(prompt),
         output_chars=len(output),
     )
+
+
+def mean(values: Iterable[float]) -> float:
+    items = list(values)
+    if not items:
+        return 0.0
+    return sum(items) / len(items)
 
 
 def main() -> int:
@@ -770,7 +896,9 @@ def main() -> int:
     print()
 
     for case in cases:
+        repair_started = time.time()
         improved = improve_prompt(case, profile)
+        repair_duration = round(time.time() - repair_started, 4)
         targets = matching_project_targets(case["human_prompt"], profile)
         assumptions = incorrect_assumptions(case["human_prompt"], profile)
         risks = prompt_risks(case["human_prompt"])
@@ -786,7 +914,8 @@ def main() -> int:
             f"{case['id']} brief_quality: score={quality.score} "
             f"targets={quality.verified_target_count} "
             f"warnings={quality.assumption_warning_count} "
-            f"risks={quality.prompt_risk_count}"
+            f"risks={quality.prompt_risk_count} "
+            f"repair_time={repair_duration}s"
         )
         prompts = {
             "raw": agent_planning_prompt(case["human_prompt"]),
@@ -798,19 +927,22 @@ def main() -> int:
                 duration = 0.0
             else:
                 output, duration = run_ollama(args.model, prompt, args.timeout_sec)
-            score = score_output(case, mode, output, duration, repo)
+            score = score_output(case, mode, prompt, output, duration, repo, profile)
             row = {
                 "case": case,
                 "mode": mode,
                 "score": asdict(score),
                 "brief_quality": asdict(quality) if mode == "anchor_improved" else None,
+                "repair_latency_sec": repair_duration if mode == "anchor_improved" else 0.0,
                 "prompt": prompt,
                 "output": output,
             }
             rows.append(row)
             print(
                 f"{case['id']} {mode}: score={score.score} "
-                f"hits={len(score.expected_hits)} avoid={len(score.avoid_hits)} "
+                f"targets={len(score.expected_target_hits)} checks={len(score.expected_check_hits)} "
+                f"grounded_paths={len(score.grounded_repo_paths)} avoid={len(score.avoid_hits)} "
+                f"leaks={len(score.copied_prompt_lines)} "
                 f"hallucinated_paths={len(score.hallucinated_paths)} "
                 f"time={score.duration_sec}s"
             )
@@ -832,6 +964,17 @@ def main() -> int:
             print(f"delta {case_id}: {delta:+d}")
     if compared:
         print(f"\nanchor_improved wins: {wins}/{compared}")
+    by_mode: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_mode.setdefault(row["mode"], []).append(row["score"])
+    for mode, items in sorted(by_mode.items()):
+        print(
+            f"{mode} summary: "
+            f"avg_score={mean(item['score'] for item in items):.2f} "
+            f"avg_time={mean(item['duration_sec'] for item in items):.2f}s "
+            f"avg_grounded_paths={mean(len(item['grounded_repo_paths']) for item in items):.2f} "
+            f"avg_leaks={mean(len(item['copied_prompt_lines']) for item in items):.2f}"
+        )
     print(f"wrote: {args.out}")
     return 0
 

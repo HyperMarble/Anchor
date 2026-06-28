@@ -24,8 +24,19 @@ The benchmark reports two early signals:
 - `brief_quality`: whether the repaired prompt adds useful repo-grounded
   targets, warnings, and checks without too much bloat.
 - downstream score: whether the local model's plan mentions expected project
-  facts, avoids wrong tools/frameworks, and does not hallucinate nonexistent
-  paths.
+  targets and checks, stays grounded in real repo paths, avoids wrong
+  tools/frameworks, and does not hallucinate nonexistent paths.
+
+The example cases are intentionally small and curated. Each JSONL row now
+records:
+
+- short human prompt text
+- hidden expected targets and checks used only for scoring
+- avoid terms for obvious wrong-framework leakage
+- provenance metadata with source URL and repo license
+
+Cases sourced from public issues are stored as short manual paraphrases rather
+than copied issue bodies.
 
 Run a small one-case smoke benchmark against the local Anchor repo:
 
@@ -40,6 +51,13 @@ The default is intentionally small for early iteration. Use `--limit 0` to run
 all prompt cases once the prompt improver is more stable.
 
 Use `--dry-run` to inspect generated prompts without calling Ollama.
+
+The runner now also tracks:
+
+- repair latency for the deterministic prompt rewrite step
+- downstream model latency per mode
+- exact prompt-copy leakage via repeated lines/terms
+- average grounded path mentions per mode
 
 ## Scripts
 
