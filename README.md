@@ -78,7 +78,8 @@ Anchor can repair that into a task brief that points at the actual lock paths,
 warns against invented tools, and suggests checks to run.
 
 Use `--format agent` when you want concise handoff text for Codex, Claude Code,
-Cursor, or another coding-agent wrapper.
+Cursor, or another coding-agent wrapper. Use `--file` (or `-i` / `--input`)
+when the prompt already lives in a task file.
 
 This feature is experimental, but the fast local CLI path is available today:
 
@@ -86,7 +87,7 @@ This feature is experimental, but the fast local CLI path is available today:
 anchor build
 anchor prompt check "fix the lock thing"
 anchor prompt repair "fix the lock thing"
-anchor prompt repair --input prompt.txt --format agent
+anchor prompt repair --file prompt.txt --format agent
 anchor prompt check --format json "fix the express middleware with jest"
 python3 benchmark/prompt_improvement.py --dry-run
 ```

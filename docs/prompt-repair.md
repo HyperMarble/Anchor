@@ -105,7 +105,7 @@ anchor prompt check "fix the lock thing"
 anchor prompt repair "fix the lock thing"
 anchor prompt repair --format markdown "fix the lock thing"
 anchor prompt repair --format json "fix the lock thing"
-anchor prompt repair --input prompt.txt --format agent
+anchor prompt repair --file prompt.txt --format agent
 anchor prompt explain "fix the lock thing"
 ```
 
@@ -117,7 +117,9 @@ Current command behavior:
 - `--format json`: machine-readable output with `schema_version` for wrappers
   around Codex, Claude Code, Cursor, and custom agents.
 - `--format agent`: concise handoff text for copy/paste into a downstream agent.
-- `--input prompt.txt`: read prompt text from a file instead of argv.
+- `--file prompt.txt`: obvious file-based entrypoint for saved task briefs.
+- `-i` / `--input prompt.txt`: same file-based entrypoint when a wrapper already
+  uses `--input`.
 
 If no prompt argument is provided, Anchor reads prompt text from stdin:
 

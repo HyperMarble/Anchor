@@ -29,7 +29,7 @@ pub enum PromptCommands {
 const PROMPT_HELP: &str = "\
 Examples:
   anchor prompt repair \"fix the lock thing\"
-  anchor prompt repair --input prompt.txt --format agent
+  anchor prompt repair --file prompt.txt --format agent
   cat prompt.txt | anchor prompt check --format json
 
 Formats:
@@ -40,12 +40,18 @@ Formats:
 
 #[derive(Args, Debug)]
 pub struct PromptArgs {
-    /// Prompt text. If omitted, Anchor reads from --input or stdin.
+    /// Prompt text. If omitted, Anchor reads from --file/--input or stdin.
     #[arg(value_name = "PROMPT", trailing_var_arg = true)]
     pub prompt: Vec<String>,
 
     /// Read prompt text from a file instead of argv/stdin
-    #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
+    #[arg(
+        short = 'i',
+        long,
+        visible_alias = "file",
+        value_name = "PATH",
+        conflicts_with = "prompt"
+    )]
     pub input: Option<PathBuf>,
 
     /// Output format
@@ -157,7 +163,7 @@ fn read_prompt(args: &PromptArgs) -> Result<String> {
         let input = fs::read_to_string(path)?;
         let input = input.trim().to_string();
         if input.is_empty() {
-            bail!("prompt text is required; --input file was empty");
+            bail!("prompt text is required; --input/--file source was empty");
         }
         return Ok(input);
     }
@@ -170,7 +176,7 @@ fn read_prompt(args: &PromptArgs) -> Result<String> {
     io::stdin().read_to_string(&mut input)?;
     let input = input.trim().to_string();
     if input.is_empty() {
-        bail!("prompt text is required, either as an argument, --input file, or stdin");
+        bail!("prompt text is required, either as an argument, --file/--input, or stdin");
     }
     Ok(input)
 }

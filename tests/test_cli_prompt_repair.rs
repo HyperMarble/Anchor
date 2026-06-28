@@ -91,7 +91,7 @@ fn cli_prompt_check_json_reports_wrong_framework_assumptions() {
 }
 
 #[test]
-fn cli_prompt_repair_reads_input_file_and_renders_agent_output() {
+fn cli_prompt_repair_reads_file_alias_and_renders_agent_output() {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir_all(dir.path().join("src/lock")).unwrap();
     fs::write(
@@ -128,7 +128,7 @@ fn cli_prompt_repair_reads_input_file_and_renders_agent_output() {
         .arg(dir.path())
         .arg("prompt")
         .arg("repair")
-        .arg("--input")
+        .arg("--file")
         .arg(dir.path().join("prompt.txt"))
         .arg("--format")
         .arg("agent")
