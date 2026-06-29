@@ -152,9 +152,10 @@ fn print_build_stats(stats: BuildStats) {
         call_count,
         history_commits,
         history_edges,
+        product_memory_facts,
     } = stats;
     println!(
-        "<build>\n<files>{indexed}</files>\n<symbols>{sym_count}</symbols>\n<calls>{call_count}</calls>\n<history_commits>{history_commits}</history_commits>\n<history_edges>{history_edges}</history_edges>\n<skipped_files>{skipped}</skipped_files>\n</build>"
+        "<build>\n<files>{indexed}</files>\n<symbols>{sym_count}</symbols>\n<calls>{call_count}</calls>\n<history_commits>{history_commits}</history_commits>\n<history_edges>{history_edges}</history_edges>\n<product_memory_facts>{product_memory_facts}</product_memory_facts>\n<skipped_files>{skipped}</skipped_files>\n</build>"
     );
 }
 

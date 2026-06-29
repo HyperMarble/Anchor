@@ -80,6 +80,9 @@ This feature is experimental and lives in the benchmark harness today:
 python3 benchmark/prompt_improvement.py --dry-run
 ```
 
+`anchor build` also writes `.anchor/product_memory.json` with deterministic
+product facts extracted from the README, prompt-repair docs, and manifests.
+
 See [Project-Aware Prompt Repair](docs/prompt-repair.md) for the workflow,
 planned CLI, and benchmark strategy.
 

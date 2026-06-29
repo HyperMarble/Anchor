@@ -18,6 +18,8 @@ What exists today:
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
   indexes when available
+- `anchor build` writes `.anchor/product_memory.json` with source-cited facts
+  from local docs and manifests
 - local Ollama smoke testing for raw prompt vs repaired prompt
 
 What is not implemented yet:
@@ -78,6 +80,7 @@ anchor build
   -> .anchor/index/paths.json
   -> .anchor/index/symbols.json
   -> .anchor/index/calls.json
+  -> .anchor/product_memory.json
   -> .anchor/project_profile.json
 
 anchor prompt repair "<human prompt>"

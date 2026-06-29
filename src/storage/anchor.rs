@@ -125,6 +125,19 @@ pub struct PathHistoryEntry {
     pub is_test: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductMemory {
+    pub schema: String,
+    pub source_hash: String,
+    pub facts: Vec<ProductMemoryEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductMemoryEntry {
+    pub source: String,
+    pub fact: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Projection {
     pub path: String,
