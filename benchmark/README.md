@@ -13,8 +13,8 @@ Current goal:
 
 `benchmark/prompt_improvement.py` tests the project-aware prompt-repair idea
 with local Ollama. It compares a raw human prompt against an Anchor-repaired
-prompt that includes verified project facts, likely files, risky assumptions,
-and checks to run.
+prompt that includes verified project facts, source-cited product-memory
+evidence, likely files, risky assumptions, and checks to run.
 
 For product design and the planned Rust CLI, see
 [Project-Aware Prompt Repair](../docs/prompt-repair.md).
@@ -38,6 +38,10 @@ python3 benchmark/prompt_improvement.py \
 
 The default is intentionally small for early iteration. Use `--limit 0` to run
 all prompt cases once the prompt improver is more stable.
+
+When `.anchor/product_memory.json` exists, the benchmark reuses those cached
+README/docs/manifest facts. Without the cache it extracts the same class of
+evidence directly from repo-local product files.
 
 Use `--dry-run` to inspect generated prompts without calling Ollama.
 

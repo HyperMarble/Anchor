@@ -18,6 +18,8 @@ What exists today:
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
   indexes when available
+- benchmark-side product-memory evidence from `.anchor/product_memory.json`
+  when present, with README/docs/manifest fallback extraction
 - local Ollama smoke testing for raw prompt vs repaired prompt
 
 What is not implemented yet:
@@ -203,6 +205,11 @@ hash(project_profile + symbol_index + original_prompt + render_options)
 The same prompt in the same project should return immediately.
 
 ## Benchmark Workflow
+
+The benchmark prompt improver can already consume deterministic product memory.
+If `.anchor/product_memory.json` exists, it reuses those cached README/docs/
+manifest facts; otherwise it extracts the same class of evidence directly from
+repo-local product files.
 
 Current smoke benchmark:
 
