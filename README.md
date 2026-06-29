@@ -74,9 +74,10 @@ fix the agent locks thing so two ais dont mess up the same file lol
 Anchor can repair that into a task brief that points at the actual lock paths,
 warns against invented tools, and suggests checks to run.
 
-This feature is experimental and lives in the benchmark harness today:
+This feature is experimental and lives in the benchmark harness today. `anchor build` now caches repo facts for it in `.anchor/project_profile.json`:
 
 ```bash
+anchor build
 python3 benchmark/prompt_improvement.py --dry-run
 ```
 

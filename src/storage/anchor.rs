@@ -99,6 +99,31 @@ pub struct HistoryIndex {
     pub paths: Vec<PathHistoryEntry>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectProfile {
+    pub schema: String,
+    pub source_hash: String,
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub manifests: Vec<String>,
+    #[serde(default)]
+    pub key_files: Vec<String>,
+    #[serde(default)]
+    pub top_dirs: Vec<String>,
+    #[serde(default)]
+    pub test_commands: Vec<String>,
+    #[serde(default)]
+    pub indexed_files: Vec<String>,
+    #[serde(default)]
+    pub frameworks_present: Vec<String>,
+    #[serde(default)]
+    pub frameworks_absent: Vec<String>,
+    #[serde(default)]
+    pub entrypoints: Vec<String>,
+    pub indexed_symbols: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CoChangeEntry {
     pub path: String,

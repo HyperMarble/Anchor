@@ -124,6 +124,8 @@ class ProjectProfile:
     manifest_files: list[str]
     test_commands: list[str]
     symbols: list[str]
+    frameworks_present: list[str]
+    frameworks_absent: list[str]
 
 
 @dataclass
@@ -272,6 +274,55 @@ def load_anchor_index(root: Path) -> tuple[list[str], list[str]]:
     return sorted(indexed_files), symbols[:120]
 
 
+def load_cached_profile(root: Path) -> ProjectProfile | None:
+    path = root / ".anchor" / "project_profile.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    indexed_files, indexed_symbols = load_anchor_index(root)
+    cached_files = data.get("indexed_files")
+    profile_files = [Path(item) for item in cached_files] if isinstance(cached_files, list) else []
+    files = profile_files or repo_files(root)
+    return ProjectProfile(
+        root=str(root),
+        languages=[item for item in data.get("languages", []) if isinstance(item, str)],
+        top_dirs=[item for item in data.get("top_dirs", []) if isinstance(item, str)],
+        key_files=[item for item in data.get("key_files", []) if isinstance(item, str)],
+        indexed_files=[item for item in data.get("indexed_files", indexed_files) if isinstance(item, str)],
+        manifest_files=[item for item in data.get("manifests", []) if isinstance(item, str)],
+        test_commands=[item for item in data.get("test_commands", []) if isinstance(item, str)],
+        symbols=indexed_symbols or extract_symbols(root, files),
+        frameworks_present=[
+            item for item in data.get("frameworks_present", []) if isinstance(item, str)
+        ],
+        frameworks_absent=[
+            item for item in data.get("frameworks_absent", []) if isinstance(item, str)
+        ],
+    )
+
+
+def detect_frameworks(root: Path) -> tuple[list[str], list[str]]:
+    known = ["express", "jest", "react", "next"]
+    try:
+        package_text = (root / "package.json").read_text(encoding="utf-8").lower()
+    except OSError:
+        package_text = ""
+    next_config_present = (root / "next.config.js").exists() or (root / "next.config.ts").exists()
+    present: list[str] = []
+
+    for framework in known:
+        found = next_config_present or '"next"' in package_text if framework == "next" else f'"{framework}"' in package_text
+        if found:
+            present.append(framework)
+
+    absent = [framework for framework in known if framework not in present]
+    return present, absent
+
+
 def extract_symbols(root: Path, files: list[Path], limit: int = 120) -> list[str]:
     patterns = [
         re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"),
@@ -310,6 +361,10 @@ def split_tokens(text: str) -> set[str]:
 
 
 def build_profile(root: Path) -> ProjectProfile:
+    cached = load_cached_profile(root)
+    if cached is not None:
+        return cached
+
     files = repo_files(root)
     indexed_files, indexed_symbols = load_anchor_index(root)
     language_counts = Counter(
@@ -331,6 +386,7 @@ def build_profile(root: Path) -> ProjectProfile:
         ]
         if (root / file).exists()
     ]
+    frameworks_present, frameworks_absent = detect_frameworks(root)
     return ProjectProfile(
         root=str(root),
         languages=[name for name, _ in language_counts.most_common(8)],
@@ -340,6 +396,8 @@ def build_profile(root: Path) -> ProjectProfile:
         manifest_files=detect_manifest_files(root),
         test_commands=detect_test_commands(root),
         symbols=indexed_symbols or extract_symbols(root, files),
+        frameworks_present=frameworks_present,
+        frameworks_absent=frameworks_absent,
     )
 
 
@@ -424,9 +482,10 @@ def incorrect_assumptions(prompt: str, profile: ProjectProfile) -> list[str]:
     present = " ".join(
         profile.languages + profile.key_files + profile.manifest_files + profile.top_dirs
     ).lower()
+    framework_signals = {item.lower() for item in profile.frameworks_present}
     warnings: list[str] = []
     for term, message in ASSUMPTION_TERMS.items():
-        if term in text and term not in present:
+        if term in text and term not in present and term not in framework_signals:
             warnings.append(f"{term}: {message}")
     return warnings
 
