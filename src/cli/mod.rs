@@ -5,6 +5,7 @@
 //  Created by hak (tharun)
 //
 
+pub mod prompt;
 pub mod protect;
 pub mod write;
 
@@ -35,6 +36,7 @@ const HELP_TEXT: &str = "
 
 Start here:
   task <intent>           One-shot task intake for agent work
+  prompt repair <text>    Turn a messy task into a repo-grounded brief
   context <sym> [sym2…]  Code + callers + callees
   status                  Session quality/provenance signals
   trace                   Recent execution events
@@ -100,6 +102,12 @@ pub enum Commands {
     Map {
         /// Optional scope: zoom into specific module/directory
         scope: Option<String>,
+    },
+
+    /// Check, repair, or explain project-aware prompts
+    Prompt {
+        #[command(subcommand)]
+        command: prompt::PromptCommands,
     },
 
     /// Create a file or overwrite a non-source file

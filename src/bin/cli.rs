@@ -6,7 +6,9 @@
 //
 
 use anchor::cache::PersistentCache;
-use anchor::cli::{self, protect as cli_protect, write as cli_write, Cli, Commands};
+use anchor::cli::{
+    self, prompt as cli_prompt, protect as cli_protect, write as cli_write, Cli, Commands,
+};
 use anchor::events;
 use anchor::lock::lockd;
 use anchor::parser::language::is_indexable_text_path;
@@ -75,6 +77,8 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Search { queries, limit } => cmd_search(&root, &queries, limit),
 
         Commands::Map { scope } => cmd_map(&root, scope.as_deref()),
+
+        Commands::Prompt { command } => cli_prompt::run(&root, command),
 
         Commands::Write {
             path,

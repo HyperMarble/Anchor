@@ -16,7 +16,7 @@ with local Ollama. It compares a raw human prompt against an Anchor-repaired
 prompt that includes verified project facts, likely files, risky assumptions,
 and checks to run.
 
-For product design and the planned Rust CLI, see
+For the shipping `anchor prompt` CLI plus product design notes, see
 [Project-Aware Prompt Repair](../docs/prompt-repair.md).
 
 The benchmark reports two early signals:
