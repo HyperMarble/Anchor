@@ -112,6 +112,14 @@ PATH_LIKE_PREFIXES = (
     "packages",
     "lockd",
 )
+INSTRUCTION_FILE_NAMES = {
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GEMINI.md",
+    "COPILOT.md",
+    ".cursorrules",
+}
+INSTRUCTION_FILE_SUFFIXES = (".md", ".mdc")
 
 
 @dataclass
@@ -120,6 +128,7 @@ class ProjectProfile:
     languages: list[str]
     top_dirs: list[str]
     key_files: list[str]
+    instruction_files: list[str]
     indexed_files: list[str]
     manifest_files: list[str]
     test_commands: list[str]
@@ -309,6 +318,30 @@ def split_tokens(text: str) -> set[str]:
     return tokens
 
 
+def is_instruction_file(path: Path) -> bool:
+    posix = path.as_posix()
+    name = path.name
+    lower_name = name.lower()
+    suffix = path.suffix.lower()
+    if name in INSTRUCTION_FILE_NAMES:
+        return True
+    if posix == ".github/copilot-instructions.md":
+        return True
+    if posix.startswith(".continue/rules/") and suffix in INSTRUCTION_FILE_SUFFIXES:
+        return True
+    if posix.startswith(".cursor/rules/") and suffix in INSTRUCTION_FILE_SUFFIXES:
+        return True
+    if posix.startswith("benchmark/claude/") and lower_name.startswith("claude"):
+        return suffix == ".md"
+    if suffix not in INSTRUCTION_FILE_SUFFIXES:
+        return False
+    return lower_name.startswith(("agents.", "claude.", "gemini.", "copilot."))
+
+
+def detect_instruction_files(files: list[Path]) -> list[str]:
+    return [path.as_posix() for path in files if is_instruction_file(path)]
+
+
 def build_profile(root: Path) -> ProjectProfile:
     files = repo_files(root)
     indexed_files, indexed_symbols = load_anchor_index(root)
@@ -316,6 +349,7 @@ def build_profile(root: Path) -> ProjectProfile:
         LANG_BY_EXT[path.suffix] for path in files if path.suffix in LANG_BY_EXT
     )
     dir_counts = Counter(path.parts[0] for path in files if len(path.parts) > 1)
+    instruction_files = detect_instruction_files(files)
     key_files = [
         file
         for file in [
@@ -336,6 +370,7 @@ def build_profile(root: Path) -> ProjectProfile:
         languages=[name for name, _ in language_counts.most_common(8)],
         top_dirs=[name for name, _ in dir_counts.most_common(8)],
         key_files=key_files,
+        instruction_files=instruction_files,
         indexed_files=indexed_files,
         manifest_files=detect_manifest_files(root),
         test_commands=detect_test_commands(root),
@@ -369,7 +404,9 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
     text = prompt.lower()
     hits: list[TargetHint] = []
     prompt_tokens = split_tokens(prompt)
-    candidate_files = sorted(set(profile.key_files + profile.indexed_files))
+    candidate_files = sorted(
+        set(profile.key_files + profile.indexed_files + profile.instruction_files)
+    )
 
     for file in candidate_files:
         overlap = sorted(prompt_tokens & split_tokens(file))
@@ -378,7 +415,7 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
                 TargetHint(file, f"path tokens match prompt: {', '.join(overlap[:4])}")
             )
 
-    for file in profile.key_files:
+    for file in profile.key_files + profile.instruction_files:
         stem = Path(file).stem.lower()
         if stem in text or file.lower() in text:
             hits.append(TargetHint(file, f"prompt mentions {stem!r} or this exact file"))
@@ -412,6 +449,14 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
             ("docs/install.sh", "release installer and optional agent rules"),
         ]:
             add_existing_target(hits, profile, path, reason)
+    if any(
+        word in text
+        for word in ["rule", "rules", "instruction", "instructions", "claude", "cursor", "copilot"]
+    ):
+        for path in profile.instruction_files[:4]:
+            hits.append(
+                TargetHint(path, "verified: repo-local agent instruction file or prompt rule")
+            )
 
     deduped: dict[str, TargetHint] = {}
     for hit in hits:
@@ -445,6 +490,8 @@ def project_description(profile: ProjectProfile) -> str:
         facts.append("CLI entrypoint at src/bin/cli.rs")
     if repo_path_exists(profile, "README.md"):
         facts.append("README-driven public documentation")
+    if profile.instruction_files:
+        facts.append("repo-local agent instruction files")
     if facts:
         return human_join(facts)
     return f"repository named {Path(profile.root).name} with detected files listed below"
@@ -499,6 +546,11 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
     risks = prompt_risks(prompt)
     prompt_lower = prompt.lower()
     guidance: list[str] = []
+    if profile.instruction_files:
+        guidance.append(
+            "Honor the repo-local agent instructions in "
+            f"{human_join(profile.instruction_files[:4])} before planning or editing."
+        )
     if any(word in prompt_lower for word in ["lock", "locks", "agent", "agents", "same file"]):
         lock_paths = existing_repo_paths(
             profile,
@@ -550,6 +602,10 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
     guidance_text = "\n".join(f"- {item}" for item in guidance) or "- No extra project-specific guidance inferred."
     language_text = ", ".join(profile.languages) or "unknown"
     key_file_text = "\n".join(f"- {file}" for file in profile.key_files[:10])
+    instruction_text = (
+        "\n".join(f"- {file}" for file in profile.instruction_files[:10])
+        or "- No repo-local agent instruction file detected."
+    )
     manifest_text = "\n".join(f"- {file}" for file in profile.manifest_files) or "- No package or build manifests detected."
     project_text = project_description(profile)
 
@@ -568,6 +624,8 @@ Project facts verified from this repository:
 {manifest_text}
 - Important files:
 {key_file_text}
+- Agent instruction files:
+{instruction_text}
 
 Likely target areas:
 {target_text}
