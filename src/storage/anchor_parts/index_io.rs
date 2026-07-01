@@ -1,4 +1,30 @@
 impl AnchorStore {
+    pub fn product_memory_path(&self) -> PathBuf {
+        self.anchor_root.join("product_memory.json")
+    }
+
+    pub fn load_product_memory(&self) -> Result<ProductMemory> {
+        let path = self.product_memory_path();
+        if !path.exists() {
+            return Ok(ProductMemory::default());
+        }
+
+        let bytes = fs::read(path)?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    pub fn save_product_memory(&self, memory: &ProductMemory) -> Result<()> {
+        let path = self.product_memory_path();
+        fs::create_dir_all(path.parent().ok_or_else(|| {
+            AnchorError::InvalidStructure(format!(
+                "product memory has no parent: {}",
+                path.display()
+            ))
+        })?)?;
+        fs::write(path, serde_json::to_vec_pretty(memory)?)?;
+        Ok(())
+    }
+
     pub fn path_index_path(&self) -> PathBuf {
         self.anchor_root.join("index").join("paths.json")
     }
