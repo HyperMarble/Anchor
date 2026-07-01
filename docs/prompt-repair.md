@@ -223,8 +223,17 @@ The benchmark reports two early signals:
 
 - `brief_quality`: whether the repaired prompt adds repo-grounded targets,
   warnings, checks, and avoids excessive bloat.
-- downstream plan score: whether the local model selects real files/tests, avoids
-  wrong frameworks, and avoids hallucinated paths.
+- downstream plan score: whether the local model selects real files/tests,
+  produces an actionable plan, and avoids hallucinated paths.
+- leakage metrics: copied repaired-prompt lines and copied expected hits are
+  tracked separately so repaired prompts are not rewarded for simple term echo.
+- latency summary: raw vs repaired prompt response time is reported per case and
+  in aggregate.
+
+Sample prompt cases should include provenance metadata. Small repo-local manual
+examples are acceptable, but each case should record whether it was manually
+curated, paraphrased from a public issue, or derived from a public benchmark so
+future expansions stay license-aware.
 
 This is a smoke benchmark only. The stronger benchmark will compare full agent
 runs and measure:

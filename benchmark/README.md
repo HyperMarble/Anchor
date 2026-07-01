@@ -23,9 +23,15 @@ The benchmark reports two early signals:
 
 - `brief_quality`: whether the repaired prompt adds useful repo-grounded
   targets, warnings, and checks without too much bloat.
-- downstream score: whether the local model's plan mentions expected project
-  facts, avoids wrong tools/frameworks, and does not hallucinate nonexistent
-  paths.
+- downstream score: whether the local model produces a repo-grounded plan with
+  real file targets, valid checks, and basic guardrails.
+- leakage report: counts copied repaired-prompt lines and copied expected hits
+  so the score is not driven by term echoing alone.
+- latency summary: prints raw vs repaired prompt response time deltas per case.
+
+Prompt cases now accept a `provenance` object so small manual examples and any
+future public-source-derived cases record where they came from and what text was
+or was not copied.
 
 Run a small one-case smoke benchmark against the local Anchor repo:
 
