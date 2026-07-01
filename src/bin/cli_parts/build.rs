@@ -11,6 +11,8 @@ struct BuildStats {
     history_edges: usize,
 }
 
+const PRODUCT_MEMORY_SCHEMA: &str = "anchor.product_memory.v1";
+
 fn cmd_build(root: &Path) -> Result<()> {
     let stats = build_indexes(root)?;
     print_build_stats(stats);
@@ -19,7 +21,10 @@ fn cmd_build(root: &Path) -> Result<()> {
 
 fn build_indexes(root: &Path) -> Result<BuildStats> {
     use anchor::storage::content_hash;
-    use anchor::storage::{CallIndex, PathEntry, PathIndex, SymbolEntry, SymbolIndex};
+    use anchor::storage::{
+        CallIndex, PathEntry, PathIndex, ProductMemory, ProductMemoryFile, SymbolEntry,
+        SymbolIndex,
+    };
     use std::collections::HashMap;
     use std::fs;
 
@@ -152,6 +157,7 @@ fn build_indexes(root: &Path) -> Result<BuildStats> {
     store.save_call_index(&call_index)?;
     let history_index = build_history_index(root);
     store.save_history_index(&history_index)?;
+    store.save_product_memory(&build_product_memory(root)?)?;
 
     let indexed = results.len();
     let skipped = files.len() - indexed;
@@ -170,3 +176,149 @@ fn build_indexes(root: &Path) -> Result<BuildStats> {
     })
 }
 
+fn build_product_memory(root: &Path) -> Result<ProductMemory> {
+    let mut instruction_files = Vec::new();
+
+    for (path, kind, note) in [
+        (
+            "AGENTS.md",
+            "agent_rules",
+            "Repo-local agent instructions for coding sessions.",
+        ),
+        (
+            "CLAUDE.md",
+            "agent_rules",
+            "Repo-local Claude guidance that prompt repair should preserve.",
+        ),
+        (
+            "GEMINI.md",
+            "agent_rules",
+            "Repo-local Gemini guidance that prompt repair should preserve.",
+        ),
+        (
+            ".github/copilot-instructions.md",
+            "copilot_rules",
+            "GitHub Copilot repository instructions.",
+        ),
+        (
+            ".clinerules",
+            "cline_rules",
+            "Cline repository rules for agent behavior.",
+        ),
+        (
+            ".cursorrules",
+            "cursor_rules",
+            "Cursor repository rules for agent behavior.",
+        ),
+        (
+            ".windsurfrules",
+            "windsurf_rules",
+            "Windsurf repository rules for agent behavior.",
+        ),
+    ] {
+        add_instruction_file(root, path, kind, note, &mut instruction_files)?;
+    }
+
+    collect_instruction_dir(
+        root,
+        ".cursor/rules",
+        "cursor_rule",
+        "Cursor rule file that prompt repair should preserve.",
+        &mut instruction_files,
+    )?;
+    collect_instruction_dir(
+        root,
+        ".continue/rules",
+        "continue_rule",
+        "Continue rule file that prompt repair should preserve.",
+        &mut instruction_files,
+    )?;
+    collect_instruction_dir(
+        root,
+        ".continue/prompts",
+        "continue_prompt",
+        "Continue prompt file that may shape repo-local agent behavior.",
+        &mut instruction_files,
+    )?;
+
+    instruction_files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(ProductMemory {
+        schema: PRODUCT_MEMORY_SCHEMA.to_string(),
+        instruction_files,
+    })
+}
+
+fn add_instruction_file(
+    root: &Path,
+    relative: &str,
+    kind: &str,
+    note: &str,
+    out: &mut Vec<ProductMemoryFile>,
+) -> Result<()> {
+    use std::fs;
+
+    let path = root.join(relative);
+    if !path.is_file() {
+        return Ok(());
+    }
+
+    let bytes = fs::read(&path)?;
+    out.push(ProductMemoryFile {
+        path: relative.replace('\\', "/"),
+        kind: kind.to_string(),
+        note: note.to_string(),
+        source_hash: content_hash(&bytes),
+    });
+    Ok(())
+}
+
+fn collect_instruction_dir(
+    root: &Path,
+    relative_dir: &str,
+    kind: &str,
+    note: &str,
+    out: &mut Vec<ProductMemoryFile>,
+) -> Result<()> {
+    use std::fs;
+
+    let dir = root.join(relative_dir);
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    let mut stack = vec![dir];
+    while let Some(current) = stack.pop() {
+        for entry in fs::read_dir(&current)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if !file_type.is_file() || !looks_like_instruction_text(&path) {
+                continue;
+            }
+
+            let relative = path
+                .strip_prefix(root)
+                .map(|value| value.to_string_lossy().replace('\\', "/"))?;
+            let bytes = fs::read(&path)?;
+            out.push(ProductMemoryFile {
+                path: relative,
+                kind: kind.to_string(),
+                note: note.to_string(),
+                source_hash: content_hash(&bytes),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn looks_like_instruction_text(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("md" | "mdc" | "txt" | "json" | "yaml" | "yml")
+    )
+}

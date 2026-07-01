@@ -138,6 +138,21 @@ pub struct Projection {
     pub text: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductMemory {
+    pub schema: String,
+    #[serde(default)]
+    pub instruction_files: Vec<ProductMemoryFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProductMemoryFile {
+    pub path: String,
+    pub kind: String,
+    pub note: String,
+    pub source_hash: String,
+}
+
 include!("anchor_parts/store_core.rs");
 include!("anchor_parts/index_io.rs");
 include!("anchor_parts/symbol_update.rs");

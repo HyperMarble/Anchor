@@ -16,6 +16,7 @@ What exists today:
 
 - a local benchmark harness in `benchmark/prompt_improvement.py`
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
+- `anchor build` caches repo-local instruction files in `.anchor/product_memory.json`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
   indexes when available
 - local Ollama smoke testing for raw prompt vs repaired prompt
@@ -78,6 +79,7 @@ anchor build
   -> .anchor/index/paths.json
   -> .anchor/index/symbols.json
   -> .anchor/index/calls.json
+  -> .anchor/product_memory.json
   -> .anchor/project_profile.json
 
 anchor prompt repair "<human prompt>"
