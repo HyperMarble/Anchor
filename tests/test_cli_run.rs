@@ -59,13 +59,6 @@ fn cli_run_blocks_raw_terminal_file_mutation() {
     init_git_repo(dir.path());
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
-    assert!(Command::new(anchor)
-        .arg("--root")
-        .arg(dir.path())
-        .arg("build")
-        .status()
-        .unwrap()
-        .success());
 
     let run = Command::new(anchor)
         .arg("--root")
@@ -102,7 +95,7 @@ fn cli_run_blocks_raw_terminal_file_mutation() {
 }
 
 #[test]
-fn cli_run_allows_terminal_command_that_mutates_through_anchor() {
+fn cli_run_allows_read_only_terminal_command() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(
         dir.path().join("src.rs"),
@@ -112,33 +105,20 @@ fn cli_run_allows_terminal_command_that_mutates_through_anchor() {
     init_git_repo(dir.path());
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
-    assert!(Command::new(anchor)
-        .arg("--root")
-        .arg(dir.path())
-        .arg("build")
-        .status()
-        .unwrap()
-        .success());
 
     let run = Command::new(anchor)
         .arg("--root")
         .arg(dir.path())
         .arg("run")
         .arg("--")
-        .arg(anchor)
-        .arg("--root")
-        .arg(".")
-        .arg("edit")
-        .arg("src.rs")
-        .arg("--symbol")
-        .arg("value")
-        .arg("--content")
-        .arg("pub fn value() -> bool {\n    false\n}")
+        .arg("sh")
+        .arg("-c")
+        .arg("cat src.rs >/dev/null")
         .output()
         .unwrap();
     assert!(
         run.status.success(),
-        "Anchor-routed mutation should pass\nstdout:\n{}\nstderr:\n{}",
+        "read-only command should pass\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );

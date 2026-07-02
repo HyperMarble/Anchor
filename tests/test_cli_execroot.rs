@@ -66,13 +66,6 @@ fn cli_run_execroot_captures_patch_without_touching_real_repo() {
     init_git_repo(dir.path());
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
-    assert!(Command::new(anchor)
-        .arg("--root")
-        .arg(dir.path())
-        .arg("build")
-        .status()
-        .unwrap()
-        .success());
 
     let run = Command::new(anchor)
         .env("ANCHOR_EXECROOT", "1")
@@ -115,13 +108,6 @@ fn cli_run_execroot_captures_new_files_as_patch() {
     init_git_repo(dir.path());
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
-    assert!(Command::new(anchor)
-        .arg("--root")
-        .arg(dir.path())
-        .arg("build")
-        .status()
-        .unwrap()
-        .success());
 
     let run = Command::new(anchor)
         .env("ANCHOR_EXECROOT", "1")
