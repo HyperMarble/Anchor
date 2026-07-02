@@ -85,7 +85,7 @@ func TestPingResponseShape(t *testing.T) {
 func TestLockInfoFields(t *testing.T) {
 	r := response{
 		Locked: boolPtr(true),
-		Locks: []lockInfo{{Symbol: "Foo", Path: "src/foo.rs", Owner: "agent-1", ExpiresIn: 120}},
+		Locks:  []lockInfo{{Symbol: "Foo", Path: "src/foo.rs", Owner: "agent-1", ExpiresIn: 120}},
 	}
 	b, _ := json.Marshal(r)
 	var got response

@@ -15,6 +15,7 @@ import (
 
 func main() {
 	socketPath := flag.String("socket", "/tmp/anchor.lock.sock", "Unix socket path")
+	statePath := flag.String("state", "/tmp/anchor.lockd.state.json", "lock state snapshot path (empty disables persistence)")
 	flag.Parse()
 
 	os.Remove(*socketPath) // clean up any leftover socket from previous run
@@ -35,6 +36,9 @@ func main() {
 
 	g, ctx := errgroup.WithContext(ctx)
 	mgr := NewLockManager()
+	if *statePath != "" {
+		mgr.SetPersistPath(*statePath)
+	}
 
 	g.Go(func() error {
 		return RunServer(ctx, ln, mgr)

@@ -86,8 +86,10 @@ echo "       Agent-Code Interface"
 echo ""
 echo "Get started:"
 echo "  cd your-project"
-echo "  anchor build"
-echo "  anchor map"
+echo "  anchor check -- <test-command>"
+echo "  anchor status"
+echo "  anchor receipt"
+echo "  anchor gate --min-score 85"
 echo ""
 echo "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/docs/uninstall.sh | bash"
 echo ""
@@ -109,18 +111,25 @@ setup_global_agent_rules() {
 <!-- anchor-global-rules:begin -->
 # Global Rules
 
-## Anchor Commands for Code Intelligence
+## Anchor Execution Rules
 
 When working in codebases with `anchor` installed (check for `.anchor/` directory):
 
-Prefer Anchor when you need symbol-level code context:
+Use Anchor as an execution substrate:
 
-- `anchor context <query>` - Get symbol code + callers + callees (USE THIS FIRST)
-- `anchor search <query>` - Find symbols by name  
-- `anchor context <symbol> --full` - Single symbol full detail
-- `anchor map` - Codebase structure overview
+- start with a concise execution spec before source work
+- keep reads, edits, and tests justified by that spec
+- keep patches scoped, readable, maintainable, and minimal
+- solve the requested behavior directly; do not add speculative features or future architecture
+- prefer existing project patterns, stdlib, native platform behavior, and already-installed dependencies before custom code
+- avoid unrequested abstractions, avoidable dependencies, wrapper layers, boilerplate, dead helpers, unrelated rewrites, duplicated logic, and formatting churn
+- never simplify away trust-boundary validation, data-loss error handling, security, accessibility, or explicit task requirements
+- leave one focused runnable check for non-trivial logic
+- self-review the patch as if a senior maintainer must approve it
+- run focused verification before finishing
+- use `anchor status`, `anchor trace`, `anchor receipt`, and `anchor gate` for provenance and acceptance
 
-Use normal shell tools when they are cheaper or clearer:
+Use normal local tools for source navigation and editing:
 
 - `rg`, `grep`, `fd`, `find` for quick literal searches
 - `cat`, `sed`, `awk`, `head`, `tail` for small file reads or text processing
@@ -128,28 +137,6 @@ Use normal shell tools when they are cheaper or clearer:
 - Package managers (`npm`, `cargo`, `pip`, etc.)
 - Docker, file system operations (`mkdir`, `rm`, `mv`, `cp`)
 - Running tests, builds, etc.
-
-## Anchor Output Format
-
-Anchor returns structured XML output:
-```
-<results query="Cli" count="1">
-<symbol>
-<name>Cli</name>
-<kind>struct</kind>
-<file>/path/to/file.rs</file>
-<line>19</line>
-<callers>caller1 caller2</callers>
-<callees>callee1 callee2</callees>
-<code>
-  19: pub struct Cli {
-  ...
-</code>
-</symbol>
-</results>
-```
-
-Use this structured data for understanding code, making edits, and tracking relationships.
 EOF
 )
     # Compose full block with end marker without clobbering existing file

@@ -12,6 +12,11 @@ use std::time::{Duration, Instant};
 
 use super::types::*;
 
+/// Locks held longer than this are treated as abandoned. Mirrors lockd's
+/// default TTL so the in-process and daemon lock semantics stay aligned; an
+/// unreleased lock must never outlive its session forever.
+const LOCK_TTL: Duration = Duration::from_secs(300);
+
 /// Manages symbol-level write locks.
 pub struct LockManager {
     locks: Mutex<HashMap<SymbolKey, LockEntry>>,
@@ -26,9 +31,16 @@ impl LockManager {
         }
     }
 
+    fn entry_expired(entry: &LockEntry) -> bool {
+        entry.acquired_at.elapsed() >= LOCK_TTL
+    }
+
     /// Acquire a lock for a single symbol. Returns immediately with `Blocked` if already locked.
     pub fn try_acquire_symbol_simple(&self, symbol: &SymbolKey) -> LockResult {
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
+        if locks.get(symbol).is_some_and(Self::entry_expired) {
+            locks.remove(symbol);
+        }
         if let Some(entry) = locks.get(symbol) {
             return LockResult::Blocked {
                 blocked_by: entry.primary_symbol.clone(),
@@ -57,9 +69,12 @@ impl LockManager {
     pub fn acquire_with_wait(&self, file: &Path, timeout: Duration) -> LockResult {
         let key = SymbolKey::new(file, "__file__");
         let start = Instant::now();
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
 
         loop {
+            if locks.get(&key).is_some_and(Self::entry_expired) {
+                locks.remove(&key);
+            }
             if let Some(entry) = locks.get(&key) {
                 let blocked_by = entry.primary_symbol.clone();
                 let elapsed = start.elapsed();
@@ -70,8 +85,10 @@ impl LockManager {
                     };
                 }
                 let remaining = timeout - elapsed;
-                let (new_locks, timed_out) =
-                    self.lock_released.wait_timeout(locks, remaining).unwrap();
+                let (new_locks, timed_out) = self
+                    .lock_released
+                    .wait_timeout(locks, remaining)
+                    .unwrap_or_else(|e| e.into_inner());
                 locks = new_locks;
                 if timed_out.timed_out() {
                     return LockResult::Blocked {
@@ -105,7 +122,7 @@ impl LockManager {
 
     /// Release a symbol lock.
     pub fn release_symbol(&self, symbol: &SymbolKey) {
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<SymbolKey> = locks
             .iter()
             .filter(|(_, entry)| entry.primary_symbol == *symbol)
@@ -121,7 +138,7 @@ impl LockManager {
     /// Release a file-level lock.
     pub fn release(&self, file: &Path) {
         let file = normalize_path(file);
-        let mut locks = self.locks.lock().unwrap();
+        let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         let to_remove: Vec<SymbolKey> = locks
             .iter()
             .filter(|(_, entry)| entry.primary_symbol.file == file)
@@ -137,14 +154,14 @@ impl LockManager {
     /// Check if a file has any active locks.
     pub fn is_locked(&self, file: &Path) -> bool {
         let file = normalize_path(file);
-        let locks = self.locks.lock().unwrap();
+        let locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         locks.keys().any(|k| k.file == file)
     }
 
     /// Get lock status for a file.
     pub fn status(&self, file: &Path) -> LockStatus {
         let file = normalize_path(file);
-        let locks = self.locks.lock().unwrap();
+        let locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
         for (key, entry) in locks.iter() {
             if key.file == file {
                 return LockStatus::Locked {
@@ -158,7 +175,7 @@ impl LockManager {
 
     /// Get all currently held locks.
     pub fn active_locks(&self) -> Vec<LockInfo> {
-        let locks = self.locks.lock().unwrap();
+        let locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
 
         let mut primaries: HashMap<SymbolKey, Vec<SymbolKey>> = HashMap::new();
         let mut acquired_times: HashMap<SymbolKey, Instant> = HashMap::new();
@@ -195,91 +212,5 @@ impl Default for LockManager {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::path::Path;
-    use std::sync::Arc;
-    use std::thread;
-
-    #[test]
-    fn test_basic_lock_unlock() {
-        let manager = LockManager::new();
-        let result = manager.try_acquire(Path::new("test.rs"));
-        assert!(matches!(result, LockResult::Acquired { .. }));
-        assert!(manager.is_locked(Path::new("test.rs")));
-        manager.release(Path::new("test.rs"));
-        assert!(!manager.is_locked(Path::new("test.rs")));
-    }
-
-    #[test]
-    fn test_double_lock_blocked() {
-        let manager = LockManager::new();
-        let _r1 = manager.try_acquire(Path::new("test.rs"));
-        let r2 = manager.try_acquire(Path::new("test.rs"));
-        assert!(matches!(r2, LockResult::Blocked { .. }));
-    }
-
-    #[test]
-    fn test_different_files_ok() {
-        let manager = LockManager::new();
-        let r1 = manager.try_acquire(Path::new("a.rs"));
-        let r2 = manager.try_acquire(Path::new("b.rs"));
-        assert!(matches!(r1, LockResult::Acquired { .. }));
-        assert!(matches!(r2, LockResult::Acquired { .. }));
-    }
-
-    #[test]
-    fn test_symbol_lock_independent() {
-        let manager = LockManager::new();
-        let foo = SymbolKey::new("test.rs", "foo");
-        let bar = SymbolKey::new("test.rs", "bar");
-        let r1 = manager.try_acquire_symbol_simple(&foo);
-        let r2 = manager.try_acquire_symbol_simple(&bar);
-        assert!(matches!(r1, LockResult::Acquired { .. }));
-        assert!(matches!(r2, LockResult::Acquired { .. }));
-    }
-
-    #[test]
-    fn test_symbol_release() {
-        let manager = LockManager::new();
-        let foo = SymbolKey::new("test.rs", "foo");
-        let _r1 = manager.try_acquire_symbol_simple(&foo);
-        manager.release_symbol(&foo);
-        let r2 = manager.try_acquire_symbol_simple(&foo);
-        assert!(matches!(r2, LockResult::Acquired { .. }));
-    }
-
-    #[test]
-    fn test_wait_for_lock() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let manager = Arc::new(LockManager::new());
-        let lock_acquired = Arc::new(AtomicBool::new(false));
-
-        let m1 = manager.clone();
-        let acquired1 = lock_acquired.clone();
-        let t1 = thread::spawn(move || {
-            let _result = m1.try_acquire(Path::new("/tmp/test_lock_wait.rs"));
-            acquired1.store(true, Ordering::SeqCst);
-            thread::sleep(Duration::from_millis(100));
-            m1.release(Path::new("/tmp/test_lock_wait.rs"));
-        });
-
-        while !lock_acquired.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(5));
-        }
-
-        let result = manager.acquire_with_wait(
-            Path::new("/tmp/test_lock_wait.rs"),
-            Duration::from_millis(500),
-        );
-        t1.join().unwrap();
-
-        assert!(
-            matches!(
-                result,
-                LockResult::Acquired { .. } | LockResult::AcquiredAfterWait { .. }
-            ),
-            "Should have acquired lock after waiting"
-        );
-    }
+    include!("manager_tests.rs");
 }

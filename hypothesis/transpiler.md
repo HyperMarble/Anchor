@@ -2,16 +2,16 @@
 
 ## The Idea
 
-Anchor becomes a bidirectional transpiler between a minimal pseudocode language and any target language (Rust, Python, JavaScript, Go, etc.).
+Anchor becomes a bidirectional transpiler between Zev (a minimal pipeline language) and any target language (Rust, Python, JavaScript, Go, etc.).
 
 ```
-READ:   Rust codebase → Anchor → Pseudocode → Agent reads
-WRITE:  Agent writes Pseudocode → Anchor → Rust → codebase updated
+READ:   Rust codebase → Anchor → Zev → Agent reads
+WRITE:  Agent writes Zev → Anchor → Rust → codebase updated
 ```
 
-Agent permanently lives in pseudocode-world. Never touches Rust syntax, Python idioms, or language-specific quirks. Anchor is the membrane between the two worlds.
+Agent permanently lives in Zev-world. Never touches Rust syntax, Python idioms, or language-specific quirks. Anchor is the membrane between the two worlds.
 
-## Why Pseudocode (Not Zero)
+## Why Zev (Not Zero)
 
 Zero (Vercel Labs) is close but wrong fit:
 - Their language, their roadmap, their breaking changes
@@ -19,93 +19,116 @@ Zero (Vercel Labs) is close but wrong fit:
 - No ownership over token optimization
 
 Our language design goals:
-- English-like, reads like instructions
+- Pipeline-first: `>>` operator is the core primitive, not function calls
 - No type annotations
-- No symbols (`{}`, `->`, `&`, `;`)
-- Indentation only
-- Agent already thinks in this pattern — pretraining data is full of pseudocode
+- No symbols (`{}`, `&`, `;`) — only `>>` and `->` for pipelines
+- Indentation only, no braces
+- Agent already thinks in pipeline patterns — pretraining data is full of data flow logic
 
-## Token Savings (Measured)
+## Token Savings (Prototype Measurement)
 
-Tested on real MLflow functions (see `token_count.rs`):
+Tested on real MLflow Python functions (139 functions, `python_to_zev.py`):
 
-| Function | Rust tokens | Pseudocode tokens | Savings vs Rust |
+| Function | Python tokens | Zev tokens | Savings |
 |---|---|---|---|
-| get_parent_run | 69 | 36 | 48% |
-| filter_providers | 116 | 44 | 62% |
-| validate_delete_traces | 141 | 53 | 62% |
-| register_prompt | 222 | 82 | 63% |
+| get_parent_run | 69 | 12 | 83% |
+| filter_providers | 116 | 19 | 84% |
+| validate_delete_traces | 141 | 22 | 84% |
+| register_prompt | 222 | 35 | 84% |
 
-Average: ~59% reduction vs Rust. Complex functions approach 63-70%.
+Prototype average: **83.5% reduction** vs Python across 139 functions.
+This is a research measurement, not a production guarantee. It must be rerun with
+the final Zev syntax, final tokenizer choice, and round-trip correctness checks.
 
-Combined with Anchor's other layers:
+Potential combination with Anchor's other layers:
 - Persistent cache (98% savings on unchanged code)
 - Symbol slicing (94% savings vs whole file reads)
-- Overall session: 90%+ token reduction achievable
+- Overall session reduction may be high, but must be measured on real tasks
 
-## Syntax Design (Draft)
-
-```
-fn get_parent_run(run_id):
-    child = client.get_run(run_id)
-    parent_id = child.tags["PARENT_RUN_ID"]
-    if parent_id is nothing:
-        return nothing
-    return client.get_run(parent_id)
-```
+## Syntax Design
 
 ```
-fn filter_providers(providers, allowed):
-    if allowed is nothing:
-        return providers
-    result = []
-    for each p in providers:
-        name = normalize(p)
-        if name not in allowed:
-            skip
-        add p to result
-    return result
+fn get_parent_run(self, run_id)
+  child_run = self.tracking_client.get_run(run_id)
+  parent_id = child_run.data.tags.get(PARENT_RUN_ID)
+  if parent_id is nothing
+    return nothing
+  return self.tracking_client.get_run(parent_id)
 ```
 
 ```
-fn register_prompt(name, template, is_databricks):
-    validate name
-    if is_databricks:
-        try create_prompt(name) ignore if already exists
-        pv = create_prompt_version(name, template)
-        return get_prompt_version(name, pv.version)
-    model = get_registered_model(name) or:
-        create_registered_model(name)
-    if model exists and not has_prompt_tag(model):
-        fail "Model with same name exists"
-    return create_prompt_version(name, template)
+fn filter_providers(providers, allowed)
+  if allowed is nothing
+    return providers
+  result = []
+  for each p in providers
+    name = normalize(p)
+    if name not in allowed
+      skip
+    add p to result
+  return result
+```
+
+```
+fn register_prompt(name, template, is_databricks)
+  validate(name)
+  if is_databricks
+    try
+      create_prompt(name)
+    or:
+      pass
+    pv = create_prompt_version(name, template)
+    return get_prompt_version(name, pv.version)
+  model = get_registered_model(name)
+  if model is nothing
+    model = create_registered_model(name)
+  if model exists and not has_prompt_tag(model)
+    fail "Model with same name exists"
+  return create_prompt_version(name, template)
+```
+
+The pipeline operator — Zev's unique primitive:
+
+```
+fn max_val(numbers)
+  numbers
+  >> first -> m
+  >> loop -> x if x > m -> m
+  >> out m
+
+fn process_users(db)
+  db.query("users")
+  >> filter -> u if u.active
+  >> map -> u.email
+  >> out
 ```
 
 ### Keywords
 - `fn` — function
-- `is nothing` — null/None check  
+- `is nothing` — null/None check
 - `exists` — not null check
 - `for each` — iteration
 - `skip` — continue
 - `add X to Y` — append
 - `fail` — raise/throw
-- `or:` — catch block (simplified)
-- `try X ignore if Y` — try/except compressed
+- `>>` — pipeline step (core primitive)
+- `-> name` — bind pipeline result to name
+- `filter ->`, `map ->`, `out`, `first ->` — pipeline steps
 - `and`, `or`, `not` — logical (no symbols)
-- Indentation only, no braces
+- Indentation only, no braces, no colons
 
 ## Architecture: Write Path
 
 ```
-Agent writes foo.pseudo
+Agent writes foo.zev
       ↓
-anchor transpile foo.pseudo
+anchor transpile foo.zev
       ↓
 Anchor detects codebase language (80% .py → Python)
       ↓
 Anchor reads call graph: where does this fit?
       ↓
-Pseudocode → Python/Rust/JS
+Zev → Python/Rust/JS
       ↓
 Write lock applied (lockd)
       ↓
@@ -119,47 +142,110 @@ Agent calls anchor_context("Linear.forward")
       ↓
 Anchor fetches Rust/Python source (symbol sliced)
       ↓
-Anchor converts → pseudocode
+Anchor converts → Zev
       ↓
-Agent receives 60% fewer tokens, same information
+Agent receives fewer tokens if the source-to-Zev conversion preserves the needed
+logic
 ```
 
-## Proven So Far
+## Current Evidence
 
-- `zero_to_python.rs`: 25/25 tests passing — proves write path works
-  - Handles all language constructs: classes, match/case, try/rescue, async/await,
-    decorators, logical ops, string interpolation, struct init, generators
-  - Tested on real MLflow code: get_parent_run, filter_providers, validate_delete_traces,
-    register_prompt core, pagination loops
-- `token_count.rs`: proves token savings are real (48-63% vs Rust)
+- `python_to_zev.py`: 139 MLflow functions tested in prototype form.
+- Prototype measurement showed 83.5% average token savings across the sample.
+- This does **not** yet prove production readiness.
+- Still required: final grammar, source-to-Zev correctness checks, Zev-to-source
+  regeneration, and real benchmark tasks.
+
+## Doctor-Normalized Canonical Layer
+
+Zev should not be treated as a compression layer over arbitrary raw source.
+The stronger hypothesis is:
+
+```
+raw source
+  -> doctor normalization
+  -> canonical source
+  -> Zev representation
+```
+
+The Zev representation is built on top of the normalized/canonical layer, not
+directly on messy source code. This matters because raw source contains noise
+that is not part of the program's meaningful structure:
+
+- formatting differences
+- import ordering
+- unused imports or unused locals
+- equivalent syntax choices
+- inconsistent project style
+- framework anti-patterns
+- agent-written structural mess
+
+Doctor tools already exist in pieces across ecosystems: Ruff/Black for Python,
+ESLint/Biome/React Doctor for JS and React, Clippy/rustfmt/cargo fix for Rust,
+gofmt/go fix/go vet for Go, OpenRewrite for Java, Rector for PHP, RuboCop for
+Ruby, clang-tidy/clang-format for C/C++, and Roslyn/dotnet format for .NET.
+The hypothesis is not that linting is new. The hypothesis is that these
+deterministic doctor passes can become the canonicalization front-end before
+Zev conversion.
+
+For Python, a minimal proof works:
+
+```
+raw Python
+  -> ruff check --fix
+  -> ruff format
+  -> stable canonical Python
+```
+
+Safe doctor mode should be the default because safe fixes are meant to preserve
+semantics. Unsafe fixes may still be useful, but only behind explicit policy,
+tests, or a quality gate, because they can change behavior.
+
+So the actual Zev claim is:
+
+> Zev is not "compress source code." Zev is "represent doctor-clean canonical
+> code compactly."
+
+This gives the representation a stable input surface. If the same messy code
+normalizes to the same canonical source, Zev has less syntax noise to encode and
+the model sees a more consistent program shape.
 
 ## What Needs Building
 
-1. **Pseudocode parser** — define grammar, recursive descent parser (~500 lines Rust)
-2. **Python → pseudocode** (reverse, for read path)
-3. **Rust → pseudocode** (read path for Rust codebases)
-4. **`anchor transpile` CLI** — `anchor transpile foo.pseudo --to python`
-5. **`anchor_transpile` MCP tool** — agent calls directly
-6. **Auto language detection** — scan extension counts, pick target
-7. **Coordination layer** — reads call graph, places output in correct file
+1. **Final Zev grammar/parser**
+2. **`zev_to_python.py`** — write path for Python codebases
+3. **`rust_to_zev.py`** / **`zev_to_rust.py`** — read/write path for Rust
+4. **`anchor transpile` CLI** — `anchor transpile foo.zev --to python`
+5. **Auto language detection** — scan extension counts, pick target
+6. **Coordination layer** — reads call graph, places output in correct file
+7. **Benchmark harness** — token usage, correctness, edit quality, and task pass rate
 
 ## SLM Angle
 
-Fine-tune Gemma (or Phi-3) on pseudocode only. The model:
-- Writes pseudocode (one simple language, not 20)
-- Reads pseudocode (converted by Anchor from any source language)
+Fine-tune Gemma (or Phi-3) on Zev only. The model:
+- Writes Zev (one simple pipeline language, not 20)
+- Reads Zev (converted by Anchor from any source language)
 - Never sees Rust ownership, Python GC, JS async weirdness
+- potentially more codebase fits in context if the final representation keeps
+  the measured reduction
 
-Result: small model, specialist performance. Runs locally. Zero API cost.
+Target result: a smaller specialist model that can reason over Zev efficiently.
+This is research work, not proven yet.
+
+Hypothesis: a small model trained on Zev can outperform its size class on
+function-level coding tasks because it sees one compact representation instead
+of many source-language syntaxes.
 
 Gemma 4 hackathon submission:
-- Local Gemma-pseudo vs GPT-4 on function-level coding tasks
+- Local Gemma-zev vs GPT-4 on function-level coding tasks
 - Benchmark: token usage, latency, correctness
 - Anchor handles all transpilation
 
 ## Key Insight
 
 Zero (Vercel): designed for agents to write code.
-Anchor Transpiler: designed so agents never need to know code exists.
+Anchor Transpiler: designed so agents can work through a compact code
+representation instead of raw source whenever the conversion is reliable.
 
-Different layer. Different value. Nobody has this.
+Different layer. Different value. Needs proof through round-trip tests and real
+task benchmarks.

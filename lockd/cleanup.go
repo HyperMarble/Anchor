@@ -12,10 +12,15 @@ func (m *LockManager) cleanupExpired() {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	removed := 0
 	for k, v := range m.locks {
 		if now.After(v.ExpiresAt) {
 			delete(m.locks, k)
+			removed++
 		}
+	}
+	if removed > 0 {
+		m.persistLocked()
 	}
 }
 

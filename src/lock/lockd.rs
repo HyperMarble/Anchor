@@ -8,9 +8,9 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const SOCKET_PATH: &str = "/tmp/anchor.lock.sock";
 const TIMEOUT: Duration = Duration::from_millis(500);
@@ -18,6 +18,7 @@ const AGENT_ID_ENV: &str = "ANCHOR_AGENT_ID";
 const SOCKET_PATH_ENV: &str = "ANCHOR_LOCKD_SOCKET";
 
 static AGENT_ID: OnceLock<String> = OnceLock::new();
+static WORKSPACE_AGENT_ID: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug)]
 pub enum LockdResult {
@@ -41,29 +42,57 @@ fn send(req: serde_json::Value) -> Option<serde_json::Value> {
     serde_json::from_str(resp.trim()).ok()
 }
 
-/// Unique owner used for lockd requests from this process.
+/// Owner used for lockd requests from this CLI session.
 ///
 /// Set ANCHOR_AGENT_ID to make multiple CLI calls part of the same agent session.
-/// Otherwise Anchor generates a process-local ID so unrelated agents do not all
-/// look like the same owner to lockd.
+/// Otherwise Anchor derives a stable local ID from the current workspace. Anchor
+/// is a CLI, so a process-local default would make every command look like a
+/// different agent and break provenance across `context`, `edit`, and `check`.
 pub fn agent_id() -> &'static str {
     AGENT_ID
         .get_or_init(|| {
             std::env::var(AGENT_ID_ENV)
                 .ok()
                 .and_then(|value| normalize_agent_id(&value))
+                .or_else(|| WORKSPACE_AGENT_ID.get().cloned())
                 .unwrap_or_else(default_agent_id)
         })
         .as_str()
 }
 
+pub fn set_workspace(root: &Path) {
+    let _ = WORKSPACE_AGENT_ID.set(workspace_agent_id(root));
+}
+
 fn default_agent_id() -> String {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    normalize_agent_id(&format!("anchor-{}-{}", std::process::id(), millis))
-        .unwrap_or_else(|| "anchor".to_string())
+    let cwd = std::env::current_dir()
+        .ok()
+        .and_then(|path| path.canonicalize().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    workspace_agent_id(&cwd)
+}
+
+fn workspace_agent_id(root: &Path) -> String {
+    let root = root
+        .canonicalize()
+        .unwrap_or_else(|_| root.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    let user = std::env::var("USER").unwrap_or_else(|_| "local".to_string());
+    normalize_agent_id(&format!(
+        "anchor-{user}-{:016x}",
+        stable_hash(root.as_bytes())
+    ))
+    .unwrap_or_else(|| "anchor".to_string())
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn normalize_agent_id(raw: &str) -> Option<String> {
@@ -190,5 +219,15 @@ mod tests {
 
         let long = normalize_agent_id(&"a".repeat(80)).unwrap();
         assert_eq!(long.len(), 64);
+    }
+
+    #[test]
+    fn regression_default_agent_id_is_stable_for_cli_workflows() {
+        let first = default_agent_id();
+        let second = default_agent_id();
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("anchor-"), "{first}");
+        assert!(!first.contains(&std::process::id().to_string()));
     }
 }

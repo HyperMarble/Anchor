@@ -3,7 +3,7 @@ package main
 
 // Request is one JSON line sent by a client.
 type Request struct {
-	Op     string `json:"op"`              // acquire | release | check | list | ping
+	Op     string `json:"op"` // acquire | release | check | list | ping
 	Symbol string `json:"symbol,omitempty"`
 	Path   string `json:"path,omitempty"`
 	Agent  string `json:"agent,omitempty"`
@@ -13,8 +13,8 @@ type Request struct {
 // Response is one JSON line sent back to the client.
 type Response struct {
 	// acquire / release
-	Ok    *bool  `json:"ok,omitempty"`
-	Code  string `json:"code,omitempty"`
+	Ok     *bool  `json:"ok,omitempty"`
+	Code   string `json:"code,omitempty"`
 	Detail string `json:"detail,omitempty"`
 
 	// acquire failure: who holds it
@@ -39,7 +39,7 @@ type LockInfo struct {
 	ExpiresIn int    `json:"expires_in"`
 }
 
-func okResp() Response        { t := true; return Response{Ok: &t} }
+func okResp() Response              { t := true; return Response{Ok: &t} }
 func failResp(code string) Response { f := false; return Response{Ok: &f, Code: code} }
 func failDetail(code, detail string) Response {
 	f := false

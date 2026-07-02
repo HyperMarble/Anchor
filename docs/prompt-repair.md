@@ -14,11 +14,6 @@ Prompt Repair is experimental.
 
 What exists today:
 
-- compiled `anchor prompt check`, `anchor prompt repair`, and
-  `anchor prompt explain` commands
-- markdown and JSON output for humans and downstream agents
-- fast local repair from manifests, files, prompt linting, and `.anchor`
-  indexes when available
 - a local benchmark harness in `benchmark/prompt_improvement.py`
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
@@ -27,6 +22,7 @@ What exists today:
 
 What is not implemented yet:
 
+- no compiled `anchor prompt` CLI command yet
 - no persistent `.anchor/project_profile.json` yet
 - no LLM call in the default repair path
 - no patch-level benchmark yet
@@ -99,33 +95,23 @@ anchor prompt repair "..."        # instant deterministic repair
 anchor prompt repair --llm "..."  # optional slower rewrite/polish
 ```
 
-## CLI
+## Planned CLI
 
 ```bash
 anchor prompt check "fix the lock thing"
 anchor prompt repair "fix the lock thing"
-anchor prompt explain "fix the lock thing"
 anchor prompt repair --format markdown "fix the lock thing"
-anchor prompt check --format json "fix express middleware with jest"
+anchor prompt repair --format json "fix the lock thing"
+anchor prompt explain "fix the lock thing"
 ```
 
-Command behavior:
+Suggested command behavior:
 
 - `check`: report assumptions, missing context, risky wording, and likely targets.
 - `repair`: print the repaired task brief.
 - `explain`: show why Anchor changed the prompt.
 - `--format json`: machine-readable output for Codex, Claude Code, Cursor, and
   custom agents.
-
-If no prompt argument is provided, Anchor reads prompt text from stdin:
-
-```bash
-cat task.txt | anchor prompt repair
-```
-
-The current CLI intentionally avoids calling an LLM. It is a deterministic
-project-grounding pass that should stay fast enough to run before every agent
-handoff.
 
 ## Project Profile
 
@@ -269,16 +255,15 @@ evidence before any coding agent begins.
 ## Implementation Plan
 
 1. Keep the Python benchmark as a fast experimental harness.
-2. Keep the first Rust CLI implementation in `src/cli/prompt.rs` while the
-   feature is still small.
-3. Split the prompt repair logic into focused modules once it grows:
+2. Add Rust `src/prompt/` modules:
    - `profile.rs`
    - `lint.rs`
    - `route.rs`
    - `repair.rs`
    - `render.rs`
-4. Generate `.anchor/project_profile.json` during `anchor build`.
-5. Add optional LLM polish behind an explicit flag.
+3. Generate `.anchor/project_profile.json` during `anchor build`.
+4. Add `anchor prompt check` and `anchor prompt repair`.
+5. Add JSON output for agent integrations.
 6. Add patch-level benchmark once the prompt repair is stable.
 
 ## Design Rules

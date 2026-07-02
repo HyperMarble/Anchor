@@ -111,3 +111,25 @@ impl SupportedLanguage {
         }
     }
 }
+
+/// Files Anchor can index without probing arbitrary binary assets first.
+///
+/// Source files are the primary execution surface for agents. A small set of
+/// text artifacts remains indexable because it often carries project contracts
+/// that agents need, but binary/docs media are skipped before any UTF-8 read.
+pub fn is_indexable_text_path(path: &Path) -> bool {
+    if SupportedLanguage::from_path(path).is_some() {
+        return true;
+    }
+
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("md" | "mdx" | "csv" | "toml" | "yaml" | "yml" | "json")
+    )
+}
+
+/// True for programming-language source files that should rank above docs/config
+/// when an agent asks for executable context.
+pub fn is_source_path(path: &Path) -> bool {
+    SupportedLanguage::from_path(path).is_some()
+}
