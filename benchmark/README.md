@@ -379,11 +379,13 @@ python3 benchmark/collect_deepswe_compare.py \
 
 ### `current_anchor_probe.sh`
 
+Legacy probe for the old task/context/query/edit prototype.
+
 Runs a controlled local probe against a small generated Python repo.
 
 It measures:
 
-- `anchor build`
+- automatic `.anchor` preparation through Anchor context/query commands
 - `anchor context`
 - repeated context read
 - symbol-level `anchor edit`

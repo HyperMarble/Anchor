@@ -7,21 +7,22 @@ execution environment around them: raw terminal and file access makes them
 search blindly, reread noisy context, waste tokens, lose track of changes, edit
 against stale state, and let quality drop as the session context fills up.
 
-Anchor sits around any coding agent and gives it a better execution path for
-software tasks. It is closer to a kernel/runtime optimizer for agents than to a
-new agent: the model still reasons, but Anchor optimizes how the agent searches,
-reads, writes, verifies, records, and coordinates code work.
+Anchor sits around any coding agent and gives it a controlled execution path for
+software tasks. It is closer to a kernel/runtime layer for agents than to a new
+agent: the model still reasons and can still use familiar local tools, but Anchor
+controls whether the software transaction is scoped, fresh, verified, recorded,
+and safe to accept.
 
 Instead of:
 
 ```text
-random grep -> huge read -> blind edit -> random test -> hope
+random exploration -> broad edit -> random test -> hope
 ```
 
 Anchor pushes the agent toward:
 
 ```text
-intent -> focused context -> scoped read -> checked write -> targeted verify -> receipt
+execution spec -> budgeted work -> scoped patch -> targeted verify -> receipt
 ```
 
 Status: early prototype. The first implementation targets source-code
@@ -46,17 +47,13 @@ cargo build --release
 ## Core Commands
 
 ```bash
-anchor build                 # index the workspace
-anchor task "<intent>"       # get task intake: symbols, slices, related files, likely tests
-anchor context <name>        # load focused code context
-anchor write <path> <text>   # create or overwrite a file
-anchor edit <path> --action replace --pattern <old> --content <new>
-anchor edit <path> --symbol <name> --content <replacement>
 anchor check -- <command>    # run and record a verification command
 anchor status                # summarize execution/provenance signals
 anchor trace                 # show recent execution events
 anchor receipt               # export machine-readable receipt + quality score
 anchor gate --min-score 85   # fail if recorded quality is below threshold
+anchor protect on            # optional local protection for source writes
+anchor run -- <command>      # run and audit a terminal command
 ```
 
 ## Experimental: Prompt Repair
@@ -83,24 +80,11 @@ python3 benchmark/prompt_improvement.py --dry-run
 See [Project-Aware Prompt Repair](docs/prompt-repair.md) for the workflow,
 planned CLI, and benchmark strategy.
 
-## Strict Mode
-
-By default Anchor degrades gracefully: if the lock daemon is unreachable or a
-file has no recorded read, the write proceeds and the gap is recorded as an
-event. Set `ANCHOR_STRICT=1` to fail closed instead:
-
-- writes are refused when lockd is unreachable
-- existing source files can only be edited by a session that has read them
-  through `anchor context`
-
-In both modes, every mutation records a `write.attempt` event *before* the
-file is touched — if the event log cannot be written, the write is refused.
-
 ## What It Provides
 
-- focused code context instead of whole-workspace or repeated raw reads
-- code-unit aware search/read/write paths over files, chunks, symbols, and tests
-- checked writes against fresh source state instead of blind file mutation
+- execution contracts before code work starts
+- budgeted evidence, change-surface, verification, and expansion plans
+- transaction acceptance for provisional source changes
 - verification proof tied to the changed code, not just a final test transcript
 - provenance logs for what the agent read, changed, ran, and verified
 - coordination across local or cloud-backed agent sessions
@@ -111,8 +95,8 @@ file is touched — if the event log cannot be written, the write is refused.
 
 ## Locking
 
-Anchor's CLI write path talks to `anchor-lockd` when the daemon is available.
-The daemon listens on `/tmp/anchor.lock.sock` by default and uses
+Anchor's lock daemon is the local coordination primitive for future multi-agent
+execution. The daemon listens on `/tmp/anchor.lock.sock` by default and uses
 `ANCHOR_AGENT_ID` to identify agent/session owners.
 
 Start the daemon from source:
@@ -122,9 +106,7 @@ cd lockd
 go run .
 ```
 
-If `anchor-lockd` is unavailable, current CLI writes continue without a
-cross-process lock. Treat lock safety as a hard guarantee only when the daemon
-is running.
+Treat lock safety as a hard guarantee only when the daemon is running.
 
 ## Supported Languages
 
