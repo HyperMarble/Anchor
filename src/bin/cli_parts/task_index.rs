@@ -19,14 +19,15 @@ fn prepare_task_index_state(
     task_tokens: &std::collections::BTreeSet<String>,
     limit: usize,
 ) -> Result<TaskIndexState> {
-    let store = open_store(root)?;
+    let store = ensure_query_indexed_store(root)?;
     let mut history_index = store.load_history_index();
     if history_index.schema.is_empty() && !store.history_index_path().exists() {
         history_index = build_history_index(root);
         store.save_history_index(&history_index)?;
     }
 
-    let candidates = task_file_candidates(root, task_tokens, &history_index, limit)?;
+    let path_index = store.load_path_index()?;
+    let candidates = task_file_candidates(root, &path_index.files, task_tokens, &history_index, limit)?;
     let scoped_files = refresh_task_scoped_indexes(root, &store, &candidates)?;
 
     Ok(TaskIndexState {
@@ -41,6 +42,7 @@ fn prepare_task_index_state(
 
 fn task_file_candidates(
     root: &Path,
+    indexed_files: &[anchor::storage::PathEntry],
     task_tokens: &std::collections::BTreeSet<String>,
     history_index: &HistoryIndex,
     limit: usize,
@@ -62,23 +64,13 @@ fn task_file_candidates(
     let mut sources: BTreeMap<String, usize> = BTreeMap::new();
     let mut tests: BTreeMap<String, usize> = BTreeMap::new();
     let mut scan_queue: Vec<(String, PathBuf, usize)> = Vec::new();
+    let mut indexed_paths = std::collections::BTreeSet::new();
 
-    for entry in Walk::new(root).filter_map(|entry| entry.ok()) {
-        if !entry
-            .file_type()
-            .map(|kind| kind.is_file())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let path = entry.path();
-        if !is_indexable_text_path(path) {
-            continue;
-        }
-        let Some(relative) = repo_relative_string(root, path) else {
-            continue;
-        };
-        if is_task_ignored_path(&relative) {
+    for entry in indexed_files {
+        indexed_paths.insert(entry.path.clone());
+        let relative = entry.path.clone();
+        let path = root.join(&relative);
+        if !path.is_file() {
             continue;
         }
 
@@ -95,11 +87,43 @@ fn task_file_candidates(
             }
             continue;
         }
-        if !anchor::parser::language::is_source_path(path) {
+        if !anchor::parser::language::is_source_path(&path) {
+            continue;
+        }
+        if score == 0 {
             continue;
         }
 
         scan_queue.push((relative, path.to_path_buf(), score));
+    }
+
+    for entry in Walk::new(root).filter_map(|entry| entry.ok()) {
+        if !entry
+            .file_type()
+            .map(|kind| kind.is_file())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let path = entry.path();
+        if !is_indexable_text_path(path) {
+            continue;
+        }
+        let Some(relative) = repo_relative_string(root, path) else {
+            continue;
+        };
+        if indexed_paths.contains(&relative) || is_task_ignored_path(&relative) {
+            continue;
+        }
+        let score = task_file_path_score(&relative, task_tokens);
+        if score == 0 {
+            continue;
+        }
+        if looks_like_test_path(&relative) {
+            tests.insert(relative, score);
+        } else if anchor::parser::language::is_source_path(path) {
+            scan_queue.push((relative, path.to_path_buf(), score));
+        }
     }
 
     // Path-scored files spend the content-scan budget first so unrelated
@@ -169,12 +193,30 @@ fn refresh_task_scoped_indexes(
     const TASK_PARSE_FILE_BYTES_MAX: u64 = 512 * 1024;
 
     let mut call_index = store.load_call_index();
+    let indexed_hashes: std::collections::BTreeMap<String, String> = store
+        .load_path_index()?
+        .files
+        .into_iter()
+        .map(|entry| (entry.path, entry.source_hash))
+        .collect();
     let mut scoped_files = 0usize;
+    let mut changed_files = 0usize;
 
     for relative in &candidates.source_paths {
         let source_path = root.join(relative);
         if std::fs::metadata(&source_path)
             .map(|metadata| metadata.len() > TASK_PARSE_FILE_BYTES_MAX)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let current_hash = match std::fs::read(&source_path) {
+            Ok(bytes) => content_hash(&bytes),
+            Err(_) => continue,
+        };
+        if indexed_hashes
+            .get(relative)
+            .map(|hash| hash == &current_hash)
             .unwrap_or(false)
         {
             continue;
@@ -189,10 +231,13 @@ fn refresh_task_scoped_indexes(
             call_index.calls.remove(&symbol.name);
         }
 
-        let (_, symbols, _) = match store.upsert_symbols_for_path(&source_path) {
+        let (_, symbols, changed) = match store.upsert_symbols_for_path(&source_path) {
             Ok(result) => result,
             Err(_) => continue,
         };
+        if changed {
+            changed_files += 1;
+        }
         if symbols.is_empty() {
             continue;
         }
@@ -221,6 +266,16 @@ fn refresh_task_scoped_indexes(
         callees.dedup();
     }
     store.save_call_index(&call_index)?;
+    if changed_files > 0 {
+        events::record(
+            store.anchor_root(),
+            "index.refresh",
+            None,
+            None,
+            "ok",
+            Some(format!("query_candidates refreshed={changed_files}")),
+        );
+    }
 
     Ok(scoped_files)
 }

@@ -1,12 +1,61 @@
 fn is_large_owner_symbol(symbol: &anchor::storage::SymbolEntry) -> bool {
     let lines = symbol.line_end.saturating_sub(symbol.line_start) + 1;
     if is_class_like_symbol(symbol) {
-        return lines > 80;
+        return lines > 300;
     }
-    matches!(symbol.kind.as_str(), "Function" | "Method") && lines > 120
+    matches!(symbol.kind.as_str(), "Function" | "Method") && lines > 320
 }
 
-fn task_path_prior(path: &str) -> i32 {
+fn is_support_context_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".rst")
+        || lower.contains("/demo/")
+        || lower.starts_with("demo/")
+        || lower.contains("/demos/")
+        || lower.starts_with("demos/")
+        || lower.contains("/docs_src/")
+        || lower.starts_with("docs_src/")
+        || lower.contains("/docs/")
+        || lower.starts_with("docs/")
+        || lower.contains("/example/")
+        || lower.starts_with("example/")
+        || lower.contains("/examples/")
+        || lower.starts_with("examples/")
+        || lower.contains("/sample/")
+        || lower.starts_with("sample/")
+        || lower.contains("/samples/")
+        || lower.starts_with("samples/")
+        || lower.contains("/tutorial/")
+        || lower.starts_with("tutorial/")
+        || lower.contains("/tutorials/")
+        || lower.starts_with("tutorials/")
+}
+
+fn task_support_context_requested(tokens: &std::collections::BTreeSet<String>) -> bool {
+    tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "demo"
+                | "demos"
+                | "doc"
+                | "docs"
+                | "documentation"
+                | "example"
+                | "examples"
+                | "guide"
+                | "quickstart"
+                | "readme"
+                | "sample"
+                | "samples"
+                | "tutorial"
+                | "tutorials"
+                | "usage"
+        )
+    })
+}
+
+fn task_path_prior(path: &str, tokens: &std::collections::BTreeSet<String>) -> i32 {
     let normalised = path.replace('\\', "/").to_ascii_lowercase();
     let file_name = Path::new(&normalised)
         .file_name()
@@ -17,14 +66,18 @@ fn task_path_prior(path: &str) -> i32 {
     if file_name == "__init__.py" || file_name == "mod.rs" {
         score -= 35;
     }
-    if normalised.contains("/examples/") || normalised.starts_with("examples/") {
-        score -= 80;
-    }
-    if normalised.contains("/docs/") || normalised.starts_with("docs/") {
-        score -= 60;
+    if is_support_context_path(&normalised) {
+        if task_support_context_requested(tokens) {
+            score += 20;
+        } else {
+            score -= 80;
+        }
     }
     if normalised.contains("/legacy/") || normalised.contains("/compat/") {
         score -= 45;
+    }
+    if normalised.contains("/scripts/") || normalised.starts_with("scripts/") {
+        score -= 120;
     }
 
     score
@@ -60,8 +113,8 @@ fn infer_task_file_role(path: &str) -> String {
     let lower = path.to_ascii_lowercase();
     if looks_like_test_path(&lower) {
         "test".to_string()
-    } else if lower.contains("/docs/") || lower.starts_with("docs/") || lower.ends_with(".md") {
-        "docs".to_string()
+    } else if is_support_context_path(&lower) {
+        "support_context".to_string()
     } else if lower.contains("route") || lower.contains("handler") {
         "handler".to_string()
     } else if lower.contains("schema") || lower.contains("model") || lower.contains("data") {
@@ -136,4 +189,3 @@ fn numbered_code(code: &str, start_line: usize) -> String {
     }
     output
 }
-

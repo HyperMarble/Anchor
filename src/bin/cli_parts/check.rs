@@ -38,6 +38,7 @@ fn cmd_check(root: &Path, command: &[String]) -> Result<()> {
     let events_after = events::load(store.anchor_root())?;
     let summary = execution_summary(root, &events_after);
     let handoff = handoff_state(&summary);
+    let defer_handoff = is_action_workspace(root);
 
     println!("<check>");
     println!("<command>{command_text}</command>");
@@ -54,7 +55,9 @@ fn cmd_check(root: &Path, command: &[String]) -> Result<()> {
     println!("<stderr><![CDATA[");
     print!("{}", String::from_utf8_lossy(&output.stderr));
     println!("]]></stderr>");
-    if !handoff.ready {
+    if defer_handoff {
+        println!("<handoff_gate status=\"deferred\" mode=\"execroot\"/>");
+    } else if !handoff.ready {
         println!("<quality_feedback>");
         for blocker in &handoff.blockers {
             println!("  <warning>{}</warning>", escape_xml_text(blocker.message));
@@ -74,10 +77,14 @@ fn cmd_check(root: &Path, command: &[String]) -> Result<()> {
     if !output.status.success() {
         bail!("check failed with exit code {code}")
     }
-    if !handoff.ready {
+    if !defer_handoff && !handoff.ready {
         bail!("handoff check failed: unresolved blockers remain")
     }
     Ok(())
+}
+
+fn is_action_workspace(root: &Path) -> bool {
+    root.join(".anchor/action/instruction.md").exists() || root.join("ANCHOR_ACTION.md").exists()
 }
 
 fn classify_check_command(command: &[String]) -> &'static str {
@@ -159,4 +166,3 @@ fn check_target_paths(root: &Path, command: &[String]) -> Vec<String> {
     }
     paths.into_iter().collect()
 }
-

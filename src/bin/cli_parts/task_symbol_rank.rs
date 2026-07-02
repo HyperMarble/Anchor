@@ -5,6 +5,7 @@ fn task_symbol_rank(
     let name = symbol.name.to_ascii_lowercase();
     let path = symbol.path.to_ascii_lowercase();
     let kind = symbol.kind.as_str();
+    let signal_tokens = task_symbol_signal_tokens(symbol);
     let mut score = 0i32;
     let mut matched_terms = 0usize;
 
@@ -31,7 +32,7 @@ fn task_symbol_rank(
             score += 45;
             matched = true;
         }
-        if symbol.features.iter().any(|feature| feature == token) {
+        if signal_tokens.iter().any(|feature| feature == token) {
             score += 20;
             matched = true;
         }
@@ -57,8 +58,22 @@ fn task_symbol_rank(
     if name.starts_with("test") {
         score -= 120;
     }
+    if is_constructor_symbol_name(&name)
+        && !tokens.contains("init")
+        && !tokens.contains("constructor")
+        && !tokens.contains("initialize")
+    {
+        score -= 300;
+    }
 
     score
+}
+
+fn is_constructor_symbol_name(name: &str) -> bool {
+    matches!(
+        name,
+        "__init__" | "init" | "new" | "constructor" | "initialize"
+    )
 }
 
 fn source_backed_task_candidates(
@@ -74,13 +89,19 @@ fn source_backed_task_candidates(
         by_path.entry(&symbol.path).or_default().push(symbol);
     }
 
+    let signal_tokens = task_specific_tokens(tokens);
+    let requires_signal = signal_tokens != *tokens;
+    let allow_support_context = task_support_context_requested(tokens);
     let mut scored = Vec::new();
     for (path, path_symbols) in by_path {
-        let path_has_signal = task_path_has_signal(path, tokens);
+        let path_has_signal = task_path_has_signal(path, &signal_tokens);
         let symbol_has_signal = path_symbols
             .iter()
-            .any(|symbol| task_symbol_has_name_or_feature_signal(symbol, tokens));
-        if !path_has_signal && !symbol_has_signal {
+            .any(|symbol| task_symbol_has_name_or_feature_signal(symbol, &signal_tokens));
+        if requires_signal && !path_has_signal && !symbol_has_signal {
+            continue;
+        }
+        if is_support_context_path(path) && !allow_support_context {
             continue;
         }
 
@@ -147,9 +168,56 @@ fn task_symbol_has_name_or_feature_signal(
     tokens: &std::collections::BTreeSet<String>,
 ) -> bool {
     let lower_name = symbol.name.to_ascii_lowercase();
+    let signal_tokens = task_symbol_signal_tokens(symbol);
     tokens.iter().any(|token| {
-        lower_name.contains(token) || symbol.features.iter().any(|feature| feature == token)
+        lower_name.contains(token) || signal_tokens.iter().any(|feature| feature == token)
     })
+}
+
+fn task_symbol_signal_tokens(
+    symbol: &anchor::storage::SymbolEntry,
+) -> std::collections::BTreeSet<String> {
+    task_search_tokens(&format!("{} {} {}", symbol.name, symbol.kind, symbol.path))
+}
+
+fn task_specific_tokens(
+    tokens: &std::collections::BTreeSet<String>,
+) -> std::collections::BTreeSet<String> {
+    let filtered: std::collections::BTreeSet<String> = tokens
+        .iter()
+        .filter(|token| !is_generic_task_token(token))
+        .cloned()
+        .collect();
+    if filtered.len() < 2 {
+        tokens.clone()
+    } else {
+        filtered
+    }
+}
+
+fn is_generic_task_token(token: &str) -> bool {
+    matches!(
+        token,
+        "body"
+            | "code"
+            | "config"
+            | "data"
+            | "file"
+            | "files"
+            | "header"
+            | "headers"
+            | "model"
+            | "request"
+            | "response"
+            | "responses"
+            | "result"
+            | "results"
+            | "test"
+            | "tests"
+            | "true"
+            | "value"
+            | "values"
+    )
 }
 
 fn dedupe_symbols(symbols: &mut Vec<anchor::storage::SymbolEntry>) {
@@ -204,4 +272,3 @@ fn task_source_rank(source: &str, tokens: &std::collections::BTreeSet<String>) -
 
     score
 }
-

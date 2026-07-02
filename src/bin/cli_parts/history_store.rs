@@ -165,22 +165,28 @@ fn open_store(root: &Path) -> Result<AnchorStore> {
 }
 
 fn ensure_indexed_store(root: &Path) -> Result<AnchorStore> {
+    ensure_indexed_store_with_refresh(root, Some(true))
+}
+
+fn ensure_query_indexed_store(root: &Path) -> Result<AnchorStore> {
+    ensure_indexed_store_with_refresh(root, None)
+}
+
+fn ensure_indexed_store_with_refresh(root: &Path, refresh_new_files: Option<bool>) -> Result<AnchorStore> {
     let store = open_store(root)?;
-    let needs_build = !store.path_index_path().exists()
+    let symbol_index = store.load_symbol_index();
+    let path_index_unreadable = store.path_index_path().exists() && store.load_path_index().is_err();
+    let symbol_index_unreadable = store.symbol_index_path().exists() && symbol_index.is_err();
+    let missing_or_empty = !store.path_index_path().exists()
         || !store.symbol_index_path().exists()
         || !store.call_index_path().exists()
         || !store.history_index_path().exists()
-        || store
-            .load_symbol_index()
+        || path_index_unreadable
+        || symbol_index_unreadable
+        || symbol_index
             .map(|index| index.symbols.is_empty())
             .unwrap_or(true);
-    let needs_build = if needs_build {
-        true
-    } else {
-        index_has_stale_paths(root, &store)?
-    };
-
-    if needs_build {
+    if missing_or_empty {
         let stats = build_indexes(root)?;
         events::record(
             store.anchor_root(),
@@ -197,22 +203,26 @@ fn ensure_indexed_store(root: &Path) -> Result<AnchorStore> {
             "[anchor] auto-built index: files={} symbols={} calls={}",
             stats.indexed, stats.sym_count, stats.call_count
         );
+    } else if let Some(discover_new) = refresh_new_files {
+        let refresh = if discover_new {
+            refresh_stale_index_paths(root, &store)?
+        } else {
+            IndexRefresh::Clean
+        };
+        match refresh {
+            IndexRefresh::Clean => {}
+            IndexRefresh::Incremental { refreshed } => {
+                events::record(
+                    store.anchor_root(),
+                    "index.refresh",
+                    None,
+                    None,
+                    "ok",
+                    Some(format!("incremental refreshed={refreshed}")),
+                );
+            }
+        }
     }
 
     open_store(root)
-}
-
-fn index_has_stale_paths(root: &Path, store: &AnchorStore) -> Result<bool> {
-    let path_index = store.load_path_index()?;
-    for entry in path_index.files {
-        let path = root.join(&entry.path);
-        let bytes = match std::fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(_) => return Ok(true),
-        };
-        if content_hash(&bytes) != entry.source_hash {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }

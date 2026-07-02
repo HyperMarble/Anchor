@@ -25,9 +25,12 @@ fn cmd_query(root: &Path, query: &[String], limit: usize, json: bool) -> Result<
     } else {
         tokens.iter().cloned().collect::<Vec<_>>().join(" ")
     };
+    let signal_tokens = task_specific_tokens(&tokens);
+    let allow_support_context = task_support_context_requested(&tokens);
     let mut candidates = state
         .store
         .search_symbols_hybrid(&query_text, limit.saturating_mul(8).clamp(24, 96))?;
+    retain_query_owner_candidates(&mut candidates, &signal_tokens, allow_support_context);
     candidates.extend(source_backed_task_candidates(
         root,
         &state.symbol_index.symbols,
@@ -40,6 +43,7 @@ fn cmd_query(root: &Path, query: &[String], limit: usize, json: bool) -> Result<
         &tokens,
         limit.saturating_mul(4).clamp(12, 48),
     ));
+    retain_existing_symbol_paths(root, &mut candidates);
     dedupe_symbols(&mut candidates);
 
     let slices = rank_task_slices(
@@ -49,6 +53,7 @@ fn cmd_query(root: &Path, query: &[String], limit: usize, json: bool) -> Result<
         &tokens,
         &candidates,
         limit.saturating_mul(3).clamp(8, 24),
+        false,
     );
     let chunks = select_diverse_task_slices(&slices, limit);
     let source_paths = query_source_paths(&chunks, &candidates);
@@ -61,7 +66,15 @@ fn cmd_query(root: &Path, query: &[String], limit: usize, json: bool) -> Result<
         &std::collections::BTreeMap::new(),
         8,
     );
-    let report = query_report(&intent, state.scoped_files, &chunks, &candidates, &tests, &state);
+    let report = query_report(
+        &intent,
+        state.scoped_files,
+        &chunks,
+        &candidates,
+        &tests,
+        &state,
+        &tokens,
+    );
     events::record(
         state.store.anchor_root(),
         "query",
@@ -85,7 +98,7 @@ fn cmd_query(root: &Path, query: &[String], limit: usize, json: bool) -> Result<
 }
 
 fn cmd_view(root: &Path, handle: &str, around: Option<&str>, full: bool, json: bool) -> Result<()> {
-    let store = ensure_indexed_store(root)?;
+    let store = ensure_query_indexed_store(root)?;
     let report = match parse_query_handle(handle)? {
         QueryHandle::File(path) => view_path(root, &store, handle, "file", &path, around, full)?,
         QueryHandle::Test(path) => view_path(root, &store, handle, "test", &path, around, full)?,
@@ -108,12 +121,12 @@ fn query_report(
     candidates: &[SymbolEntry],
     tests: &[TaskTest],
     state: &TaskIndexState,
+    tokens: &std::collections::BTreeSet<String>,
 ) -> QueryReport {
     QueryReport {
         schema: "anchor.query.v1",
         intent: intent.to_string(),
         scoped_files,
-        files: query_files(chunks, candidates),
         chunks: chunks
             .iter()
             .map(|slice| QueryChunk {
@@ -151,11 +164,35 @@ fn query_report(
                 reasons: test.reasons.clone(),
             })
             .collect(),
+        files: query_files(chunks, candidates, tokens),
         next: vec![
-            "anchor view <handle>".to_string(),
+            "anchor view <chunk-handle> or anchor read <chunk-handle>".to_string(),
+            "anchor read <chunk-handle> --around <text> for an enclosing block".to_string(),
+            "anchor read file:<path> --around <text> to resolve text to an owner chunk".to_string(),
             "anchor edit/write with the returned source hash".to_string(),
         ],
     }
+}
+
+fn retain_existing_symbol_paths(root: &Path, symbols: &mut Vec<SymbolEntry>) {
+    symbols.retain(|symbol| root.join(&symbol.path).is_file());
+}
+
+fn retain_query_owner_candidates(
+    symbols: &mut Vec<SymbolEntry>,
+    signal_tokens: &std::collections::BTreeSet<String>,
+    allow_support_context: bool,
+) {
+    symbols.retain(|symbol| {
+        if looks_like_test_path(&symbol.path) {
+            return false;
+        }
+        if is_support_context_path(&symbol.path) && !allow_support_context {
+            return false;
+        }
+        task_path_has_signal(&symbol.path, signal_tokens)
+            || task_symbol_has_name_or_feature_signal(symbol, signal_tokens)
+    });
 }
 
 fn query_source_paths(
@@ -169,9 +206,14 @@ fn query_source_paths(
         .collect()
 }
 
-fn query_files(chunks: &[TaskSlice], candidates: &[SymbolEntry]) -> Vec<QueryFile> {
+fn query_files(
+    chunks: &[TaskSlice],
+    candidates: &[SymbolEntry],
+    tokens: &std::collections::BTreeSet<String>,
+) -> Vec<QueryFile> {
     let mut seen = std::collections::BTreeSet::new();
     let mut files = Vec::new();
+    let allow_support_context = task_support_context_requested(tokens);
     for chunk in chunks {
         if seen.insert(chunk.path.clone()) {
             files.push(QueryFile {
@@ -184,6 +226,12 @@ fn query_files(chunks: &[TaskSlice], candidates: &[SymbolEntry]) -> Vec<QueryFil
         }
     }
     for symbol in candidates.iter().take(12) {
+        if looks_like_test_path(&symbol.path) {
+            continue;
+        }
+        if is_support_context_path(&symbol.path) && !allow_support_context {
+            continue;
+        }
         if seen.insert(symbol.path.clone()) {
             files.push(QueryFile {
                 handle: file_handle(&symbol.path),
@@ -196,49 +244,4 @@ fn query_files(chunks: &[TaskSlice], candidates: &[SymbolEntry]) -> Vec<QueryFil
     }
     files.truncate(12);
     files
-}
-
-fn content_backed_query_candidates(
-    root: &Path,
-    symbols: &[SymbolEntry],
-    tokens: &std::collections::BTreeSet<String>,
-    limit: usize,
-) -> Vec<SymbolEntry> {
-    let mut by_path: std::collections::BTreeMap<&str, Vec<&SymbolEntry>> =
-        std::collections::BTreeMap::new();
-    for symbol in symbols {
-        by_path.entry(&symbol.path).or_default().push(symbol);
-    }
-    let mut scored = Vec::new();
-    for (path, path_symbols) in by_path {
-        if looks_like_test_path(path) {
-            continue;
-        }
-        let full_path = root.join(path);
-        if !anchor::parser::language::is_source_path(&full_path) {
-            continue;
-        }
-        let Ok(source) = std::fs::read_to_string(&full_path) else {
-            continue;
-        };
-        let source_score = task_source_rank(&source, tokens);
-        if source_score <= 0 {
-            continue;
-        }
-        for symbol in path_symbols {
-            if !is_context_owner_symbol(symbol) || is_large_owner_symbol(symbol) {
-                continue;
-            }
-            let owner_bonus = if is_class_like_symbol(symbol) { 80 } else { 20 };
-            scored.push((source_score * 3 + owner_bonus + task_symbol_rank(symbol, tokens), (*symbol).clone()));
-        }
-    }
-    scored.sort_by(|a, b| {
-        b.0.cmp(&a.0)
-            .then_with(|| a.1.path.cmp(&b.1.path))
-            .then_with(|| a.1.line_start.cmp(&b.1.line_start))
-            .then_with(|| a.1.name.cmp(&b.1.name))
-    });
-    scored.truncate(limit);
-    scored.into_iter().map(|(_, symbol)| symbol).collect()
 }

@@ -11,7 +11,8 @@ fn select_diverse_task_slices(slices: &[TaskSlice], limit: usize) -> Vec<TaskSli
                 let selected_for_file = per_file.get(slice.path.as_str()).copied().unwrap_or(0);
                 let divisor = match selected_for_file {
                     0 => 1,
-                    1 => 2,
+                    1 => 1,
+                    2 => 2,
                     _ => 4,
                 };
                 (idx, slice.score / divisor)
@@ -141,4 +142,3 @@ fn is_test_helper_path(path: &str) -> bool {
         || lower.contains("/examples/")
         || lower.starts_with("examples/")
 }
-

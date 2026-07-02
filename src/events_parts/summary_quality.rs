@@ -94,7 +94,7 @@ impl EventSummary {
             score -= 25;
             flags.push("unrecorded_repo_changes".to_string());
             recommendations.insert(
-                "route changed files through anchor edit/write or inspect raw terminal writes"
+                "review changed files against the execution contract and inspect raw terminal writes"
                     .to_string(),
             );
         }

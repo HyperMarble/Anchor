@@ -11,9 +11,16 @@ fn view_path(
     let source = std::fs::read_to_string(&source_path)?;
     let source_hash = content_hash(source.as_bytes());
     let code = if let Some(term) = around {
+        if let Some(report) =
+            view_path_around_owner(store, handle, kind, path, &source_hash, term, full)?
+        {
+            return Ok(report);
+        }
         view_around_text(&source, 1, term, full)?
+    } else if full {
+        view_numbered_text(&source, 1, true)
     } else {
-        view_numbered_text(&source, 1, full)
+        view_path_outline(store, path, &source, &source_hash)?
     };
     let slice_hash = content_hash(code.as_bytes());
     record_view_event(store, kind, path, None, &source_hash, &slice_hash, "ok");
@@ -53,7 +60,15 @@ fn view_chunk(
         resolve_view_symbol(root, store, path, symbol, *line_start, *line_end)?;
     let projection = store.create_projection(&symbol_entry)?;
     let code = if let Some(term) = around {
-        view_around_text(&projection.text, symbol_entry.line_start, term, full)?
+        match view_around_text(&projection.text, symbol_entry.line_start, term, full) {
+            Ok(code) => code,
+            Err(_) => {
+                if let Some(report) = view_related_chunk_around(root, store, chunk, term, full)? {
+                    return Ok(report);
+                }
+                return view_path(root, store, &file_handle(path), "file", path, around, full);
+            }
+        }
     } else {
         view_numbered_text(&projection.text, symbol_entry.line_start, full)
     };
@@ -158,8 +173,11 @@ fn view_around_text(text: &str, start_line: usize, term: &str, full: bool) -> Re
         if !line.contains(term) {
             continue;
         }
-        let first = idx.saturating_sub(3);
-        let last = (idx + 3).min(lines.len().saturating_sub(1));
+        let (first, last) = enclosing_text_block(&lines, idx).unwrap_or_else(|| {
+            let first = idx.saturating_sub(6);
+            let last = (idx + 8).min(lines.len().saturating_sub(1));
+            (first, last)
+        });
         for item in first..=last {
             keep.insert(item);
         }

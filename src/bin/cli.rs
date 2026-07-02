@@ -65,6 +65,12 @@ fn run(cli: Cli) -> Result<()> {
             context_limit,
         } => cmd_task(&root, &intent, limit, context_limit),
 
+        Commands::Semantic {
+            intent,
+            limit,
+            context_limit,
+        } => cmd_semantic(&root, &intent, limit, context_limit),
+
         Commands::Query { query, limit, json } => cmd_query(&root, &query, limit, json),
 
         Commands::View {
@@ -152,11 +158,18 @@ fn run(cli: Cli) -> Result<()> {
 
 include!("cli_parts/build.rs");
 include!("cli_parts/history_store.rs");
+include!("cli_parts/index_refresh.rs");
 include!("cli_parts/task_index.rs");
 include!("cli_parts/task_index_helpers.rs");
 include!("cli_parts/context_packet.rs");
 include!("cli_parts/context.rs");
+include!("cli_parts/task_prepare.rs");
 include!("cli_parts/task_command.rs");
+include!("cli_parts/semantic_contract_terms.rs");
+include!("cli_parts/semantic_contract_paths.rs");
+include!("cli_parts/semantic_contract.rs");
+include!("cli_parts/semantic_docs.rs");
+include!("cli_parts/semantic_workspace.rs");
 include!("cli_parts/task_intake_output.rs");
 include!("cli_parts/task_intake_sections.rs");
 include!("cli_parts/map_git.rs");
@@ -175,6 +188,10 @@ include!("cli_parts/task_selection.rs");
 include!("cli_parts/task_print.rs");
 include!("cli_parts/verification_plan.rs");
 include!("cli_parts/query_handles.rs");
+include!("cli_parts/query_candidates.rs");
 include!("cli_parts/query_command.rs");
+include!("cli_parts/query_view_outline.rs");
+include!("cli_parts/query_view_blocks.rs");
+include!("cli_parts/query_view_owner.rs");
 include!("cli_parts/query_view_io.rs");
 include!("cli_parts/query_print.rs");

@@ -1,90 +1,76 @@
 fn print_query_report(report: &QueryReport) {
     println!(
-        "<query schema=\"{}\" intent=\"{}\" scoped_files=\"{}\">",
-        report.schema,
-        escape_xml_text(&report.intent),
-        report.scoped_files
+        "anchor query\nintent: {}\nschema: {} scoped_files: {}",
+        report.intent, report.schema, report.scoped_files
     );
-    println!("<files count=\"{}\">", report.files.len());
-    for file in &report.files {
-        println!(
-            "  <file handle=\"{}\" path=\"{}\" score=\"{}\" hash=\"{}\" reason=\"{}\"/>",
-            escape_xml_text(&file.handle),
-            escape_xml_text(&file.path),
-            file.score,
-            escape_xml_text(&file.source_hash),
-            escape_xml_text(&file.reason)
-        );
-    }
-    println!("</files>");
-    println!("<chunks count=\"{}\">", report.chunks.len());
+    println!("\nowner chunks:");
     for chunk in &report.chunks {
         println!(
-            "  <chunk handle=\"{}\" path=\"{}\" symbol=\"{}\" kind=\"{}\" lines=\"{}-{}\" score=\"{}\" hash=\"{}\">",
-            escape_xml_text(&chunk.handle),
-            escape_xml_text(&chunk.path),
-            escape_xml_text(&chunk.symbol),
-            escape_xml_text(&chunk.kind),
+            "  {} {} {}:{}-{} kind:{} score:{} hash:{}",
+            chunk.handle,
+            chunk.path,
+            chunk.symbol,
             chunk.line_start,
             chunk.line_end,
+            chunk.kind,
             chunk.score,
-            escape_xml_text(&chunk.source_hash)
+            chunk.source_hash
         );
         if !chunk.reasons.is_empty() {
-            println!(
-                "    <reasons>{}</reasons>",
-                escape_xml_text(&chunk.reasons.join(","))
-            );
+            println!("    reasons: {}", chunk.reasons.join(","));
         }
         if !chunk.calls.is_empty() {
-            println!("    <calls>{}</calls>", escape_xml_text(&chunk.calls.join(", ")));
+            println!("    calls: {}", chunk.calls.join(", "));
         }
         if !chunk.called_by.is_empty() {
-            println!(
-                "    <called_by>{}</called_by>",
-                escape_xml_text(&chunk.called_by.join(", "))
-            );
+            println!("    called_by: {}", chunk.called_by.join(", "));
         }
-        println!("  </chunk>");
     }
-    println!("</chunks>");
-    println!("<tests count=\"{}\">", report.tests.len());
+    if report.chunks.is_empty() {
+        println!("  (none)");
+    }
+    println!("\nlikely tests:");
     for test in &report.tests {
         println!(
-            "  <test handle=\"{}\" path=\"{}\" score=\"{}\" reasons=\"{}\"/>",
-            escape_xml_text(&test.handle),
-            escape_xml_text(&test.path),
+            "  {} {} score:{} reasons:{}",
+            test.handle,
+            test.path,
             test.score,
-            escape_xml_text(&test.reasons.join(","))
+            test.reasons.join(",")
         );
     }
-    println!("</tests>");
-    println!("<next>");
-    for next in &report.next {
-        println!("  <step>{}</step>", escape_xml_text(next));
+    if report.tests.is_empty() {
+        println!("  (none)");
     }
-    println!("</next>");
-    println!("</query>");
+    println!("\nfile handles:");
+    for file in &report.files {
+        println!(
+            "  {} {} score:{} hash:{} reason:{}",
+            file.handle, file.path, file.score, file.source_hash, file.reason
+        );
+    }
+    if report.files.is_empty() {
+        println!("  (none)");
+    }
+    println!("\nnext:");
+    for next in &report.next {
+        println!("  - {next}");
+    }
 }
 
 fn print_view_report(report: &ViewReport) {
+    println!("anchor view");
+    println!("handle: {}", report.handle);
     println!(
-        "<view schema=\"{}\" handle=\"{}\" kind=\"{}\" path=\"{}\" lines=\"{}-{}\" hash=\"{}\" slice_hash=\"{}\" refreshed=\"{}\">",
-        report.schema,
-        escape_xml_text(&report.handle),
-        escape_xml_text(&report.kind),
-        escape_xml_text(&report.path),
-        report.line_start,
-        report.line_end,
-        escape_xml_text(&report.source_hash),
-        escape_xml_text(&report.slice_hash),
-        if report.refreshed { "true" } else { "false" }
+        "kind: {} path: {} lines: {}-{}",
+        report.kind, report.path, report.line_start, report.line_end
     );
+    println!("source_hash: {}", report.source_hash);
+    println!("slice_hash: {}", report.slice_hash);
+    println!("refreshed: {}", report.refreshed);
     if let Some(symbol) = &report.symbol {
-        println!("  <symbol>{}</symbol>", escape_xml_text(symbol));
+        println!("symbol: {symbol}");
     }
-    println!("<code>");
+    println!("\ncode:");
     print!("{}", report.code);
-    println!("</code>");
-    println!("</view>");
 }

@@ -5,6 +5,7 @@ fn rank_task_slices(
     tokens: &std::collections::BTreeSet<String>,
     candidates: &[anchor::storage::SymbolEntry],
     limit: usize,
+    include_code: bool,
 ) -> Vec<TaskSlice> {
     use std::collections::BTreeSet;
 
@@ -17,10 +18,14 @@ fn rank_task_slices(
         .iter()
         .map(|symbol| symbol.path.as_str())
         .collect();
+    let allow_support_context = task_support_context_requested(tokens);
 
     let mut scored = Vec::new();
     for symbol in symbols {
         if looks_like_test_path(&symbol.path) || !is_context_owner_symbol(symbol) {
+            continue;
+        }
+        if is_support_context_path(&symbol.path) && !allow_support_context {
             continue;
         }
         if is_large_owner_symbol(symbol) {
@@ -69,19 +74,23 @@ fn rank_task_slices(
             continue;
         }
 
-        score += task_path_prior(&symbol.path);
+        score += task_path_prior(&symbol.path, tokens);
 
         if score <= 0 {
             continue;
         }
 
         dedupe_strings(&mut reasons);
-        let call_lines = store.call_lines_for_symbol(symbol);
-        let sliced = slice_code(&projection.text, &call_lines, symbol.line_start);
-        let code = if sliced.was_sliced {
-            sliced.code
+        let code = if include_code {
+            let call_lines = store.call_lines_for_symbol(symbol);
+            let sliced = slice_code(&projection.text, &call_lines, symbol.line_start);
+            if sliced.was_sliced {
+                sliced.code
+            } else {
+                numbered_code(&projection.text, symbol.line_start)
+            }
         } else {
-            numbered_code(&projection.text, symbol.line_start)
+            String::new()
         };
 
         scored.push(TaskSlice {
@@ -178,7 +187,10 @@ fn task_chunk_rank(
             token_matched = true;
         }
 
-        if symbol.features.iter().any(|feature| feature == token) {
+        if task_symbol_signal_tokens(symbol)
+            .iter()
+            .any(|feature| feature == token)
+        {
             reasons.push("feature_match".to_string());
             score += 35;
             token_matched = true;

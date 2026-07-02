@@ -3,9 +3,9 @@ struct QueryReport {
     schema: &'static str,
     intent: String,
     scoped_files: usize,
-    files: Vec<QueryFile>,
     chunks: Vec<QueryChunk>,
     tests: Vec<QueryTestFile>,
+    files: Vec<QueryFile>,
     next: Vec<String>,
 }
 

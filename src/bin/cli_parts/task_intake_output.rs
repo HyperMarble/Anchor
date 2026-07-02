@@ -41,7 +41,9 @@ fn print_task_intake_output(input: TaskIntakeOutput<'_>) -> Result<()> {
     println!(
         "  <step>Drill down with anchor context when the packet names a file but not the exact owner.</step>"
     );
-    println!("  <step>Edit through anchor edit/write when possible; run verification through anchor check before handoff.</step>");
+    println!(
+        "  <step>Legacy packet: use as optional context only; current core flow is execution contract, scoped patch, verification, and receipt.</step>"
+    );
     println!("</strategy>");
     println!("<scoped_files>{scoped_files}</scoped_files>");
 
