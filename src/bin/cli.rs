@@ -5,25 +5,14 @@
 //  Created by hak (tharun)
 //
 
-use anchor::cache::PersistentCache;
-use anchor::cli::{self, protect as cli_protect, write as cli_write, Cli, Commands};
+use anchor::cli::{self, protect as cli_protect, Cli, Commands};
 use anchor::events;
 use anchor::lock::lockd;
-use anchor::parser::language::is_indexable_text_path;
-use anchor::query::slice::slice_code;
-use anchor::storage::{
-    content_hash, AnchorStore, CallIndex, HistoryIndex, PathIndex, SymbolEntry, SymbolIndex,
-};
+use anchor::storage::AnchorStore;
 use anyhow::{bail, Result};
 use clap::Parser;
-use ignore::Walk;
-use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing_subscriber::EnvFilter;
-
-const TASK_PACKET_SCHEMA: &str = "anchor.task_packet";
-const TASK_WORKSPACE_CURRENT: &str = "current.json";
 
 fn main() {
     tracing_subscriber::fmt()
@@ -57,89 +46,6 @@ fn run(cli: Cli) -> Result<()> {
     };
 
     match command {
-        Commands::Build => cmd_build(&root),
-
-        Commands::Task {
-            intent,
-            limit,
-            context_limit,
-        } => cmd_task(&root, &intent, limit, context_limit),
-
-        Commands::Semantic {
-            intent,
-            limit,
-            context_limit,
-        } => cmd_semantic(&root, &intent, limit, context_limit),
-
-        Commands::Query { query, limit, json } => cmd_query(&root, &query, limit, json),
-
-        Commands::View {
-            handle,
-            around,
-            full,
-            json,
-        } => cmd_view(&root, &handle, around.as_deref(), full, json),
-
-        Commands::Context {
-            queries,
-            limit,
-            full,
-            bundle,
-        } => cmd_context(&root, &queries, limit, full, bundle),
-
-        Commands::Search { queries, limit } => cmd_search(&root, &queries, limit),
-
-        Commands::Map { scope } => cmd_map(&root, scope.as_deref()),
-
-        Commands::Write {
-            path,
-            content,
-            expect_hash,
-        } => cli_write::create(&root, &path, &content, expect_hash.as_deref()),
-
-        Commands::Edit {
-            path,
-            action,
-            pattern,
-            symbol,
-            content,
-            expect_hash,
-        } => {
-            if let Some(symbol) = symbol {
-                let content = content
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("symbol edit requires --content"))?;
-                return cli_write::replace_symbol(
-                    &root,
-                    &path,
-                    &symbol,
-                    content,
-                    expect_hash.as_deref(),
-                );
-            }
-
-            let action = action.ok_or_else(|| anyhow::anyhow!("edit requires --action"))?;
-            let pattern = pattern.ok_or_else(|| anyhow::anyhow!("edit requires --pattern"))?;
-            match action.as_str() {
-                "insert" => cli_write::insert(
-                    &root,
-                    &path,
-                    &pattern,
-                    content.as_deref().unwrap_or(""),
-                    expect_hash.as_deref(),
-                ),
-                "replace" => cli_write::replace(
-                    &root,
-                    &path,
-                    &pattern,
-                    content.as_deref().unwrap_or(""),
-                    expect_hash.as_deref(),
-                ),
-                "delete" => cli_write::replace(&root, &path, &pattern, "", expect_hash.as_deref()),
-                other => bail!("unknown edit action: {}", other),
-            }
-        }
-
         Commands::Protect { action } => cli_protect::run(&root, &action),
 
         Commands::Status => cmd_status(&root),
@@ -156,42 +62,11 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
-include!("cli_parts/build.rs");
 include!("cli_parts/history_store.rs");
-include!("cli_parts/index_refresh.rs");
-include!("cli_parts/task_index.rs");
-include!("cli_parts/task_index_helpers.rs");
-include!("cli_parts/context_packet.rs");
-include!("cli_parts/context.rs");
-include!("cli_parts/task_prepare.rs");
-include!("cli_parts/task_command.rs");
-include!("cli_parts/semantic_contract_terms.rs");
-include!("cli_parts/semantic_contract_paths.rs");
-include!("cli_parts/semantic_contract.rs");
-include!("cli_parts/semantic_docs.rs");
-include!("cli_parts/semantic_workspace.rs");
-include!("cli_parts/task_intake_output.rs");
-include!("cli_parts/task_intake_sections.rs");
-include!("cli_parts/map_git.rs");
+include!("cli_parts/repo_audit.rs");
 include!("cli_parts/status.rs");
 include!("cli_parts/gate.rs");
 include!("cli_parts/check.rs");
 include!("cli_parts/run.rs");
 include!("cli_parts/execroot.rs");
 include!("cli_parts/trace_print.rs");
-include!("cli_parts/task_tokens.rs");
-include!("cli_parts/task_symbol_rank.rs");
-include!("cli_parts/task_slices.rs");
-include!("cli_parts/task_path_helpers.rs");
-include!("cli_parts/task_packet.rs");
-include!("cli_parts/task_selection.rs");
-include!("cli_parts/task_print.rs");
-include!("cli_parts/verification_plan.rs");
-include!("cli_parts/query_handles.rs");
-include!("cli_parts/query_candidates.rs");
-include!("cli_parts/query_command.rs");
-include!("cli_parts/query_view_outline.rs");
-include!("cli_parts/query_view_blocks.rs");
-include!("cli_parts/query_view_owner.rs");
-include!("cli_parts/query_view_io.rs");
-include!("cli_parts/query_print.rs");

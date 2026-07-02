@@ -6,7 +6,6 @@
 //
 
 pub mod protect;
-pub mod write;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -48,148 +47,6 @@ Options:
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Legacy/experimental: build one compact task intake with symbols and test hints
-    #[command(hide = true)]
-    Task {
-        /// Natural-language task intent
-        intent: Vec<String>,
-
-        /// Max ranked symbols to inspect
-        #[arg(short, long, default_value = "8")]
-        limit: usize,
-
-        /// Max symbols to include with code in the packet
-        #[arg(short = 'c', long, default_value = "4")]
-        context_limit: usize,
-    },
-
-    /// Legacy/experimental: materialize a semantic task workspace under .anchor/semantic/current
-    #[command(hide = true)]
-    Semantic {
-        /// Natural-language task intent or compact ExecutionSpec-derived query
-        intent: Vec<String>,
-
-        /// Max ranked symbols to inspect
-        #[arg(short, long, default_value = "8")]
-        limit: usize,
-
-        /// Max owner chunks to expose in the semantic workspace
-        #[arg(short = 'c', long, default_value = "4")]
-        context_limit: usize,
-    },
-
-    /// Legacy/experimental: return likely files, chunks, tests, and exact handles
-    #[command(hide = true)]
-    Query {
-        /// Natural-language search or task intent
-        query: Vec<String>,
-
-        /// Max owner chunks to return
-        #[arg(short, long, default_value = "8")]
-        limit: usize,
-
-        /// Emit machine-readable JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Legacy/experimental: show verified current code for a query handle
-    #[command(alias = "read", hide = true)]
-    View {
-        /// Handle: file:<path>, test:<path>, or chunk:<path>#<symbol>@<start>-<end>
-        handle: String,
-
-        /// Scope output to blocks around this text
-        #[arg(long)]
-        around: Option<String>,
-
-        /// Show full output without line budget truncation
-        #[arg(short = 'F', long)]
-        full: bool,
-
-        /// Emit machine-readable JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Legacy/experimental: get symbol context (code + callers + callees)
-    #[command(hide = true)]
-    Context {
-        /// Symbol names to query (supports multiple)
-        queries: Vec<String>,
-
-        /// Max results per symbol
-        #[arg(short, long, default_value = "5")]
-        limit: usize,
-
-        /// Show full unsliced code
-        #[arg(short = 'F', long)]
-        full: bool,
-
-        /// Bundle call-index neighbors not yet shown in this output
-        #[arg(short = 'b', long)]
-        bundle: bool,
-    },
-
-    /// Legacy/experimental: search for symbols (lightweight: names, files, lines)
-    #[command(hide = true)]
-    Search {
-        /// Symbol names to search for (supports multiple)
-        queries: Vec<String>,
-
-        /// Max results
-        #[arg(short, long, default_value = "20")]
-        limit: usize,
-    },
-
-    /// Legacy/experimental: compact codebase map for AI agents
-    #[command(hide = true)]
-    Map {
-        /// Optional scope: zoom into specific module/directory
-        scope: Option<String>,
-    },
-
-    /// Legacy/experimental: create a file or overwrite a non-source file
-    #[command(hide = true)]
-    Write {
-        /// File path
-        path: String,
-
-        /// File content
-        content: String,
-
-        /// Required current file hash before writing. Use "missing" for new files.
-        #[arg(long)]
-        expect_hash: Option<String>,
-    },
-
-    /// Legacy/experimental: edit a file by pattern or indexed symbol
-    #[command(hide = true)]
-    Edit {
-        /// File path
-        path: String,
-
-        /// Action: insert, replace, delete
-        #[arg(short, long)]
-        action: Option<String>,
-
-        /// Pattern to match
-        #[arg(short, long)]
-        pattern: Option<String>,
-
-        /// Indexed symbol to replace
-        #[arg(short, long)]
-        symbol: Option<String>,
-
-        /// Content for insert/replace
-        #[arg(short, long)]
-        content: Option<String>,
-
-        /// Required current file hash before editing. Use "missing" for new files.
-        #[arg(long)]
-        expect_hash: Option<String>,
-    },
-
     /// Protect source files from raw writes: on, off, or status
     Protect {
         /// Action: on, off, status
@@ -231,9 +88,6 @@ pub enum Commands {
         command: Vec<String>,
     },
 
-    /// Internal/developer: materialize the .anchor representation
-    #[command(hide = true)]
-    Build,
 }
 
 /// Print usage help

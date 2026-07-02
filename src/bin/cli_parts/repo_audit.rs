@@ -1,48 +1,3 @@
-fn cmd_map(root: &Path, scope: Option<&str>) -> Result<()> {
-    let store = ensure_indexed_store(root)?;
-    let index = store.load_symbol_index()?;
-
-    // Group by top-level directory
-    use std::collections::BTreeMap;
-    let mut modules: BTreeMap<String, Vec<&anchor::storage::SymbolEntry>> = BTreeMap::new();
-
-    for sym in &index.symbols {
-        let module = sym.path.split('/').next().unwrap_or("root").to_string();
-        let entry = modules.entry(module).or_default();
-        if scope.map(|s| sym.path.contains(s)).unwrap_or(true) {
-            entry.push(sym);
-        }
-    }
-
-    println!("<map>");
-    for (module, syms) in &modules {
-        if syms.is_empty() {
-            continue;
-        }
-        let file_count = syms
-            .iter()
-            .map(|s| &s.path)
-            .collect::<std::collections::HashSet<_>>()
-            .len();
-        println!(
-            "  <module name=\"{module}\" files=\"{file_count}\" symbols=\"{}\">",
-            syms.len()
-        );
-        // Top 5 symbols by name length (proxy for importance/complexity)
-        let mut top: Vec<_> = syms.iter().take(5).collect();
-        top.sort_by_key(|s| s.name.len());
-        for sym in top.iter().rev() {
-            println!(
-                "    <symbol name=\"{}\" kind=\"{}\" file=\"{}\"/>",
-                sym.name, sym.kind, sym.path
-            );
-        }
-        println!("  </module>");
-    }
-    println!("</map>");
-    Ok(())
-}
-
 fn execution_summary(root: &Path, events: &[events::ExecutionEvent]) -> events::EventSummary {
     events::EventSummary::from_events(events).with_unrecorded_repo_changes(git_changed_paths(root))
 }
@@ -109,4 +64,3 @@ fn is_repo_audit_path(path: &str) -> bool {
     }
     true
 }
-
