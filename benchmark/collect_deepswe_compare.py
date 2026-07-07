@@ -21,7 +21,12 @@ def first_existing(paths: list[Path]) -> Path | None:
 
 
 def first_trial_result(job_dir: Path) -> dict[str, Any] | None:
-    for path in sorted([*job_dir.glob("*/result.json"), *job_dir.glob("**/results.json")]):
+    candidates = {
+        *job_dir.glob("*/result.json"),
+        *job_dir.glob("**/result.json"),
+        *job_dir.glob("**/results.json"),
+    }
+    for path in sorted(candidates):
         data = load_json(path)
         if data and ("task_name" in data or "trial_name" in data):
             return data
