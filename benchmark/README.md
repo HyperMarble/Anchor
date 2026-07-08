@@ -16,6 +16,9 @@ with local Ollama. It compares a raw human prompt against an Anchor-repaired
 prompt that includes verified project facts, likely files, risky assumptions,
 and checks to run.
 
+When `.anchor/product_memory.json` is present, the benchmark also reuses cached
+product-memory evidence, including repo instruction files such as `AGENTS.md`.
+
 For product design and the planned Rust CLI, see
 [Project-Aware Prompt Repair](../docs/prompt-repair.md).
 
