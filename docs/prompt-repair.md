@@ -18,6 +18,8 @@ What exists today:
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
   indexes when available
+- optional call-neighborhood routing from `.anchor/index/calls.json` when the
+  repo has been built with Anchor
 - local Ollama smoke testing for raw prompt vs repaired prompt
 
 What is not implemented yet:
@@ -169,7 +171,7 @@ Find likely targets using:
 - symbol index matches
 - BM25-style feature tokens
 - manifest/test-command evidence
-- optional call-neighborhood hints from `calls.json`
+- optional call-neighborhood hints from `.anchor/index/calls.json`
 
 Each target should carry an evidence label:
 

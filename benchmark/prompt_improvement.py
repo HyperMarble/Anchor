@@ -124,6 +124,8 @@ class ProjectProfile:
     manifest_files: list[str]
     test_commands: list[str]
     symbols: list[str]
+    symbol_paths: dict[str, list[str]]
+    call_index: dict[str, list[str]]
 
 
 @dataclass
@@ -251,28 +253,39 @@ def detect_manifest_files(root: Path) -> list[str]:
     return [file for file in candidates if (root / file).exists()]
 
 
-def load_anchor_index(root: Path) -> tuple[list[str], list[str]]:
+def append_symbol_path(mapping: dict[str, list[str]], symbol_name: str, path: str) -> None:
+    key = symbol_name.lower()
+    paths = mapping.setdefault(key, [])
+    if path not in paths:
+        paths.append(path)
+
+
+def load_anchor_index(root: Path) -> tuple[list[str], list[str], dict[str, list[str]]]:
     """Use Anchor's generated symbol index when this repo has been built."""
     path = root / ".anchor" / "index" / "symbols.json"
     if not path.exists():
-        return [], []
+        return [], [], {}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return [], []
+        return [], [], {}
 
     indexed_files: set[str] = set()
     symbols: list[str] = []
+    symbol_paths: dict[str, list[str]] = {}
     for item in data.get("symbols", []):
         name = item.get("name")
         file = item.get("path")
         if isinstance(name, str) and isinstance(file, str):
             indexed_files.add(file)
             symbols.append(f"{name} ({file})")
-    return sorted(indexed_files), symbols[:120]
+            append_symbol_path(symbol_paths, name, file)
+    return sorted(indexed_files), symbols[:120], symbol_paths
 
 
-def extract_symbols(root: Path, files: list[Path], limit: int = 120) -> list[str]:
+def extract_symbols(
+    root: Path, files: list[Path], limit: int = 120
+) -> tuple[list[str], dict[str, list[str]]]:
     patterns = [
         re.compile(r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"),
         re.compile(r"^\s*(?:pub\s+)?(?:struct|enum|trait)\s+([A-Za-z_][A-Za-z0-9_]*)"),
@@ -281,6 +294,7 @@ def extract_symbols(root: Path, files: list[Path], limit: int = 120) -> list[str
         re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)"),
     ]
     symbols: list[str] = []
+    symbol_paths: dict[str, list[str]] = {}
     for rel in files:
         if rel.suffix not in {".rs", ".go", ".py", ".js", ".ts", ".tsx"}:
             continue
@@ -292,11 +306,37 @@ def extract_symbols(root: Path, files: list[Path], limit: int = 120) -> list[str
             for pattern in patterns:
                 match = pattern.search(line)
                 if match:
-                    symbols.append(f"{match.group(1)} ({rel.as_posix()})")
+                    symbol_name = match.group(1)
+                    rel_path = rel.as_posix()
+                    symbols.append(f"{symbol_name} ({rel_path})")
+                    append_symbol_path(symbol_paths, symbol_name, rel_path)
                     break
             if len(symbols) >= limit:
-                return symbols
-    return symbols
+                return symbols, symbol_paths
+    return symbols, symbol_paths
+
+
+def load_call_index(root: Path) -> dict[str, list[str]]:
+    path = root / ".anchor" / "index" / "calls.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    raw_calls = data.get("calls", {})
+    if not isinstance(raw_calls, dict):
+        return {}
+
+    call_index: dict[str, list[str]] = {}
+    for caller, callees in raw_calls.items():
+        if not isinstance(caller, str) or not isinstance(callees, list):
+            continue
+        normalized = [callee for callee in callees if isinstance(callee, str) and callee.strip()]
+        if normalized:
+            call_index[caller.lower()] = normalized
+    return call_index
 
 
 def split_tokens(text: str) -> set[str]:
@@ -311,7 +351,7 @@ def split_tokens(text: str) -> set[str]:
 
 def build_profile(root: Path) -> ProjectProfile:
     files = repo_files(root)
-    indexed_files, indexed_symbols = load_anchor_index(root)
+    indexed_files, indexed_symbols, indexed_symbol_paths = load_anchor_index(root)
     language_counts = Counter(
         LANG_BY_EXT[path.suffix] for path in files if path.suffix in LANG_BY_EXT
     )
@@ -331,6 +371,7 @@ def build_profile(root: Path) -> ProjectProfile:
         ]
         if (root / file).exists()
     ]
+    extracted_symbols, extracted_symbol_paths = extract_symbols(root, files)
     return ProjectProfile(
         root=str(root),
         languages=[name for name, _ in language_counts.most_common(8)],
@@ -339,7 +380,9 @@ def build_profile(root: Path) -> ProjectProfile:
         indexed_files=indexed_files,
         manifest_files=detect_manifest_files(root),
         test_commands=detect_test_commands(root),
-        symbols=indexed_symbols or extract_symbols(root, files),
+        symbols=indexed_symbols or extracted_symbols,
+        symbol_paths=indexed_symbol_paths or extracted_symbol_paths,
+        call_index=load_call_index(root),
     )
 
 
@@ -370,6 +413,7 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
     hits: list[TargetHint] = []
     prompt_tokens = split_tokens(prompt)
     candidate_files = sorted(set(profile.key_files + profile.indexed_files))
+    matched_symbols: set[str] = set()
 
     for file in candidate_files:
         overlap = sorted(prompt_tokens & split_tokens(file))
@@ -385,7 +429,32 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
     for symbol in profile.symbols:
         name = symbol.split(" ", 1)[0].lower()
         if len(name) > 3 and name in text:
+            matched_symbols.add(name)
             hits.append(TargetHint(symbol, f"prompt mentions symbol-like term {name!r}"))
+    for name in sorted(matched_symbols):
+        for path in profile.symbol_paths.get(name, []):
+            hits.append(TargetHint(path, f"verified: symbol {name!r} is defined here"))
+        for callee in profile.call_index.get(name, [])[:4]:
+            for path in profile.symbol_paths.get(callee.lower(), []):
+                hits.append(
+                    TargetHint(
+                        path,
+                        f"verified: {name!r} calls symbol {callee!r} in this file",
+                    )
+                )
+        callers = [
+            caller
+            for caller, callees in profile.call_index.items()
+            if any(callee.lower() == name for callee in callees)
+        ]
+        for caller in callers[:4]:
+            for path in profile.symbol_paths.get(caller.lower(), []):
+                hits.append(
+                    TargetHint(
+                        path,
+                        f"verified: symbol {caller!r} calls matched symbol {name!r}",
+                    )
+                )
     if any(word in text for word in ["lock", "locks", "agent", "agents", "same file"]):
         for path, reason in [
             ("src/cli/write.rs", "write path acquires file/symbol locks"),

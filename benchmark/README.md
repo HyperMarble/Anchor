@@ -13,8 +13,9 @@ Current goal:
 
 `benchmark/prompt_improvement.py` tests the project-aware prompt-repair idea
 with local Ollama. It compares a raw human prompt against an Anchor-repaired
-prompt that includes verified project facts, likely files, risky assumptions,
-and checks to run.
+prompt that includes verified project facts, likely files, optional
+call-neighborhood hints from `.anchor/index/calls.json`, risky assumptions, and
+checks to run.
 
 For product design and the planned Rust CLI, see
 [Project-Aware Prompt Repair](../docs/prompt-repair.md).
