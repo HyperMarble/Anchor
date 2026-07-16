@@ -136,7 +136,8 @@ Suggested fields:
   "top_modules": ["src/cli", "src/lock", "src/storage", "lockd"],
   "frameworks_present": [],
   "frameworks_absent": ["express", "jest", "react", "next"],
-  "entrypoints": ["src/bin/cli.rs", "lockd/main.go"]
+  "entrypoints": ["src/bin/cli.rs", "lockd/main.go"],
+  "instruction_files": ["AGENTS.md", ".github/copilot-instructions.md"]
 }
 ```
 
@@ -187,6 +188,7 @@ Render a task brief with:
 - original prompt
 - what Anchor changed
 - verified project facts
+- repo-local instruction files or agent rules
 - likely files/symbols
 - assumptions to avoid
 - checks to run
