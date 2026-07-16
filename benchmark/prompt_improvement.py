@@ -124,6 +124,13 @@ class ProjectProfile:
     manifest_files: list[str]
     test_commands: list[str]
     symbols: list[str]
+    product_memory: list["ProductMemoryFact"]
+
+
+@dataclass(frozen=True)
+class ProductMemoryFact:
+    source: str
+    fact: str
 
 
 @dataclass
@@ -251,6 +258,208 @@ def detect_manifest_files(root: Path) -> list[str]:
     return [file for file in candidates if (root / file).exists()]
 
 
+def load_product_memory(root: Path) -> list[ProductMemoryFact]:
+    cached = load_cached_product_memory(root)
+    if cached:
+        return cached
+    return extract_product_memory(root)
+
+
+def load_cached_product_memory(root: Path) -> list[ProductMemoryFact]:
+    path = root / ".anchor" / "product_memory.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    facts: list[ProductMemoryFact] = []
+    for item in data.get("facts", []):
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        fact = item.get("fact")
+        if not isinstance(source, str) or not isinstance(fact, str):
+            continue
+        normalized = normalize_product_fact(fact)
+        if normalized and product_fact_paths_exist(root, normalized):
+            facts.append(ProductMemoryFact(source=source, fact=normalized))
+    return dedupe_product_memory(facts)
+
+
+def extract_product_memory(root: Path) -> list[ProductMemoryFact]:
+    facts: list[ProductMemoryFact] = []
+    for source in ("README.md", "docs/prompt-repair.md", "Cargo.toml"):
+        path = root / source
+        try:
+            contents = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        if source.endswith(".toml"):
+            candidates = manifest_fact_candidates(contents)
+        else:
+            candidates = markdown_fact_candidates(contents)
+        facts.extend(
+            ProductMemoryFact(source=source, fact=fact)
+            for fact in candidates
+            if product_fact_paths_exist(root, fact)
+        )
+
+    return dedupe_product_memory(facts)
+
+
+def dedupe_product_memory(facts: Iterable[ProductMemoryFact]) -> list[ProductMemoryFact]:
+    seen: set[tuple[str, str]] = set()
+    deduped: list[ProductMemoryFact] = []
+    for fact in facts:
+        key = (fact.source, fact.fact)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(fact)
+    deduped.sort(
+        key=lambda fact: (
+            -product_memory_rank(fact),
+            fact.source,
+            fact.fact,
+        )
+    )
+    return deduped[:8]
+
+
+def product_memory_rank(fact: ProductMemoryFact) -> int:
+    score = {
+        "docs/prompt-repair.md": 40,
+        "README.md": 30,
+        "Cargo.toml": 20,
+    }.get(fact.source, 0)
+    text = fact.fact.lower()
+    weighted_terms = (
+        ("prompt repair", 25),
+        ("repo-grounded", 15),
+        ("repository", 12),
+        ("prompt", 10),
+        ("repair", 10),
+        ("memory", 8),
+        ("context", 6),
+        ("check", 4),
+        ("anchor", 3),
+    )
+    for term, weight in weighted_terms:
+        if term in text:
+            score += weight
+    return score
+
+
+def markdown_fact_candidates(contents: str) -> list[str]:
+    facts: list[str] = []
+    paragraph: list[str] = []
+    in_code_block = False
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        if not paragraph:
+            return
+        normalized = normalize_product_fact(" ".join(paragraph))
+        if normalized:
+            facts.append(normalized)
+        paragraph = []
+
+    for line in contents.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("```"):
+            flush_paragraph()
+            in_code_block = not in_code_block
+            continue
+        if in_code_block:
+            continue
+        if not trimmed:
+            flush_paragraph()
+            continue
+        if trimmed.startswith("#"):
+            flush_paragraph()
+            continue
+        bullet = trimmed.removeprefix("- ").removeprefix("* ")
+        if bullet != trimmed:
+            flush_paragraph()
+            normalized = normalize_product_fact(bullet)
+            if normalized:
+                facts.append(normalized)
+            continue
+        paragraph.append(trimmed)
+
+    flush_paragraph()
+    return facts
+
+
+def manifest_fact_candidates(contents: str) -> list[str]:
+    facts: list[str] = []
+    for line in contents.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("description = "):
+            description = trimmed.split("=", 1)[1].strip().strip('"')
+            normalized = normalize_product_fact(
+                f"Cargo package description: {description}"
+            )
+            if normalized:
+                facts.append(normalized)
+        elif trimmed.startswith("keywords = ["):
+            keywords = trimmed.split("[", 1)[1].rstrip("]").replace('"', "").strip()
+            normalized = normalize_product_fact(
+                f"Cargo package keywords: {keywords}"
+            )
+            if normalized:
+                facts.append(normalized)
+    return facts
+
+
+def normalize_product_fact(text: str) -> str | None:
+    normalized = " ".join(text.split())
+    if len(normalized) < 24:
+        return None
+
+    first_sentence = normalized.split(". ", 1)[0].strip().rstrip(".")
+    fact = first_sentence if len(first_sentence) >= 24 else normalized
+    if fact.endswith(":"):
+        return None
+    if len(fact) > 180:
+        fact = fact[:177].rstrip() + "..."
+
+    return fact if is_product_fact(fact.lower()) else None
+
+
+def is_product_fact(text: str) -> bool:
+    keywords = (
+        "anchor",
+        "prompt",
+        "repair",
+        "repo",
+        "repository",
+        "memory",
+        "context",
+        "benchmark",
+        "cli",
+        "index",
+    )
+    phrases = ("coding agent", "coding agents", "agent context", "agent handoff")
+    return any(keyword in text for keyword in keywords) or any(
+        phrase in text for phrase in phrases
+    )
+
+
+def product_fact_paths_exist(root: Path, fact: str) -> bool:
+    top_dirs = {path.name for path in root.iterdir() if path.is_dir()}
+    for path in extract_path_mentions(fact):
+        normalized = normalize_path_mention(path)
+        if not looks_like_repo_path(normalized, top_dirs):
+            continue
+        if not (root / normalized).exists():
+            return False
+    return True
+
+
 def load_anchor_index(root: Path) -> tuple[list[str], list[str]]:
     """Use Anchor's generated symbol index when this repo has been built."""
     path = root / ".anchor" / "index" / "symbols.json"
@@ -340,6 +549,7 @@ def build_profile(root: Path) -> ProjectProfile:
         manifest_files=detect_manifest_files(root),
         test_commands=detect_test_commands(root),
         symbols=indexed_symbols or extract_symbols(root, files),
+        product_memory=load_product_memory(root),
     )
 
 
@@ -436,6 +646,8 @@ def prompt_risks(prompt: str) -> list[str]:
 
 
 def project_description(profile: ProjectProfile) -> str:
+    if profile.product_memory:
+        return profile.product_memory[0].fact
     facts: list[str] = []
     if "Cargo.toml" in profile.manifest_files:
         facts.append("Rust crate or workspace")
@@ -448,6 +660,15 @@ def project_description(profile: ProjectProfile) -> str:
     if facts:
         return human_join(facts)
     return f"repository named {Path(profile.root).name} with detected files listed below"
+
+
+def render_product_memory(profile: ProjectProfile) -> str:
+    if not profile.product_memory:
+        return "- No cached or extracted product-memory evidence was detected."
+    return "\n".join(
+        f"- {item.fact} (source: {item.source})"
+        for item in profile.product_memory[:4]
+    )
 
 
 def brief_quality(
@@ -478,11 +699,19 @@ def brief_quality(
 
 
 def change_summary(
-    targets: list[TargetHint], assumptions: list[str], risks: list[str], checks: list[str]
+    targets: list[TargetHint],
+    assumptions: list[str],
+    risks: list[str],
+    checks: list[str],
+    product_memory: list[ProductMemoryFact],
 ) -> list[str]:
     changes: list[str] = []
     if targets:
         changes.append(f"added {len(targets)} verified/inferred target hint(s)")
+    if product_memory:
+        changes.append(
+            f"attached {min(len(product_memory), 4)} product-memory fact(s) with source evidence"
+        )
     if assumptions:
         changes.append(f"flagged {len(assumptions)} project assumption warning(s)")
     if risks:
@@ -545,12 +774,20 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
     risk_text = "\n".join(f"- {item}" for item in risks) or "- No direct prompt-control or destructive wording detected."
     command_text = "\n".join(f"- {cmd}" for cmd in profile.test_commands) or "- No test command detected."
     changes_text = "\n".join(
-        f"- {item}" for item in change_summary(targets, assumptions, risks, profile.test_commands)
+        f"- {item}"
+        for item in change_summary(
+            targets,
+            assumptions,
+            risks,
+            profile.test_commands,
+            profile.product_memory,
+        )
     )
     guidance_text = "\n".join(f"- {item}" for item in guidance) or "- No extra project-specific guidance inferred."
     language_text = ", ".join(profile.languages) or "unknown"
     key_file_text = "\n".join(f"- {file}" for file in profile.key_files[:10])
     manifest_text = "\n".join(f"- {file}" for file in profile.manifest_files) or "- No package or build manifests detected."
+    product_memory_text = render_product_memory(profile)
     project_text = project_description(profile)
 
     return f"""Task Brief
@@ -568,6 +805,9 @@ Project facts verified from this repository:
 {manifest_text}
 - Important files:
 {key_file_text}
+
+Product memory evidence:
+{product_memory_text}
 
 Likely target areas:
 {target_text}
