@@ -18,6 +18,8 @@ What exists today:
 - prompt cases in `benchmark/prompt_cases.example.jsonl`
 - deterministic repo profiling from files, manifests, symbols, and `.anchor`
   indexes when available
+- benchmark reuse of cached `.anchor/product_memory.json` instruction evidence
+  when present
 - local Ollama smoke testing for raw prompt vs repaired prompt
 
 What is not implemented yet:
