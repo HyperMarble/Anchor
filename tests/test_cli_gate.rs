@@ -70,7 +70,10 @@ fn cli_gate_passes_clean_execution_state() {
 
     let stdout = String::from_utf8_lossy(&gate.stdout);
     assert!(stdout.contains("<score>100</score>"), "{stdout}");
-    assert!(stdout.contains("<handoff_ready>true</handoff_ready>"), "{stdout}");
+    assert!(
+        stdout.contains("<handoff_ready>true</handoff_ready>"),
+        "{stdout}"
+    );
     assert!(stdout.contains("<status>ok</status>"), "{stdout}");
 }
 
@@ -89,8 +92,14 @@ fn cli_gate_blocks_unrecorded_repo_changes() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&gate.stdout);
-    assert!(!gate.status.success(), "gate must fail raw change: {stdout}");
-    assert!(stdout.contains("<unreceipted_file>src.py</unreceipted_file>"), "{stdout}");
+    assert!(
+        !gate.status.success(),
+        "gate must fail raw change: {stdout}"
+    );
+    assert!(
+        stdout.contains("<unreceipted_file>src.py</unreceipted_file>"),
+        "{stdout}"
+    );
     assert!(stdout.contains("<status>failed</status>"), "{stdout}");
 }
 
@@ -118,7 +127,10 @@ fn cli_gate_blocks_unresolved_failed_check() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&gate.stdout);
-    assert!(!gate.status.success(), "gate must fail failed check: {stdout}");
+    assert!(
+        !gate.status.success(),
+        "gate must fail failed check: {stdout}"
+    );
     assert!(
         stdout.contains("<handoff_blocker reason=\"unresolved_failed_check\">"),
         "{stdout}"

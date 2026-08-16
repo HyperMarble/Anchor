@@ -87,7 +87,6 @@ pub enum Commands {
         #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
-
 }
 
 /// Print usage help
