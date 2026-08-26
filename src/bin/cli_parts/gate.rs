@@ -1,7 +1,7 @@
 fn cmd_receipt(root: &Path) -> Result<()> {
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
-    let summary = execution_summary(root, &events);
+    let summary = execution_summary(root, &events)?;
     let quality = summary.quality_profile();
     let receipt = serde_json::json!({
         "schema": "anchor.receipt.v1",
@@ -88,7 +88,7 @@ fn handoff_state(summary: &events::EventSummary) -> HandoffState {
 fn cmd_gate(root: &Path, min_score: u8) -> Result<()> {
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
-    let summary = execution_summary(root, &events);
+    let summary = execution_summary(root, &events)?;
     let quality = summary.quality_profile();
     let handoff = handoff_state(&summary);
 

@@ -36,7 +36,7 @@ fn cmd_check(root: &Path, command: &[String]) -> Result<()> {
         meta,
     );
     let events_after = events::load(store.anchor_root())?;
-    let summary = execution_summary(root, &events_after);
+    let summary = execution_summary(root, &events_after)?;
     let handoff = handoff_state(&summary);
     let defer_handoff = is_action_workspace(root);
 

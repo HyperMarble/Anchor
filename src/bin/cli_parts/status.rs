@@ -1,7 +1,7 @@
 fn cmd_status(root: &Path) -> Result<()> {
     let store = open_store(root)?;
     let events = events::load(store.anchor_root())?;
-    let summary = execution_summary(root, &events);
+    let summary = execution_summary(root, &events)?;
     let quality = summary.quality_profile();
 
     println!("<status>");
