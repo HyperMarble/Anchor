@@ -1,4 +1,4 @@
-// Unix socket accept loop — spawns one goroutine per connection.
+// Local IPC accept loop — spawns one goroutine per connection.
 package main
 
 import (

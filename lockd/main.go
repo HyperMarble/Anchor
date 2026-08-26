@@ -1,11 +1,10 @@
-// anchor-lockd: symbol-level write lock daemon over Unix socket.
+// anchor-lockd: symbol-level write lock daemon over local IPC.
 package main
 
 import (
 	"context"
 	"flag"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,22 +13,17 @@ import (
 )
 
 func main() {
-	socketPath := flag.String("socket", "/tmp/anchor.lock.sock", "Unix socket path")
-	statePath := flag.String("state", "/tmp/anchor.lockd.state.json", "lock state snapshot path (empty disables persistence)")
+	endpoint := flag.String("socket", defaultEndpoint(), "local IPC endpoint (Unix socket or Windows named pipe)")
+	statePath := flag.String("state", defaultStatePath(), "lock state snapshot path (empty disables persistence)")
 	flag.Parse()
 
-	os.Remove(*socketPath) // clean up any leftover socket from previous run
-
-	ln, err := net.Listen("unix", *socketPath)
+	ln, cleanupEndpoint, err := listenEndpoint(*endpoint)
 	if err != nil {
 		log.Fatalf("listen: %v", err)
 	}
-	if err := os.Chmod(*socketPath, 0600); err != nil {
-		log.Fatalf("chmod socket: %v", err)
-	}
-	defer os.Remove(*socketPath)
+	defer cleanupEndpoint()
 
-	log.Printf("anchor-lockd listening on %s", *socketPath)
+	log.Printf("anchor-lockd listening on %s", *endpoint)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
