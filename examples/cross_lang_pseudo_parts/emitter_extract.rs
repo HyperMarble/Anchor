@@ -1,4 +1,4 @@
-impl<'a> Emitter<'a> {
+impl Emitter<'_> {
     fn fn_name(&self, node: Node) -> String {
         let mut c = node.walk();
         for ch in node.children(&mut c) {
@@ -11,7 +11,7 @@ impl<'a> Emitter<'a> {
 
     fn cpp_fn_name(&self, node: Node) -> String {
         // C++: function_definition → pointer_declarator → function_declarator → identifier
-        fn find_fn_name<'t>(emitter: &Emitter, node: Node<'t>) -> Option<String> {
+        fn find_fn_name(emitter: &Emitter, node: Node<'_>) -> Option<String> {
             let mut c = node.walk();
             for ch in node.children(&mut c) {
                 if ch.kind() == "identifier" {
