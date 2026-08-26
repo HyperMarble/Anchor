@@ -2,53 +2,58 @@ package tests
 
 import (
 	"encoding/json"
-	"fmt"
-	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
-// startDaemon builds and starts anchor-lockd, returns the socket path and a cleanup func.
-func startDaemon(t *testing.T) (socketPath string, cleanup func()) {
+// startDaemon builds and starts anchor-lockd, returning its platform endpoint.
+func startDaemon(t *testing.T) (endpoint string, cleanup func()) {
 	t.Helper()
-	bin := "/tmp/anchor-lockd"
-	if _, err := os.Stat(bin); err != nil {
-		build := exec.Command("go", "build", "-o", bin, ".")
-		build.Dir = "/Volumes/Hak_SSD/Anchor/lockd"
-		if out, err := build.CombinedOutput(); err != nil {
-			t.Skipf("could not build anchor-lockd: %v\n%s", err, out)
-		}
+	bin := filepath.Join(t.TempDir(), "anchor-lockd"+testBinarySuffix())
+	build := exec.Command("go", "build", "-o", bin, ".")
+	build.Dir = ".."
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("could not build anchor-lockd: %v\n%s", err, out)
 	}
 
-	sock := fmt.Sprintf("/tmp/anchor-lockd-test-%d.sock", os.Getpid())
-	cmd := exec.Command(bin, "--socket", sock)
+	endpoint = testEndpoint(t)
+	cmd := exec.Command(bin, "--socket", endpoint, "--state", "")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start daemon: %v", err)
 	}
 
-	// wait for socket to appear
 	deadline := time.Now().Add(2 * time.Second)
+	ready := false
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(sock); err == nil {
+		conn, err := dialEndpoint(endpoint, 50*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			ready = true
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	if !ready {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("daemon did not become ready at %s", endpoint)
+	}
 
-	return sock, func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-		os.Remove(sock)
+	return endpoint, func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		cleanupTestEndpoint(endpoint)
 	}
 }
 
-func send(t *testing.T, sock string, req map[string]any) map[string]any {
+func send(t *testing.T, endpoint string, req map[string]any) map[string]any {
 	t.Helper()
-	conn, err := net.Dial("unix", sock)
+	conn, err := dialEndpoint(endpoint, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
