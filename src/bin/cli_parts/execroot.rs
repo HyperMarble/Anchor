@@ -134,6 +134,74 @@ fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn copy_symlink(source: &Path, target: &Path) -> Result<()> {
+    copy_windows_symlink(source, target)
+}
+
+#[cfg(windows)]
+fn copy_windows_symlink(source: &Path, target: &Path) -> Result<()> {
+    let metadata = std::fs::metadata(source)?;
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let link_target = std::fs::read_link(source)?;
+    let link_result = if metadata.is_dir() {
+        std::os::windows::fs::symlink_dir(&link_target, target)
+    } else {
+        std::os::windows::fs::symlink_file(&link_target, target)
+    };
+
+    if link_result.is_ok() {
+        return Ok(());
+    }
+
+    // Creating symlinks requires Developer Mode or SeCreateSymbolicLinkPrivilege
+    // on many Windows installations. Execroot must not silently omit content,
+    // so dereference the link when it cannot be recreated.
+    if metadata.is_dir() {
+        copy_dereferenced_dir(source, target)?;
+    } else {
+        std::fs::copy(source, target)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn copy_dereferenced_dir(source: &Path, target: &Path) -> Result<()> {
+    fn copy_inner(
+        source: &Path,
+        target: &Path,
+        ancestors: &mut std::collections::BTreeSet<std::path::PathBuf>,
+    ) -> Result<()> {
+        let canonical = source.canonicalize()?;
+        if !ancestors.insert(canonical.clone()) {
+            bail!(
+                "cannot dereference cyclic Windows directory symlink at {}",
+                source.display()
+            );
+        }
+
+        std::fs::create_dir_all(target)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            let source_path = entry.path();
+            let target_path = target.join(entry.file_name());
+            let metadata = std::fs::metadata(&source_path)?;
+            if metadata.is_dir() {
+                copy_inner(&source_path, &target_path, ancestors)?;
+            } else if metadata.is_file() {
+                std::fs::copy(&source_path, &target_path)?;
+            }
+        }
+        ancestors.remove(&canonical);
+        Ok(())
+    }
+
+    let mut ancestors = std::collections::BTreeSet::new();
+    copy_inner(source, target, &mut ancestors)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn copy_windows_symlink(source: &Path, target: &Path) -> Result<()> {
     let metadata = std::fs::metadata(source)?;
     if metadata.is_file() {
         if let Some(parent) = target.parent() {
@@ -175,7 +243,8 @@ fn execroot_changed_paths(execroot: &Path) -> Result<Vec<String>> {
         .arg("-C")
         .arg(execroot)
         .arg("status")
-        .arg("--porcelain")
+        .arg("--porcelain=v1")
+        .arg("-z")
         .arg("--untracked-files=all")
         .output()?;
     if !output.status.success() {
@@ -185,19 +254,11 @@ fn execroot_changed_paths(execroot: &Path) -> Result<Vec<String>> {
         );
     }
     let mut paths = std::collections::BTreeSet::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        if line.len() < 4 {
+    for path in git_status_paths(&output.stdout) {
+        if path.starts_with(".anchor/") {
             continue;
         }
-        let path = line[3..].trim();
-        if path.is_empty() || path.starts_with(".anchor/") {
-            continue;
-        }
-        if let Some((_, new_path)) = path.split_once(" -> ") {
-            paths.insert(new_path.to_string());
-        } else {
-            paths.insert(path.to_string());
-        }
+        paths.insert(path);
     }
     Ok(paths.into_iter().collect())
 }
