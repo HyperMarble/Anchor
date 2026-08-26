@@ -1,20 +1,22 @@
 use std::process::Command;
 
+#[path = "test_cli_support.rs"]
+mod support;
+
 #[test]
 fn cli_trace_prints_recent_execution_events() {
     let dir = tempfile::tempdir().unwrap();
     let anchor = env!("CARGO_BIN_EXE_anchor");
+    let script = support::print_text("traced");
 
-    let check = Command::new(anchor)
+    let mut check_cmd = Command::new(anchor);
+    check_cmd
         .arg("--root")
         .arg(dir.path())
         .arg("check")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("printf traced")
-        .output()
-        .unwrap();
+        .arg("--");
+    script.apply(&mut check_cmd);
+    let check = check_cmd.output().unwrap();
     assert!(
         check.status.success(),
         "check failed: {}",
@@ -43,7 +45,10 @@ fn cli_trace_prints_recent_execution_events() {
     assert!(stdout.contains("type=\"check.run\""), "{stdout}");
     assert!(stdout.contains("status=\"ok\""), "{stdout}");
     assert!(
-        stdout.contains("<message>exit=0 cmd=sh -c printf traced</message>"),
+        stdout.contains(&format!(
+            "<message>exit=0 cmd={}</message>",
+            script.recorded_text()
+        )),
         "{stdout}"
     );
 }

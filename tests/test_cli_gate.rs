@@ -1,52 +1,9 @@
 use std::fs;
 use std::process::Command;
 
-fn init_git_repo(path: &std::path::Path) {
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("init")
-        .arg("-q")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("config")
-        .arg("user.email")
-        .arg("anchor-test@example.invalid")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("config")
-        .arg("user.name")
-        .arg("Anchor Test")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("add")
-        .arg("-A")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("commit")
-        .arg("-q")
-        .arg("-m")
-        .arg("base")
-        .status()
-        .unwrap()
-        .success());
-}
+#[path = "test_cli_support.rs"]
+mod support;
+use support::init_git_repo;
 
 #[test]
 fn cli_gate_passes_clean_execution_state() {
@@ -108,16 +65,14 @@ fn cli_gate_blocks_unresolved_failed_check() {
     let dir = tempfile::tempdir().unwrap();
     let anchor = env!("CARGO_BIN_EXE_anchor");
 
-    let check = Command::new(anchor)
+    let mut check_cmd = Command::new(anchor);
+    check_cmd
         .arg("--root")
         .arg(dir.path())
         .arg("check")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("exit 7")
-        .output()
-        .unwrap();
+        .arg("--");
+    support::exit_with(7).apply(&mut check_cmd);
+    let check = check_cmd.output().unwrap();
     assert!(!check.status.success());
 
     let gate = Command::new(anchor)
