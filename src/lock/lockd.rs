@@ -2,20 +2,20 @@
 //  lockd.rs
 //  Anchor
 //
-//  Client for anchor-lockd Unix socket daemon.
+//  Client for the anchor-lockd local IPC daemon.
 //  Tries lockd first; callers fall back to in-process LockManager if unavailable.
 //
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+#[cfg(unix)]
 const SOCKET_PATH: &str = "/tmp/anchor.lock.sock";
 const TIMEOUT: Duration = Duration::from_millis(500);
 const AGENT_ID_ENV: &str = "ANCHOR_AGENT_ID";
 const SOCKET_PATH_ENV: &str = "ANCHOR_LOCKD_SOCKET";
+const MAX_RESPONSE_SIZE: u64 = 1 << 20;
 
 static AGENT_ID: OnceLock<String> = OnceLock::new();
 static WORKSPACE_AGENT_ID: OnceLock<String> = OnceLock::new();
@@ -28,18 +28,7 @@ pub enum LockdResult {
 }
 
 fn send(req: serde_json::Value) -> Option<serde_json::Value> {
-    let mut stream = UnixStream::connect(socket_path()).ok()?;
-    stream.set_read_timeout(Some(TIMEOUT)).ok()?;
-    stream.set_write_timeout(Some(TIMEOUT)).ok()?;
-
-    let mut line = req.to_string();
-    line.push('\n');
-    stream.write_all(line.as_bytes()).ok()?;
-
-    let mut reader = BufReader::new(stream);
-    let mut resp = String::new();
-    reader.read_line(&mut resp).ok()?;
-    serde_json::from_str(resp.trim()).ok()
+    transport::send(endpoint(), req, TIMEOUT)
 }
 
 /// Owner used for lockd requests from this CLI session.
@@ -78,7 +67,7 @@ fn workspace_agent_id(root: &Path) -> String {
         .unwrap_or_else(|_| root.to_path_buf())
         .to_string_lossy()
         .to_string();
-    let user = std::env::var("USER").unwrap_or_else(|_| "local".to_string());
+    let user = current_user();
     normalize_agent_id(&format!(
         "anchor-{user}-{:016x}",
         stable_hash(root.as_bytes())
@@ -183,11 +172,110 @@ pub fn release_for_agent(symbol: &str, path: &str, agent: &str) {
 
 /// Check if lockd is reachable.
 pub fn is_available() -> bool {
-    UnixStream::connect(socket_path()).is_ok()
+    transport::is_available(endpoint(), TIMEOUT)
 }
 
-fn socket_path() -> String {
-    std::env::var(SOCKET_PATH_ENV).unwrap_or_else(|_| SOCKET_PATH.to_string())
+fn endpoint() -> String {
+    std::env::var(SOCKET_PATH_ENV).unwrap_or_else(|_| default_endpoint())
+}
+
+#[cfg(unix)]
+fn default_endpoint() -> String {
+    SOCKET_PATH.to_string()
+}
+
+#[cfg(windows)]
+fn default_endpoint() -> String {
+    let user = normalize_agent_id(&current_user()).unwrap_or_else(|| "local".to_string());
+    format!(r"\\.\pipe\anchor-lockd-{user}")
+}
+
+fn current_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "local".to_string())
+}
+
+#[cfg(unix)]
+mod transport {
+    use super::MAX_RESPONSE_SIZE;
+    use serde_json::Value;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::unix::net::UnixStream;
+    use std::time::Duration;
+
+    pub(super) fn send(endpoint: String, req: Value, timeout: Duration) -> Option<Value> {
+        let mut stream = UnixStream::connect(endpoint).ok()?;
+        stream.set_read_timeout(Some(timeout)).ok()?;
+        stream.set_write_timeout(Some(timeout)).ok()?;
+        exchange(&mut stream, req)
+    }
+
+    fn exchange(stream: &mut UnixStream, req: Value) -> Option<Value> {
+        let mut line = req.to_string();
+        line.push('\n');
+        stream.write_all(line.as_bytes()).ok()?;
+
+        let mut reader = BufReader::new(stream).take(MAX_RESPONSE_SIZE);
+        let mut resp = String::new();
+        reader.read_line(&mut resp).ok()?;
+        serde_json::from_str(resp.trim()).ok()
+    }
+
+    pub(super) fn is_available(endpoint: String, _timeout: Duration) -> bool {
+        UnixStream::connect(endpoint).is_ok()
+    }
+}
+
+#[cfg(windows)]
+mod transport {
+    use super::MAX_RESPONSE_SIZE;
+    use serde_json::Value;
+    use std::fs::OpenOptions;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    // std exposes Windows named pipes as files. Run the complete exchange on a
+    // worker so an unresponsive or partially-started daemon cannot hold up the
+    // CLI beyond Anchor's IPC timeout.
+    pub(super) fn send(endpoint: String, req: Value, timeout: Duration) -> Option<Value> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = tx.send(exchange(&endpoint, req));
+        });
+        rx.recv_timeout(timeout).ok().flatten()
+    }
+
+    fn exchange(endpoint: &str, req: Value) -> Option<Value> {
+        let mut pipe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(endpoint)
+            .ok()?;
+        let mut line = req.to_string();
+        line.push('\n');
+        pipe.write_all(line.as_bytes()).ok()?;
+        pipe.flush().ok()?;
+
+        let mut reader = BufReader::new(pipe).take(MAX_RESPONSE_SIZE);
+        let mut resp = String::new();
+        reader.read_line(&mut resp).ok()?;
+        serde_json::from_str(resp.trim()).ok()
+    }
+
+    pub(super) fn is_available(endpoint: String, timeout: Duration) -> bool {
+        let (tx, rx) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let available = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(endpoint)
+                .is_ok();
+            let _ = tx.send(available);
+        });
+        rx.recv_timeout(timeout).unwrap_or(false)
+    }
 }
 
 #[cfg(test)]
@@ -229,5 +317,16 @@ mod tests {
         assert_eq!(first, second);
         assert!(first.starts_with("anchor-"), "{first}");
         assert!(!first.contains(&std::process::id().to_string()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn regression_default_windows_endpoint_is_a_per_user_named_pipe() {
+        let endpoint = default_endpoint();
+        assert!(
+            endpoint.starts_with(r"\\.\pipe\anchor-lockd-"),
+            "{endpoint}"
+        );
+        assert!(!endpoint.ends_with('-'), "{endpoint}");
     }
 }
