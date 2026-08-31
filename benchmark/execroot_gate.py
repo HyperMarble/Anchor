@@ -116,7 +116,11 @@ def _handle_paths(command: str) -> set[str]:
 
 def _semantic_docs_referenced_by_command(command: str, execroot: Path) -> list[Path]:
     docs: list[Path] = []
-    patterns = re.findall(r"(?:/[^`'\"\s;]*)?\.anchor/semantic/current/[^`'\"\s;]+", command)
+    normalized_command = command.replace("\\", "/")
+    patterns = re.findall(
+        r"(?:/[^`'\"\s;]*)?\.anchor/semantic/current/[^`'\"\s;]+",
+        normalized_command,
+    )
     for pattern in patterns:
         cleaned = pattern.rstrip(",.:)")
         path_pattern = _semantic_pattern_to_path(cleaned, execroot)
@@ -202,14 +206,16 @@ def _is_completed_relevant_command(
     command: str,
     anchor_text: str,
 ) -> bool:
+    normalized_command = command.replace("\\", "/")
+    normalized_anchor = anchor_text.replace("\\", "/")
     return (
         event.get("type") == "item.completed"
         and item.get("type") == "command_execution"
         and item.get("exit_code") in (0, None)
         and (
-            anchor_text in command
-            or " anchor " in command
-            or ".anchor/semantic/current" in command
+            normalized_anchor in normalized_command
+            or " anchor " in normalized_command
+            or ".anchor/semantic/current" in normalized_command
         )
     )
 

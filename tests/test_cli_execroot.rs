@@ -1,52 +1,9 @@
 use std::fs;
 use std::process::Command;
 
-fn init_git_repo(path: &std::path::Path) {
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("init")
-        .arg("-q")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("config")
-        .arg("user.email")
-        .arg("anchor-test@example.invalid")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("config")
-        .arg("user.name")
-        .arg("Anchor Test")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("add")
-        .arg("-A")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("commit")
-        .arg("-q")
-        .arg("-m")
-        .arg("base")
-        .status()
-        .unwrap()
-        .success());
-}
+#[path = "test_cli_support.rs"]
+mod support;
+use support::init_git_repo;
 
 fn patch_path(stdout: &str) -> String {
     stdout
@@ -67,17 +24,15 @@ fn cli_run_execroot_captures_patch_without_touching_real_repo() {
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
 
-    let run = Command::new(anchor)
+    let mut run_cmd = Command::new(anchor);
+    run_cmd
         .env("ANCHOR_EXECROOT", "1")
         .arg("--root")
         .arg(dir.path())
         .arg("run")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("printf 'new\\n' > src.txt")
-        .output()
-        .unwrap();
+        .arg("--");
+    support::write_line("src.txt", "new").apply(&mut run_cmd);
+    let run = run_cmd.output().unwrap();
     assert!(
         run.status.success(),
         "execroot run failed\nstdout:\n{}\nstderr:\n{}",
@@ -109,17 +64,15 @@ fn cli_run_execroot_captures_new_files_as_patch() {
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
 
-    let run = Command::new(anchor)
+    let mut run_cmd = Command::new(anchor);
+    run_cmd
         .env("ANCHOR_EXECROOT", "1")
         .arg("--root")
         .arg(dir.path())
         .arg("run")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("printf 'created\\n' > created.txt")
-        .output()
-        .unwrap();
+        .arg("--");
+    support::write_line("created.txt", "created").apply(&mut run_cmd);
+    let run = run_cmd.output().unwrap();
     assert!(
         run.status.success(),
         "execroot run failed\nstdout:\n{}\nstderr:\n{}",

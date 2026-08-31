@@ -1,6 +1,9 @@
 fn build_state(root: &Path) -> Result<ProtectionState> {
     let mut files = BTreeMap::new();
+    #[cfg(unix)]
     let mut dirs = BTreeMap::new();
+    #[cfg(windows)]
+    let dirs = BTreeMap::new();
 
     for entry in Walk::new(root).filter_map(|entry| entry.ok()) {
         let path = entry.path();
@@ -22,9 +25,11 @@ fn build_state(root: &Path) -> Result<ProtectionState> {
         }
 
         let relative = repo_path(root, path);
-        files.insert(relative, file_mode(path)?);
+        files.insert(relative, permission_snapshot(path)?);
 
+        #[cfg(unix)]
         let mut parent = path.parent();
+        #[cfg(unix)]
         while let Some(dir) = parent {
             if dir == root {
                 break;
@@ -35,21 +40,21 @@ fn build_state(root: &Path) -> Result<ProtectionState> {
             {
                 break;
             }
-            dirs.insert(repo_path(root, dir), file_mode(dir)?);
+            dirs.insert(repo_path(root, dir), permission_snapshot(dir)?);
             parent = dir.parent();
         }
     }
 
     let mut entries = Vec::with_capacity(files.len() + dirs.len());
-    entries.extend(dirs.into_iter().map(|(path, mode)| ProtectionEntry {
+    entries.extend(dirs.into_iter().map(|(path, permissions)| ProtectionEntry {
         path,
         kind: ProtectionKind::Dir,
-        mode,
+        permissions,
     }));
-    entries.extend(files.into_iter().map(|(path, mode)| ProtectionEntry {
+    entries.extend(files.into_iter().map(|(path, permissions)| ProtectionEntry {
         path,
         kind: ProtectionKind::File,
-        mode,
+        permissions,
     }));
 
     Ok(ProtectionState {
@@ -59,7 +64,7 @@ fn build_state(root: &Path) -> Result<ProtectionState> {
 }
 
 struct UnlockGuard {
-    paths: Vec<(PathBuf, u32)>,
+    permissions: PermissionRestoreGuard,
 }
 
 impl UnlockGuard {
@@ -68,7 +73,7 @@ impl UnlockGuard {
             .iter()
             .flat_map(|path| unlock_paths(root, path))
             .collect::<BTreeSet<_>>();
-        let mut paths = Vec::new();
+        let mut permissions = PermissionRestoreGuard::default();
 
         for entry in &state.entries {
             if !wanted.contains(&entry.path) {
@@ -78,18 +83,61 @@ impl UnlockGuard {
             if !full_path.exists() {
                 continue;
             }
-            let mode = file_mode(&full_path)?;
-            chmod(&full_path, writable_mode(mode))?;
-            paths.push((full_path, mode));
+            let original = permission_snapshot(&full_path)?;
+            if apply_writable(&full_path, entry.kind, &original)? {
+                permissions.push(full_path, original);
+            }
         }
 
-        Ok(Self { paths })
+        Ok(Self { permissions })
     }
 
     fn restore(&mut self) {
-        for (path, mode) in self.paths.drain(..).rev() {
-            let _ = chmod(path, mode);
+        self.permissions.restore();
+    }
+
+    fn try_restore(&mut self) -> Result<()> {
+        self.permissions.try_restore()
+    }
+}
+
+#[derive(Default)]
+struct PermissionRestoreGuard {
+    paths: Vec<(PathBuf, PermissionSnapshot)>,
+}
+
+impl PermissionRestoreGuard {
+    fn push(&mut self, path: PathBuf, permissions: PermissionSnapshot) {
+        self.paths.push((path, permissions));
+    }
+
+    fn restore(&mut self) {
+        let _ = self.try_restore();
+    }
+
+    fn try_restore(&mut self) -> Result<()> {
+        let mut first_error = None;
+        for (path, permissions) in self.paths.drain(..).rev() {
+            if let Err(error) = restore_permissions(&path, &permissions) {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
         }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.paths.clear();
+    }
+}
+
+impl Drop for PermissionRestoreGuard {
+    fn drop(&mut self) {
+        self.restore();
     }
 }
 

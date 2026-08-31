@@ -2,7 +2,6 @@ package tests
 
 import (
 	"fmt"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +13,7 @@ func TestIdleConnectionTimesOut(t *testing.T) {
 	sock, cleanup := startDaemon(t)
 	defer cleanup()
 
-	conn, err := net.Dial("unix", sock)
+	conn, err := dialEndpoint(sock, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -40,7 +39,7 @@ func TestOversizedPayloadDropsConnection(t *testing.T) {
 	sock, cleanup := startDaemon(t)
 	defer cleanup()
 
-	conn, err := net.Dial("unix", sock)
+	conn, err := dialEndpoint(sock, 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -107,10 +106,6 @@ func TestConcurrentAgentsSameSymbol(t *testing.T) {
 			})
 			if resp["ok"] == true {
 				wins <- agent
-				time.Sleep(10 * time.Millisecond)
-				send(t, sock, map[string]any{
-					"op": "release", "symbol": "SharedSym", "path": "src/lib.rs", "agent": agent,
-				})
 			} else {
 				wins <- ""
 			}
@@ -129,5 +124,10 @@ func TestConcurrentAgentsSameSymbol(t *testing.T) {
 	}
 	if len(winners) > 1 {
 		t.Errorf("multiple simultaneous winners: %v — lock broken", winners)
+	}
+	if len(winners) == 1 {
+		send(t, sock, map[string]any{
+			"op": "release", "symbol": "SharedSym", "path": "src/lib.rs", "agent": winners[0],
+		})
 	}
 }

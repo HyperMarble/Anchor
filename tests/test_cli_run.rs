@@ -1,52 +1,9 @@
 use std::fs;
 use std::process::Command;
 
-fn init_git_repo(path: &std::path::Path) {
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("init")
-        .arg("-q")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("config")
-        .arg("user.email")
-        .arg("anchor-test@example.invalid")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("config")
-        .arg("user.name")
-        .arg("Anchor Test")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("add")
-        .arg("-A")
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("git")
-        .arg("-C")
-        .arg(path)
-        .arg("commit")
-        .arg("-q")
-        .arg("-m")
-        .arg("base")
-        .status()
-        .unwrap()
-        .success());
-}
+#[path = "test_cli_support.rs"]
+mod support;
+use support::init_git_repo;
 
 #[test]
 fn cli_run_blocks_raw_terminal_file_mutation() {
@@ -60,16 +17,10 @@ fn cli_run_blocks_raw_terminal_file_mutation() {
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
 
-    let run = Command::new(anchor)
-        .arg("--root")
-        .arg(dir.path())
-        .arg("run")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("printf 'pub fn value() -> bool {\\n    false\\n}\\n' > src.rs")
-        .output()
-        .unwrap();
+    let mut run_cmd = Command::new(anchor);
+    run_cmd.arg("--root").arg(dir.path()).arg("run").arg("--");
+    support::write_line("src.rs", "mutated").apply(&mut run_cmd);
+    let run = run_cmd.output().unwrap();
     assert!(
         !run.status.success(),
         "raw mutation should fail\nstdout:\n{}\nstderr:\n{}",
@@ -106,16 +57,10 @@ fn cli_run_allows_read_only_terminal_command() {
 
     let anchor = env!("CARGO_BIN_EXE_anchor");
 
-    let run = Command::new(anchor)
-        .arg("--root")
-        .arg(dir.path())
-        .arg("run")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("cat src.rs >/dev/null")
-        .output()
-        .unwrap();
+    let mut run_cmd = Command::new(anchor);
+    run_cmd.arg("--root").arg(dir.path()).arg("run").arg("--");
+    support::read_file_to_null("src.rs").apply(&mut run_cmd);
+    let run = run_cmd.output().unwrap();
     assert!(
         run.status.success(),
         "read-only command should pass\nstdout:\n{}\nstderr:\n{}",

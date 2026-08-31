@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev-windows]
   pull_request:
     branches: [main]
 
@@ -37,8 +37,56 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
+  test:
+    name: Test (${{ matrix.os }})
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Go (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: lockd/go.mod
+          cache-dependency-path: lockd/go.sum
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
       - name: Test
         run: cargo test
 
-      - name: Build
+      - name: Build release
         run: cargo build --release
+
+      - name: Test and build lock daemon (Windows)
+        if: runner.os == 'Windows'
+        working-directory: lockd
+        run: |
+          go test ./...
+          go build -trimpath -o ../target/release/anchor-lockd.exe .
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        run: ./target/release/anchor --help
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          .\target\release\anchor.exe --help
+          .\target\release\anchor-lockd.exe -h

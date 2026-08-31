@@ -1,21 +1,23 @@
 use std::fs;
 use std::process::Command;
 
+#[path = "test_cli_support.rs"]
+mod support;
+
 #[test]
 fn cli_check_records_verification_result() {
     let dir = tempfile::tempdir().unwrap();
     let anchor = env!("CARGO_BIN_EXE_anchor");
+    let script = support::print_text("verified");
 
-    let check = Command::new(anchor)
+    let mut check_cmd = Command::new(anchor);
+    check_cmd
         .arg("--root")
         .arg(dir.path())
         .arg("check")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("printf verified")
-        .output()
-        .unwrap();
+        .arg("--");
+    script.apply(&mut check_cmd);
+    let check = check_cmd.output().unwrap();
     assert!(
         check.status.success(),
         "check failed: {}\n{}",
@@ -42,7 +44,7 @@ fn cli_check_records_verification_result() {
                 && event["status"] == "ok"
                 && event["message"]
                     .as_str()
-                    .map(|message| message.contains("cmd=sh -c printf verified"))
+                    .map(|message| message.contains(&format!("cmd={}", script.recorded_text())))
                     .unwrap_or(false)
                 && event["meta"]["check_kind"] == "non_test"
         }),

@@ -1,20 +1,22 @@
+use std::path::Path;
 use std::process::Command;
+
+#[path = "test_cli_support.rs"]
+mod support;
 
 #[test]
 fn cli_receipt_exports_machine_readable_summary() {
     let dir = tempfile::tempdir().unwrap();
     let anchor = env!("CARGO_BIN_EXE_anchor");
 
-    let check = Command::new(anchor)
+    let mut check_cmd = Command::new(anchor);
+    check_cmd
         .arg("--root")
         .arg(dir.path())
         .arg("check")
-        .arg("--")
-        .arg("sh")
-        .arg("-c")
-        .arg("printf receipt")
-        .output()
-        .unwrap();
+        .arg("--");
+    support::print_text("receipt").apply(&mut check_cmd);
+    let check = check_cmd.output().unwrap();
     assert!(
         check.status.success(),
         "check failed: {}",
@@ -40,8 +42,6 @@ fn cli_receipt_exports_machine_readable_summary() {
     assert_eq!(json["summary"]["checks_failed"], 0);
     assert_eq!(json["quality"]["score"], 100);
     assert_eq!(json["quality"]["risk"], "low");
-    assert!(json["event_log"]
-        .as_str()
-        .unwrap()
-        .ends_with(".anchor/events/events.jsonl"));
+    let event_log = Path::new(json["event_log"].as_str().unwrap());
+    assert!(event_log.ends_with(Path::new(".anchor").join("events").join("events.jsonl")));
 }
