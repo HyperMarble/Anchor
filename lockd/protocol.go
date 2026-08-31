@@ -1,4 +1,4 @@
-// Wire types for the anchor-lockd JSON protocol (newline-delimited over Unix socket).
+// Wire types for the anchor-lockd newline-delimited JSON protocol.
 package main
 
 // Request is one JSON line sent by a client.

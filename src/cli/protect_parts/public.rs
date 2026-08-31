@@ -31,26 +31,47 @@ pub fn with_unlocked_paths<T>(
     let mut guard = UnlockGuard::new(root, paths, &state)?;
     let result = write_fn();
 
-    if result.is_ok() {
-        for path in paths {
-            if !is_source_path(path) || !path.exists() {
-                continue;
+    let update_result = if result.is_ok() {
+        (|| -> Result<()> {
+            let mut newly_protected = PermissionRestoreGuard::default();
+            for path in paths {
+                if !is_source_path(path) || !path.exists() {
+                    continue;
+                }
+                let repo_path = repo_path(root, path);
+                if state.entries.iter().all(|entry| entry.path != repo_path) {
+                    let permissions = permission_snapshot(path)?;
+                    state.entries.push(ProtectionEntry {
+                        path: repo_path,
+                        kind: ProtectionKind::File,
+                        permissions: permissions.clone(),
+                    });
+                    if apply_readonly(path, ProtectionKind::File, &permissions)? {
+                        newly_protected.push(path.to_path_buf(), permissions);
+                    }
+                }
             }
-            let repo_path = repo_path(root, path);
-            if state.entries.iter().all(|entry| entry.path != repo_path) {
-                let mode = file_mode(path)?;
-                state.entries.push(ProtectionEntry {
-                    path: repo_path,
-                    kind: ProtectionKind::File,
-                    mode,
-                });
-                chmod(path, readonly_mode(mode))?;
-            }
-        }
-        save_state(root, &state)?;
-    }
+            save_state(root, &state)?;
+            newly_protected.disarm();
+            Ok(())
+        })()
+    } else {
+        Ok(())
+    };
 
-    guard.restore();
-    result
+    let restore_result = guard.try_restore();
+    match (result, update_result, restore_result) {
+        (Err(error), _, Err(restore_error)) => bail!(
+            "protected write failed: {error}; restoring protection also failed: {restore_error}"
+        ),
+        (Err(error), _, Ok(())) => Err(error),
+        (Ok(_), Err(error), Err(restore_error)) => bail!(
+            "updating protection state failed: {error}; restoring protection also failed: \
+             {restore_error}"
+        ),
+        (Ok(_), Err(error), Ok(())) => Err(error),
+        (Ok(_), Ok(()), Err(error)) => Err(error),
+        (Ok(value), Ok(()), Ok(())) => Ok(value),
+    }
 }
 

@@ -8,7 +8,7 @@ fn cmd_run(root: &Path, command: &[String]) -> Result<()> {
     }
 
     let store = open_store(root)?;
-    let before = git_changed_paths(root)
+    let before = git_changed_paths(root)?
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let command_text = command.join(" ");
@@ -35,7 +35,7 @@ fn cmd_run(root: &Path, command: &[String]) -> Result<()> {
         Some(format!("exit={code} cmd={command_text}")),
     );
 
-    let after = git_changed_paths(root)
+    let after = git_changed_paths(root)?
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
     let newly_changed: Vec<String> = after.difference(&before).cloned().collect();

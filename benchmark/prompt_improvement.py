@@ -124,6 +124,14 @@ class ProjectProfile:
     manifest_files: list[str]
     test_commands: list[str]
     symbols: list[str]
+    product_memory: list["ProductMemoryEvidence"]
+
+
+@dataclass(frozen=True)
+class ProductMemoryEvidence:
+    source: str
+    kind: str
+    detail: str
 
 
 @dataclass
@@ -152,6 +160,7 @@ class BriefQuality:
     assumption_warning_count: int
     prompt_risk_count: int
     check_count: int
+    product_memory_count: int
     bloat_penalty: int
 
 
@@ -299,6 +308,66 @@ def extract_symbols(root: Path, files: list[Path], limit: int = 120) -> list[str
     return symbols
 
 
+def load_product_memory(root: Path) -> list[ProductMemoryEvidence]:
+    path = root / ".anchor" / "product_memory.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    evidence: list[ProductMemoryEvidence] = []
+    for item in data.get("facts", []):
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        fact = item.get("fact")
+        if (
+            isinstance(source, str)
+            and isinstance(fact, str)
+            and source
+            and fact
+            and (root / source).exists()
+        ):
+            evidence.append(ProductMemoryEvidence(source=source, kind="fact", detail=fact))
+
+    for item in data.get("instruction_files", []):
+        if not isinstance(item, dict):
+            continue
+        source = item.get("path")
+        kind = item.get("kind")
+        note = item.get("note")
+        if (
+            isinstance(source, str)
+            and isinstance(kind, str)
+            and isinstance(note, str)
+            and source
+            and kind
+            and note
+            and (root / source).exists()
+        ):
+            evidence.append(ProductMemoryEvidence(source=source, kind=kind, detail=note))
+
+    deduped: dict[tuple[str, str, str], ProductMemoryEvidence] = {}
+    for item in evidence:
+        deduped.setdefault((item.source, item.kind, item.detail), item)
+    ranked = sorted(
+        deduped.values(),
+        key=lambda item: (item.kind == "fact", item.source, item.detail),
+    )
+    return ranked[:8]
+
+
+def instruction_memory_files(profile: ProjectProfile) -> list[str]:
+    files = [
+        item.source
+        for item in profile.product_memory
+        if item.kind != "fact" and repo_path_exists(profile, item.source)
+    ]
+    return sorted(dict.fromkeys(files))
+
+
 def split_tokens(text: str) -> set[str]:
     tokens: set[str] = set()
     for raw in re.split(r"[^A-Za-z0-9]+", text):
@@ -340,6 +409,7 @@ def build_profile(root: Path) -> ProjectProfile:
         manifest_files=detect_manifest_files(root),
         test_commands=detect_test_commands(root),
         symbols=indexed_symbols or extract_symbols(root, files),
+        product_memory=load_product_memory(root),
     )
 
 
@@ -412,6 +482,13 @@ def matching_project_targets(prompt: str, profile: ProjectProfile) -> list[Targe
             ("docs/install.sh", "release installer and optional agent rules"),
         ]:
             add_existing_target(hits, profile, path, reason)
+        for path in instruction_memory_files(profile):
+            add_existing_target(
+                hits,
+                profile,
+                path,
+                "cached prompt memory marks this instruction file as repo-local agent guidance",
+            )
 
     deduped: dict[str, TargetHint] = {}
     for hit in hits:
@@ -450,11 +527,21 @@ def project_description(profile: ProjectProfile) -> str:
     return f"repository named {Path(profile.root).name} with detected files listed below"
 
 
+def render_product_memory(profile: ProjectProfile) -> str:
+    if not profile.product_memory:
+        return "- No cached product-memory evidence was detected."
+    return "\n".join(
+        f"- {item.detail} (source: {item.source}; kind: {item.kind})"
+        for item in profile.product_memory[:4]
+    )
+
+
 def brief_quality(
     targets: list[TargetHint],
     assumptions: list[str],
     risks: list[str],
     checks: list[str],
+    product_memory: list[ProductMemoryEvidence],
     original_prompt: str,
     improved_prompt: str,
 ) -> BriefQuality:
@@ -465,6 +552,7 @@ def brief_quality(
         + min(len(assumptions), 4)
         + min(len(risks), 4)
         + min(len(checks), 4)
+        + min(len(product_memory), 4)
         - bloat_penalty
     )
     return BriefQuality(
@@ -473,16 +561,25 @@ def brief_quality(
         assumption_warning_count=len(assumptions),
         prompt_risk_count=len(risks),
         check_count=len(checks),
+        product_memory_count=len(product_memory),
         bloat_penalty=bloat_penalty,
     )
 
 
 def change_summary(
-    targets: list[TargetHint], assumptions: list[str], risks: list[str], checks: list[str]
+    targets: list[TargetHint],
+    assumptions: list[str],
+    risks: list[str],
+    checks: list[str],
+    product_memory: list[ProductMemoryEvidence],
 ) -> list[str]:
     changes: list[str] = []
     if targets:
         changes.append(f"added {len(targets)} verified/inferred target hint(s)")
+    if product_memory:
+        changes.append(
+            f"attached {min(len(product_memory), 4)} cached product-memory evidence item(s)"
+        )
     if assumptions:
         changes.append(f"flagged {len(assumptions)} project assumption warning(s)")
     if risks:
@@ -537,6 +634,13 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
             guidance.append(
                 f"Install/docs changes should stay in the verified files: {human_join(install_paths)}."
             )
+    instruction_files = instruction_memory_files(profile)
+    if any(word in prompt_lower for word in ["rule", "rules", "instruction", "instructions", "bossy"]):
+        if instruction_files:
+            guidance.append(
+                f"Repo-local agent instructions are cached in {human_join(instruction_files)}. "
+                "Preserve those rules unless the task explicitly changes them."
+            )
 
     target_text = "\n".join(
         f"- {item.path} ({item.reason})" for item in targets
@@ -545,13 +649,21 @@ def improve_prompt(case: dict[str, Any], profile: ProjectProfile) -> str:
     risk_text = "\n".join(f"- {item}" for item in risks) or "- No direct prompt-control or destructive wording detected."
     command_text = "\n".join(f"- {cmd}" for cmd in profile.test_commands) or "- No test command detected."
     changes_text = "\n".join(
-        f"- {item}" for item in change_summary(targets, assumptions, risks, profile.test_commands)
+        f"- {item}"
+        for item in change_summary(
+            targets,
+            assumptions,
+            risks,
+            profile.test_commands,
+            profile.product_memory,
+        )
     )
     guidance_text = "\n".join(f"- {item}" for item in guidance) or "- No extra project-specific guidance inferred."
     language_text = ", ".join(profile.languages) or "unknown"
     key_file_text = "\n".join(f"- {file}" for file in profile.key_files[:10])
     manifest_text = "\n".join(f"- {file}" for file in profile.manifest_files) or "- No package or build manifests detected."
     project_text = project_description(profile)
+    product_memory_text = render_product_memory(profile)
 
     return f"""Task Brief
 
@@ -568,6 +680,9 @@ Project facts verified from this repository:
 {manifest_text}
 - Important files:
 {key_file_text}
+
+Product memory evidence:
+{product_memory_text}
 
 Likely target areas:
 {target_text}
@@ -779,6 +894,7 @@ def main() -> int:
             assumptions,
             risks,
             profile.test_commands,
+            profile.product_memory,
             case["human_prompt"],
             improved,
         )
