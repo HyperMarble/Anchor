@@ -139,10 +139,18 @@ class RunScore:
     case_id: str
     mode: str
     score: int
+    hidden_score: int
+    visible_score: int
     expected_hits: list[str]
     missing_expected: list[str]
+    copied_expected_hits: list[str]
     avoid_hits: list[str]
+    valid_paths: list[str]
+    valid_checks: list[str]
+    actionability_hits: list[str]
     hallucinated_paths: list[str]
+    copied_prompt_lines: list[str]
+    leakage_penalty: int
     duration_sec: float
     output_chars: int
 
@@ -162,6 +170,37 @@ class BriefQuality:
     check_count: int
     product_memory_count: int
     bloat_penalty: int
+
+
+def validate_provenance(raw: Any, path: Path, line_no: int) -> dict[str, str]:
+    source = f"{path}:{line_no}"
+    if raw is None:
+        return {
+            "kind": "manual_curated",
+            "source": "Anchor benchmark seed",
+            "license": "repo-local example",
+            "note": "Small repo-specific prompt written in issue-style language.",
+        }
+    if not isinstance(raw, dict):
+        raise ValueError(f"{source}: field 'provenance' must be an object when provided")
+
+    provenance: dict[str, str] = {}
+    for field in ("kind", "source"):
+        value = raw.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{source}: provenance field {field!r} must be a non-empty string")
+        provenance[field] = value
+
+    for field in ("url", "license", "note"):
+        value = raw.get(field)
+        if value is not None:
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(
+                    f"{source}: provenance field {field!r} must be a non-empty string"
+                )
+            provenance[field] = value
+
+    return provenance
 
 
 def validate_case(raw: Any, path: Path, line_no: int) -> dict[str, Any]:
@@ -186,6 +225,8 @@ def validate_case(raw: Any, path: Path, line_no: int) -> dict[str, Any]:
     notes = case.get("notes")
     if notes is not None and not isinstance(notes, str):
         raise ValueError(f"{source}: field 'notes' must be a string when provided")
+
+    case["provenance"] = validate_provenance(case.get("provenance"), path, line_no)
 
     return case
 
@@ -242,6 +283,8 @@ def detect_test_commands(root: Path) -> list[str]:
         commands.append("pytest")
     if (root / "docs" / "install.sh").exists():
         commands.append("bash -n docs/install.sh docs/uninstall.sh local_install.sh")
+    if (root / ".git").exists():
+        commands.append("git diff --check")
     return commands
 
 
@@ -729,6 +772,27 @@ def strip_ansi(text: str) -> str:
     return ANSI_RE.sub("", text)
 
 
+def normalize_line(text: str) -> str:
+    normalized = strip_ansi(text).strip().lower()
+    normalized = re.sub(r"^[*-]\s+", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized
+
+
+def copy_like_lines(output: str, prompt: str) -> list[str]:
+    prompt_lines = {
+        normalize_line(line)
+        for line in prompt.splitlines()
+        if len(normalize_line(line)) >= 24
+    }
+    copied: list[str] = []
+    for line in output.splitlines():
+        normalized = normalize_line(line)
+        if normalized in prompt_lines:
+            copied.append(line.strip())
+    return copied[:12]
+
+
 def run_ollama_api(model: str, prompt: str, timeout: int) -> str:
     host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
     payload = json.dumps(
@@ -831,8 +895,59 @@ def hallucinated_paths(output: str, repo: Path) -> list[str]:
     return bad
 
 
+def mentioned_existing_paths(output: str, repo: Path) -> list[str]:
+    hits: list[str] = []
+    for path in extract_path_mentions(output):
+        normalized = normalize_path_mention(path)
+        if normalized and (repo / normalized).exists():
+            hits.append(normalized)
+    return sorted(set(hits))
+
+
+def command_aliases(command: str) -> set[str]:
+    aliases = {command.lower()}
+    for segment in command.lower().split("&&"):
+        segment = segment.strip()
+        if segment:
+            aliases.add(segment)
+    if command.startswith("bash -n "):
+        aliases.add("bash -n")
+    if command.startswith("git diff --check"):
+        aliases.add("git diff --check")
+    return aliases
+
+
+def mentioned_valid_checks(output: str, checks: list[str]) -> list[str]:
+    text = output.lower()
+    hits: list[str] = []
+    for check in checks:
+        if any(alias in text for alias in command_aliases(check)):
+            hits.append(check)
+    return hits
+
+
+ACTIONABILITY_PATTERNS = {
+    "inspect": re.compile(r"\b(inspect|review|look at|start with|open)\b", re.I),
+    "edit": re.compile(r"\b(edit|change|update|modify|patch|fix)\b", re.I),
+    "verify": re.compile(r"\b(run|rerun|test|tests|verify|check)\b", re.I),
+    "guardrails": re.compile(r"\b(avoid|don't|do not|assumption|invent|hallucinat)\b", re.I),
+}
+
+
+def actionability_hits(output: str) -> list[str]:
+    return [
+        label for label, pattern in ACTIONABILITY_PATTERNS.items() if pattern.search(output)
+    ]
+
+
 def score_output(
-    case: dict[str, Any], mode: str, output: str, duration: float, repo: Path
+    case: dict[str, Any],
+    mode: str,
+    output: str,
+    duration: float,
+    repo: Path,
+    profile: ProjectProfile,
+    reference_prompt: str | None = None,
 ) -> RunScore:
     text = output.lower()
     expected = [term.lower() for term in case.get("expected_terms", [])]
@@ -840,16 +955,46 @@ def score_output(
     expected_hits = [term for term in expected if term in text]
     missing_expected = [term for term in expected if term not in text]
     avoid_hits = [term for term in avoid if term in text]
+    valid_paths = mentioned_existing_paths(output, repo)
+    valid_checks = mentioned_valid_checks(output, profile.test_commands)
+    action_hits = actionability_hits(output)
     bad_paths = hallucinated_paths(output, repo)
-    score = len(expected_hits) * 2 - len(avoid_hits) * 3 - len(bad_paths) * 2
+    copied_lines = copy_like_lines(output, reference_prompt) if reference_prompt else []
+    copied_expected_hits = (
+        [term for term in expected_hits if term in reference_prompt.lower()]
+        if reference_prompt
+        else []
+    )
+    visible_score = (
+        (len(expected_hits) - len(copied_expected_hits)) * 2
+        - len(avoid_hits) * 3
+        - len(bad_paths) * 2
+    )
+    leakage_penalty = max(0, len(copied_lines) - 1)
+    hidden_score = (
+        min(len(valid_paths), 4) * 2
+        + min(len(valid_checks), 3) * 2
+        + len(action_hits)
+        - len(bad_paths) * 2
+        - leakage_penalty
+    )
+    score = hidden_score + visible_score
     return RunScore(
         case_id=case["id"],
         mode=mode,
         score=score,
+        hidden_score=hidden_score,
+        visible_score=visible_score,
         expected_hits=expected_hits,
         missing_expected=missing_expected,
+        copied_expected_hits=copied_expected_hits,
         avoid_hits=avoid_hits,
+        valid_paths=valid_paths,
+        valid_checks=valid_checks,
+        actionability_hits=action_hits,
         hallucinated_paths=bad_paths,
+        copied_prompt_lines=copied_lines,
+        leakage_penalty=leakage_penalty,
         duration_sec=duration,
         output_chars=len(output),
     )
@@ -914,7 +1059,15 @@ def main() -> int:
                 duration = 0.0
             else:
                 output, duration = run_ollama(args.model, prompt, args.timeout_sec)
-            score = score_output(case, mode, output, duration, repo)
+            score = score_output(
+                case,
+                mode,
+                output,
+                duration,
+                repo,
+                profile,
+                improved if mode == "anchor_improved" else None,
+            )
             row = {
                 "case": case,
                 "mode": mode,
@@ -926,8 +1079,10 @@ def main() -> int:
             rows.append(row)
             print(
                 f"{case['id']} {mode}: score={score.score} "
-                f"hits={len(score.expected_hits)} avoid={len(score.avoid_hits)} "
-                f"hallucinated_paths={len(score.hallucinated_paths)} "
+                f"hidden={score.hidden_score} visible={score.visible_score} "
+                f"paths={len(score.valid_paths)} checks={len(score.valid_checks)} "
+                f"avoid={len(score.avoid_hits)} hallucinated_paths={len(score.hallucinated_paths)} "
+                f"copied={len(score.copied_prompt_lines)} "
                 f"time={score.duration_sec}s"
             )
         print()
@@ -935,19 +1090,38 @@ def main() -> int:
     write_jsonl(args.out, rows)
 
     by_case: dict[str, dict[str, int]] = {}
+    timing_by_case: dict[str, dict[str, float]] = {}
     for row in rows:
         by_case.setdefault(row["case"]["id"], {})[row["mode"]] = row["score"]["score"]
+        timing_by_case.setdefault(row["case"]["id"], {})[row["mode"]] = row["score"][
+            "duration_sec"
+        ]
     wins = 0
     compared = 0
+    raw_total = 0.0
+    improved_total = 0.0
     for case_id, scores in by_case.items():
         if "raw" in scores and "anchor_improved" in scores:
             compared += 1
             if scores["anchor_improved"] > scores["raw"]:
                 wins += 1
             delta = scores["anchor_improved"] - scores["raw"]
-            print(f"delta {case_id}: {delta:+d}")
+            raw_time = timing_by_case.get(case_id, {}).get("raw", 0.0)
+            improved_time = timing_by_case.get(case_id, {}).get("anchor_improved", 0.0)
+            raw_total += raw_time
+            improved_total += improved_time
+            print(
+                f"delta {case_id}: score={delta:+d} "
+                f"latency={improved_time - raw_time:+.4f}s"
+            )
     if compared:
         print(f"\nanchor_improved wins: {wins}/{compared}")
+        print(
+            "average latency: "
+            f"raw={raw_total / compared:.4f}s "
+            f"anchor_improved={improved_total / compared:.4f}s "
+            f"delta={(improved_total - raw_total) / compared:+.4f}s"
+        )
     print(f"wrote: {args.out}")
     return 0
 
