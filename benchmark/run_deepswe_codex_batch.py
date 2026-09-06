@@ -17,13 +17,17 @@ DEFAULT_BATCH_ROOT = Path("/Volumes/Hak_SSD/anchor-benchmark-work/native-deepswe
 
 def parse_summary_from_log(log_path: Path) -> dict[str, Any] | None:
     text = log_path.read_text(errors="replace")
-    start = text.find("{")
-    if start < 0:
-        return None
-    try:
-        return json.loads(text[start:])
-    except json.JSONDecodeError:
-        return None
+    decoder = json.JSONDecoder()
+    for start in range(len(text) - 1, -1, -1):
+        if text[start] != "{":
+            continue
+        try:
+            summary, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(summary, dict) and not text[start + end :].strip():
+            return summary
+    return None
 
 
 def metric(summary: dict[str, Any], path: list[str], default: Any = None) -> Any:
