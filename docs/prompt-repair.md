@@ -225,8 +225,16 @@ The benchmark reports two early signals:
 
 - `brief_quality`: whether the repaired prompt adds repo-grounded targets,
   warnings, checks, and avoids excessive bloat.
-- downstream plan score: whether the local model selects real files/tests, avoids
-  wrong frameworks, and avoids hallucinated paths.
+- downstream plan score: whether the local model selects hidden expected
+  files/checks, stays grounded in real repo paths, avoids wrong frameworks, and
+  avoids hallucinated paths.
+
+Prompt cases should stay small and source-backed:
+
+- prefer short manual paraphrases of public issue text over copied issue bodies
+- record source URL and repo license in case provenance
+- keep expected targets/checks hidden from the visible human prompt text
+- track prompt-copy leakage so downstream score is not just term echoing
 
 This is a smoke benchmark only. The stronger benchmark will compare full agent
 runs and measure:
